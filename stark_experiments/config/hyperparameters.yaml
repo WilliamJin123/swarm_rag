@@ -1,0 +1,63 @@
+# -----------------------------------------------------------------------------
+# Swarm RAG Hyperparameters
+# -----------------------------------------------------------------------------
+
+# DEFAULT: Balanced for accuracy and moderate exploration
+default:
+  n_agents: 20
+  steps: 4
+  decay: 0.5
+  base_pheromone: 1.0
+  initial_pool_size: 30  # Search top 30 vectors
+  start_subset: 10       # Drop agents on top 10
+  top_k: 20
+  
+  # Weights used by agents when deciding where to move next
+  movement_weights:
+    local_relevance: 0.4  # Trust graph authority (PageRank)
+    semantic: 0.3         # Trust vector similarity
+    diversity: 0.3        # Trust unvisited paths (Anti-Pheromone)
+
+  # Weights used to rank the final answers
+  ranking_weights:
+    consensus: 0.6        # Trust the vote count (how many agents found it)
+    quality: 0.4          # Trust the node's semantic relevance
+
+# HIGH EXPLORATION: Good for "finding a needle in a haystack"
+high_exploration:
+  n_agents: 50
+  steps: 6
+  decay: 0.2            # Slower decay = trails last longer
+  base_pheromone: 1.0
+  initial_pool_size: 50
+  start_subset: 20
+  top_k: 50
+  
+  movement_weights:
+    local_relevance: 0.2  # Care less about authority
+    semantic: 0.2
+    diversity: 0.6        # Aggressively seek new paths
+
+  ranking_weights:
+    consensus: 0.8        # Rely heavily on swarm convergence
+    quality: 0.2
+
+# FAST: Good for testing or simple queries
+fast:
+  n_agents: 10
+  steps: 2
+  decay: 0.5
+  base_pheromone: 1.0
+  initial_pool_size: 15
+  start_subset: 5
+  top_k: 5
+
+  
+  movement_weights:
+    local_relevance: 0.5
+    semantic: 0.5
+    diversity: 0.0        # No diversity logic (greedy search)
+
+  ranking_weights:
+    consensus: 0.5
+    quality: 0.5
