@@ -41,14 +41,31 @@ class DataIngestor:
         """
         Generic ingestion loop. Handles batching, text extraction, embedding, and DB insertion.
         """
+        start_index = 0
+        if table_name in self.db.table_names():
+            table = self.db.open_table(table_name)
+            existing_count = len(table)
+            if existing_count > 0:
+                print(f"Found existing table '{table_name}' with {existing_count} rows. Resuming...")
+                start_index = existing_count
+        else:
+            table = None
+        
         total_batches = (len(dataset) + self.batch_size - 1) // self.batch_size
-        iterator = range(0, len(dataset), self.batch_size)
+        # E.g., if 96 items done (batch size 96), we start at index 96
+        current_batch_start = (start_index // self.batch_size) * self.batch_size
+
+        iterator = range(current_batch_start, len(dataset), self.batch_size)
         
         if verbose:
-            iterator = tqdm(iterator, total=total_batches, desc=f"Ingesting {table_name}")
-
-        table = None
+            # Update tqdm to reflect skipped batches
+            initial_steps = current_batch_start // self.batch_size
+            iterator = tqdm(iterator, total=total_batches, initial=initial_steps, desc=f"Ingesting {table_name}")
+        
         for i in iterator:
+            if i + self.batch_size <= start_index:
+                continue
+
             batch_items = dataset[i : i + self.batch_size]
             
             try:
@@ -75,11 +92,14 @@ class DataIngestor:
                 
                 records = []
                 for k, emb in zip(valid_indices, embeddings):
+                    meta = batch_metadatas[k]
+                    clean_meta = {k: (v if v is not None else "") for k, v in meta.items()}
+                    
                     record = {
                         "id": str(batch_ids[k]), 
                         "vector": emb,
                         "text": batch_texts[k],
-                        **batch_metadatas[k]
+                        **clean_meta
                     }
                     records.append(record)
                 
@@ -93,10 +113,11 @@ class DataIngestor:
 
 
     #TO FIX   
-    def save_edge_list(self, edges, path: str):
+    def save_edge_list(self, src_list, dst_list, path: str):
         """Saves graph structure to Parquet (Fast & Compressed)"""
         print(f"Saving graph structure to {path}...")
-        df = pd.DataFrame(edges, columns=["source", "target"])
+        df = pd.DataFrame({"source": src_list, "target": dst_list})
+        
         os.makedirs(os.path.dirname(path), exist_ok=True)
         df.to_parquet(path, index=False)
         print(f"Saved {len(df)} edges.")
@@ -117,4 +138,4 @@ class CohereEmbeddingWrapper:
             model=self.model,
             input_type=self.input_type
         )
-        return response.embeddings
+        return response.embeddings.float_
