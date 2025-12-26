@@ -1,4 +1,8 @@
 **/*.env
+**/stark/embeddings/
+**/stark/skb/
+**/stark/qa/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
