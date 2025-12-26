@@ -1,5 +1,4 @@
 import numpy as np
-import networkx as nx
 import math
 
 class Heuristics:
@@ -15,13 +14,12 @@ class Heuristics:
         """Standard Cosine Similarity between Query and Target Node."""
         q = ctx['query_vec']
         t = ctx['target_vec']
-        if t is None: return 0.0
-        norm_q = np.linalg.norm(q)
-        norm_t = np.linalg.norm(t)
-        return np.dot(q, t) / (norm_q * norm_t) if norm_q and norm_t else 0.0
+        return np.dot(q, t) / (
+            np.linalg.norm(q) * np.linalg.norm(t) + 1e-8
+        )
 
     @staticmethod
-    def node_authority(ctx):
+    def node_centrality(ctx):
         """Log-scaled degree centrality. Good for finding 'hubs'."""
         # ctx['graph'] is the NetworkX graph, ctx['target_id'] is the candidate node
         degree = ctx['graph'].degree[ctx['target_id']]
@@ -57,16 +55,17 @@ class Heuristics:
         # Re-use the logic, but the keys might differ in the final context
         return Heuristics.semantic_similarity(ctx)
 
+    # --- DEPOSIT HEURISTICS ---
+
     @staticmethod
     def deposit_flat(ctx):
         """Standard Ant Colony: Leave a constant amount (1.0)."""
         return 1.0
 
     @staticmethod
-    def deposit_authority(ctx):
+    def deposit_hub(ctx):
         """Original behavior: Hubs get more pheromones."""
-        degree = ctx['graph'].degree[ctx['target_id']]
-        return math.log(1 + degree)
+        return Heuristics.node_centrality(ctx)
     
     @staticmethod
     def deposit_semantic(ctx):
@@ -76,13 +75,29 @@ class Heuristics:
         """
         return Heuristics.semantic_similarity(ctx)
 
-
-
-# Dictionary for string-based lookup (optional, for easy config files)
-PRESET_REGISTRY = {
-    "semantic": Heuristics.semantic_similarity,
-    "authority": Heuristics.node_authority,
-    "diversity": Heuristics.pheromone_repulsion,
-    "jitter": Heuristics.random_jitter,
-    "consensus": Heuristics.consensus_vote
-}
+    @staticmethod
+    def deposit_explorer_bonus(ctx):
+        """
+        Rewards agents for visiting nodes with low pheromone traffic.
+        """
+        base_deposit = 1.0
+        max_p = ctx.get('max_pheromone', 1.0)
+        current_pheromone = ctx['pheromones'].get(ctx['target_id'], 0.0)
+        
+        # If no one has been there, get a full bonus. As traffic increases, bonus decreases.
+        traffic_ratio = current_pheromone / max_p if max_p > 0 else 0
+        
+        # The deposit is scaled by how "fresh" the location is.
+        return base_deposit * (1.0 - traffic_ratio)
+    
+    @staticmethod
+    def deposit_collaborative_amplification(ctx):
+        """
+        The more pheromone already present, the larger the new deposit.
+        This creates a "rich get richer" effect.
+        """
+        base_deposit = 1.0
+        current_pheromone = ctx['pheromones'].get(ctx['target_id'], 0.0)
+        return base_deposit * min(1.0 + current_pheromone, 5.0)  # Cap at 5x
+    
+    

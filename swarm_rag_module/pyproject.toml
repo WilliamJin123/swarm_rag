@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swarm_rag"
+version = "0.1.0"
+description = "A modular agentic retrieval framework based on Ant Colony Optimization."
+requires-python = ">=3.9"
+readme = "README.md"
+license = "MIT"
+dependencies = [
+    "numpy", 
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["swarm_rag*"]
+exclude = ["config*", "tests*", "scripts*"]
+namespaces = false
+
+[project.optional-dependencies]
+stark = [
+    "stark-qa",
+    "torch",
+    "faiss-cpu"
+]
+faiss = [
+    "faiss-cpu"
+]
+graph = [
+    "networkx"
+]
+
+all = [
+    "stark-qa",
+    "torch",
+    "gdown",
+    "faiss-cpu",
+    "networkx"
+]
