@@ -1,8 +1,9 @@
 import math
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
-from ..utils import fail_on_missing_imports
+from ..utils import fail_on_missing_imports, LRUCache
+from ..core import HeuristicContext
 try:
     import torch
     import faiss
@@ -26,7 +27,12 @@ AVG_LOG_DEGREE_BY_DATASET = {
 # --- 1. Graph Adapter for STaRK SKB ---
 class StarkSKBAdapter(GraphStore):
     
-    def __init__(self, skb_data: SKB, dataset: str):
+    def __init__(
+        self, 
+        skb_data: SKB, 
+        dataset: str, 
+        cache_size: int = 10000,
+        adjacency_dict: Optional[Dict[int, List[int]]] = None):
         """
         Ingests a STaRK SKB object. 
         """
@@ -39,18 +45,66 @@ class StarkSKBAdapter(GraphStore):
 
         self.dataset = dataset
         self.avg_log_degree = AVG_LOG_DEGREE_BY_DATASET[dataset]
-    
+
+        if adjacency_dict is not None:
+            print(f"Using pre-computed adjacency with {len(adjacency_dict)} nodes")
+            self.adjacency_dict = adjacency_dict
+            self.degree_dict = {
+                node_id: len(neighbors) 
+                for node_id, neighbors in adjacency_dict.items()
+            }
+            self.use_precomputed = True
+        else:
+            # Fallback to LRU caching
+            print(f"Using LRU cache (size={cache_size}) - consider pre-computing adjacency!")
+            self.neighbor_cache = LRUCache(cache_size)
+            self.degree_cache = LRUCache(cache_size)
+            self.use_precomputed = False
+
     def get_neighbors(self, node_id) -> list:
-        return self.skb.get_neighbor_nodes(node_id)
+        if self.use_precomputed:
+            return self.adjacency_dict.get(node_id, [])
+        
+        cached = self.neighbor_cache.get(node_id)
+        if cached is not None:
+            return cached
+        
+        neighbors = self.skb.get_neighbor_nodes(node_id)
+        self.neighbor_cache.set(node_id, neighbors)
+
+        self.degree_cache.set(node_id, len(neighbors))
+        
+        return neighbors
     
+    def get_degree(self, node_id: int) -> int:
+        """
+        Fast degree lookup with separate cache.
+        If not cached, fetches neighbors (which caches both).
+        """
+        if self.use_precomputed:    
+            return self.degree_dict.get(node_id, 0)
+        
+        cached_degree = self.degree_cache.get(node_id)
+        if cached_degree is not None:
+            return cached_degree
+        neighbors = self.get_neighbors(node_id)
+        return len(neighbors)
+
     def contains(self, node_id) -> bool:
+        if self.use_precomputed:
+            return node_id in self.adjacency_dict
         return self.skb.node_info.get(node_id, "") != ""
     
-    def centrality_heuristic(self, ctx) -> float:
-        graph: StarkSKBAdapter = ctx["graph"]
-        degree = len(graph.get_neighbors(ctx["target_id"]))
+    def centrality_heuristic(self, ctx :HeuristicContext) -> float:
+        graph: StarkSKBAdapter = ctx.graph
+        degree = graph.get_degree(ctx.target_id)
+        log_degree = math.log(1 + degree)
 
-        return min(1.0, math.log(1 + degree) / graph.avg_log_degree)
+        #Sigmoid normalization
+        normalized = log_degree / (log_degree + graph.avg_log_degree)
+        
+        return normalized
+        
     
 # --- 2. Vector Store Adapter for STaRK Tensors ---
 class StarkInMemoryVectorStore(VectorStore):
