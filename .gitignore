@@ -2,6 +2,7 @@
 **/stark/embeddings/
 **/stark/skb/
 **/stark/qa/
+**/stark/adjacency_cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

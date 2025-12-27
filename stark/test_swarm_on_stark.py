@@ -4,7 +4,7 @@ from typing import List
 from swarm_rag.core import Heuristics, SwarmRetriever
 from swarm_rag.integrations.stark import StarkInMemoryVectorStore, StarkPreComputedEmbeddingHandler, StarkSKBAdapter
 from swarm_rag.eval import Evaluator, EvalReporter
-from load_stark import load_and_download_embeddings, load_and_download_skb, load_and_download_qa
+from load_stark import load_and_download_embeddings, load_and_download_skb, load_and_download_qa, precompute_stark_adjacency
 
 # def stark_locality_deposit(ctx):
 #     graph: SKB = ctx["graph"]
@@ -27,9 +27,10 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
         qa_data = load_and_download_qa(dataset_name)
         skb = load_and_download_skb(dataset_name)
         query_embs, doc_embs = load_and_download_embeddings(dataset_name)
+        adjacency_dict = precompute_stark_adjacency(skb, dataset_name)
 
         vector_store = StarkInMemoryVectorStore(doc_embs)
-        graph_store = StarkSKBAdapter(skb, dataset_name)
+        graph_store = StarkSKBAdapter(skb, dataset_name, adjacency_dict=adjacency_dict)
         embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
 
         retriever = SwarmRetriever(
@@ -37,6 +38,7 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
             graph_store=graph_store,
             embedding_provider=embedding_provider,
             max_workers=8,
+            cache_neighbors=False, # Graph adapter handles caching
         )
 
         evaluator = Evaluator(k_values=[1, 5, 10, 20], index_name=dataset_name)
@@ -59,15 +61,18 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
                 start_subset=10,
                 top_k=20,
                 movement_strategies={
-                    "semantic": (Heuristics.semantic_similarity, 0.3),
-                    "centrality": (graph_store.centrality_heuristic, 0.4),
-                    "diversity": (Heuristics.pheromone_repulsion, 0.3),
+                    "semantic": (Heuristics.semantic_similarity, 0.35),  # Higher weight on relevance
+                    "centrality": (graph_store.centrality_heuristic, 0.2),  # Lower weight to reduce hub attraction
+                    "diversity": (Heuristics.pheromone_repulsion, 0.4),  # Exploration
+                    "jitter": (Heuristics.random_jitter, 0.05),  # Small randomness
                 },
                 deposit_strategies={
-                    "collaborative": (
-                        Heuristics.deposit_collaborative_amplification,
-                        1.0,
-                    )
+                    "semantic_deposit": (Heuristics.deposit_semantic, 1.0)
+                },
+                #Default
+                ranking_strategies={
+                    "visited": (Heuristics.percentage_visited, 0.6),
+                    "semantic": (Heuristics.semantic_rank, 0.4),
                 },
             )
             latency = time.time() - start_time
