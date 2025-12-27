@@ -1,3 +1,3 @@
 from .metrics import Evaluator
-
-__all__ = ["Evaluator"]
+from .report import EvalReporter
+__all__ = ["Evaluator", "EvalReporter"]

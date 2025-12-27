@@ -1,4 +1,5 @@
-from .heuristics import Heuristics
+from .heuristics import Heuristics, HeuristicContext
 from .swarm_retriever import SwarmRetriever
 
-__all__ = ["SwarmRetriever", "Heuristics"]
+
+__all__ = ["SwarmRetriever", "Heuristics", "HeuristicContext"]

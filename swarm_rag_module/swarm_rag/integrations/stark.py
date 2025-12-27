@@ -1,5 +1,5 @@
 import math
-from typing import Any, Optional
+from typing import Any, List, Optional
 import numpy as np
 from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
 from ..utils import fail_on_missing_imports
@@ -13,10 +13,20 @@ except ImportError:
                 extra_name="stark"
             )
     
+AVG_DEGREE_BY_DATASET = {
+        "prime": 125.2,
+        "amazon": 18.2,
+        "mag": 43.5,
+    }
+AVG_LOG_DEGREE_BY_DATASET = {
+    k: math.log(1 + v)
+    for k, v in AVG_DEGREE_BY_DATASET.items()
+}
 
 # --- 1. Graph Adapter for STaRK SKB ---
 class StarkSKBAdapter(GraphStore):
-    def __init__(self, skb_data: SKB):
+    
+    def __init__(self, skb_data: SKB, dataset: str):
         """
         Ingests a STaRK SKB object. 
         """
@@ -24,40 +34,23 @@ class StarkSKBAdapter(GraphStore):
         print("Initializing graph adapter from STaRK SKB...")
         self.skb = skb_data
 
-        self.max_degree = max(
-            len(self.skb.get_neighbor_nodes(node))
-            for node in self.skb.node_info.keys()
-        )
-        self.max_log_degree = math.log(1 + self.max_degree) if self.max_degree > 0 else 1.0
+        if dataset not in AVG_LOG_DEGREE_BY_DATASET:
+            raise ValueError(f"Unknown dataset: {dataset}")
+
+        self.dataset = dataset
+        self.avg_log_degree = AVG_LOG_DEGREE_BY_DATASET[dataset]
     
     def get_neighbors(self, node_id) -> list:
-        # raw_neighbors = self.skb.get_neighbor_nodes(idx=node_id)
-        
-        # processed_neighbors = []
-        # for neighbor in raw_neighbors:
-        #     if isinstance(neighbor, dict):
-        #         # If it's a dict, find the first value that looks like an ID.
-        #         # This is more robust than hardcoding a key like 'id'.
-        #         for val in neighbor.values():
-        #             if isinstance(val, (int, str)):
-        #                 processed_neighbors.append(int(val))
-        #                 break  # Found the ID, stop searching this dict
-        #     elif isinstance(neighbor, (int, str)):
-        #         # If it's already an int or string, just convert and add it.
-        #         processed_neighbors.append(int(neighbor))
-        
-        # return processed_neighbors
         return self.skb.get_neighbor_nodes(node_id)
     
     def contains(self, node_id) -> bool:
         return self.skb.node_info.get(node_id, "") != ""
     
-    @staticmethod
-    def log_degree_centrality(self, ctx) -> float:
-        graph: StarkSKBAdapter = ctx['graph']
-        neighbors = graph.get_neighbors(ctx['target_id'])
-        degree = len(neighbors)
-        return math.log(1 + degree) / self.max_log_degree # Normalized to [0,1]
+    def centrality_heuristic(self, ctx) -> float:
+        graph: StarkSKBAdapter = ctx["graph"]
+        degree = len(graph.get_neighbors(ctx["target_id"]))
+
+        return min(1.0, math.log(1 + degree) / graph.avg_log_degree)
     
 # --- 2. Vector Store Adapter for STaRK Tensors ---
 class StarkInMemoryVectorStore(VectorStore):
@@ -95,6 +88,12 @@ class StarkInMemoryVectorStore(VectorStore):
         """
         Search for similar vectors using FAISS.
         """
+        if query_vec is None:
+            raise ValueError(
+                "The query vector provided to the search function is None. "
+                "This usually means the embedding for the query ID was not found. "
+                "Please check that your query embeddings dictionary contains the ID for the query you are trying to retrieve."
+            )
         # Ensure query is 2D float32 and normalized
         q = query_vec.reshape(1, -1).astype('float32')
         faiss.normalize_L2(q)
@@ -108,15 +107,11 @@ class StarkInMemoryVectorStore(VectorStore):
             results.append({'id': real_id, 'score': float(score)})
         return results
 
-    def fetch_batch(self, node_ids) -> dict[Any, np.ndarray]:
+    def fetch_batch(self, node_ids) -> List[Optional[np.ndarray]]:
         # Return raw vectors for the Swarm logic
-        return {
-            nid: self.real_id_to_tensor[nid] 
-            for nid in node_ids 
-            if nid in self.real_id_to_tensor
-        }
+        return [self.real_id_to_tensor.get(nid) for nid in node_ids]
     
-    def get_single_vector(self, node_id: int) -> Optional[np.ndarray]:
+    def fetch(self, node_id: int) -> Optional[np.ndarray]:
         """
         Provides a fast, direct O(1) lookup for a single vector.
         This is ideal for use with an LRU cache.

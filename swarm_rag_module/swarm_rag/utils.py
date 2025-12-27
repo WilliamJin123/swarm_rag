@@ -1,4 +1,6 @@
 import importlib.util
+from threading import Lock
+from collections import OrderedDict
 
 def fail_on_missing_imports(modules: list[str], extra_name: str = None):
     """
@@ -30,3 +32,22 @@ def fail_on_missing_imports(modules: list[str], extra_name: str = None):
         )
 
     raise ImportError(msg) from None
+
+class LRUCache:
+    def __init__(self, maxsize):
+        self.maxsize = maxsize
+        self.data = OrderedDict()
+        self.lock = Lock()
+
+    def get(self, key):
+         with self.lock:
+            if key not in self.data:
+                return None
+            self.data.move_to_end(key)
+            return self.data[key]
+    def set(self, key, value):
+        with self.lock:
+            self.data[key] = value
+            self.data.move_to_end(key)
+            if len(self.data) > self.maxsize:
+                self.data.popitem(last=False)

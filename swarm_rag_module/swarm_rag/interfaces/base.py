@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Optional, Union
 import numpy as np
 
 class VectorStore(ABC):
@@ -11,10 +11,15 @@ class VectorStore(ABC):
         pass
 
     @abstractmethod
-    def fetch_batch(self, node_ids: List[Any]) -> Dict[Any, np.ndarray]:
-        """Returns dict mapping {node_id: embedding_vector}"""
+    def fetch_batch(self, node_ids: List[Any]) -> List[Optional[np.ndarray]]:
+        """Returns ordered list of vectors"""
         pass
 
+    @abstractmethod
+    def fetch(self, node_ids: Any) -> Optional[np.ndarray]:
+        """Returns single vector"""
+        pass
+    
 class GraphStore(ABC):
     """Abstract contract for Graph Structures (NetworkX, PyG, Neo4j)"""
     
@@ -38,5 +43,5 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    def embed_query_batch(self, queries: list[Any]) -> np.ndarray:
+    def embed_query_batch(self, queries: list) -> List[np.ndarray]:
         pass
