@@ -3,11 +3,10 @@
 import numpy as np
 import random
 import time
-from typing import List, Dict, Any, Union
-from concurrent.futures import ThreadPoolExecutor
-import threading
-from ..swarm_rag_module.interfaces.base import VectorStore, GraphStore, EmbeddingProvider
-from ..swarm_rag_module.eval.metrics import Evaluator
+from typing import List, Dict, Any, Optional, Union
+from swarm_rag.core.swarm_retriever import SwarmRetriever
+from swarm_rag.interfaces.base import VectorStore, GraphStore, EmbeddingProvider
+from swarm_rag.eval import Evaluator, EvalReporter
 
 # Dummy implementations of abstract classes
 class DummyVectorStore(VectorStore):
@@ -33,9 +32,12 @@ class DummyVectorStore(VectorStore):
             results.append({'id': node_id, 'score': float(score)})
         return sorted(results, key=lambda x: x['score'], reverse=True)
     
-    def fetch_batch(self, node_ids: List[Any]) -> Dict[Any, np.ndarray]:
+    def fetch_batch(self, node_ids: List[Any]) -> List[Optional[np.ndarray]]:
         """Fetch embeddings for given node IDs"""
-        return {nid: self.embeddings[nid] for nid in node_ids if nid in self.embeddings}
+        return [self.embeddings.get(nid) for nid in node_ids]
+
+    def fetch(self, node_id) -> Optional[np.ndarray]:
+        return self.embeddings.get(node_id)
 
 class DegreeView:
     """A simple dict-like view to mimic NetworkX's DegreeView."""
@@ -113,106 +115,62 @@ def test_swarm_retriever():
     print("=" * 60)
     
     # 1. Initialize dummy components
-    print("\n1. Initializing dummy components...")
+    print("\n Initializing dummy components...")
     vector_store = DummyVectorStore(num_nodes=1000, embedding_dim=128)
     graph_store = DummyGraphStore(num_nodes=1000, avg_degree=5)
     embedder = DummyEmbeddingProvider(embedding_dim=128)
     evaluator = Evaluator(index_name="SwarmRetriever")
     
     # 2. Initialize SwarmRetriever
-    print("2. Initializing SwarmRetriever...")
+    print("\n Initializing SwarmRetriever...")
     retriever = SwarmRetriever(
         vector_store=vector_store,
         graph_store=graph_store,
         embedding_provider=embedder,
-        max_workers=4,
-        cache_neighbors=True
     )
 
-    all_query_metrics = []
-    
-    # 3. Test single query
-    print("\n3. Testing single query retrieval...")
-    start_time = time.time()
-    single_results = retriever.retrieve(
-        query="What is quantum entanglement?",
-        n_agents=10,
-        steps=3,
-        top_k=5
-    )
-    single_time = time.time() - start_time
-    
-    print(f"   ✓ Single query completed in {single_time:.3f}s")
-    print(f"   ✓ Returned {len(single_results)} results")
-    print("   Top 3 results:")
-    for i, res in enumerate(single_results[:3]):
-        print(f"     {i+1}. Node {res['id']} (score: {res['score']:.4f})")
-    
-    ground_truth_single = [res['id'] for res in single_results[:3]]
-    single_metrics = evaluator.calculate_metrics(single_results, ground_truth_single, single_time)
-    all_query_metrics.append(single_metrics)
-    print(f"   ✓ Evaluated single query. MRR: {single_metrics['MRR']:.4f}, Hit@10: {single_metrics['Hit@10']:.4f}")
-
-    # 4. Test batch with automatic strategy selection
-    print("\n4. Testing batch retrieval with automatic strategy selection...")
+    reporter = EvalReporter()
     queries = [
         "What is quantum entanglement?",
         "Explain black holes",
         "How do neural networks work?"
     ]
-    
-    start_time = time.time()
-    batch_results = retriever.retrieve_batch(
-        queries=queries,
-        n_agents=10,
-        steps=3,
-        top_k=5,
-        parallel_queries=True  # Let system decide
-    )
-    batch_time = time.time() - start_time
-    
-    print(f"   ✓ Batch query completed in {batch_time:.3f}s")
-    print(f"   ✓ Processed {len(queries)} queries")
-    for i, (query, results) in enumerate(zip(queries, batch_results)):
-        print(f"   Query {i+1}: '{query[:30]}...' -> {len(results)} results")
-    
-    avg_latency_per_query = batch_time / len(queries)
-    for i, (query, results) in enumerate(zip(queries, batch_results)):
-        # Simulate ground truth for each query
-        ground_truth_batch = [res['id'] for res in results[:3]]
-        # Use average latency for each query in the batch
-        batch_metrics = evaluator.calculate_metrics(results, ground_truth_batch, avg_latency_per_query)
-        all_query_metrics.append(batch_metrics)
-        print(f"   ✓ Evaluated query {i+1}: MRR: {batch_metrics['MRR']:.4f}, Hit@10: {batch_metrics['Hit@10']:.4f}")
 
-    # 5. Test forced sequential processing
-    print("\n5. Testing forced sequential batch processing...")
-    large_query_list = [f"Test query {i}" for i in range(10)]
-    
+    print("\n Testing single query retrieval...")
     start_time = time.time()
-    sequential_results = retriever.retrieve_batch(
-        queries=large_query_list,
-        n_agents=5,
-        steps=2,
-        top_k=3,
-        parallel_queries=False
-    )
-    sequential_time = time.time() - start_time
-    
-    print(f"   ✓ Sequential batch completed in {sequential_time:.3f}s")
-    print(f"   ✓ Processed {len(large_query_list)} queries sequentially")
-    
-    avg_latency_per_query = sequential_time / len(large_query_list)
-    for i, (query, results) in enumerate(zip(large_query_list, sequential_results)):
-        ground_truth_seq = [res['id'] for res in results[:1]] # Simulate 1 correct result
-        seq_metrics = evaluator.calculate_metrics(results, ground_truth_seq, avg_latency_per_query)
-        all_query_metrics.append(seq_metrics)
+    single_results = retriever.retrieve(query=queries[0], n_agents=5, steps=3, top_k=5)
+    latency = time.time() - start_time
+    ground_truth = [res['id'] for res in single_results[:3]]
+    metrics = evaluator.calculate_metrics(single_results, ground_truth, latency)
+    reporter.add_run("Single Query", metrics)
+    print(f"   ✓ Single query returned {len(single_results)} results in {latency:.3f}s")
+    print(f"   ✓ Metrics: MRR={metrics['MRR']:.4f}, Hit@10={metrics['Hit@10']:.4f}")
 
-    # 6. Test custom parallel settings
+    print("\nTesting batch retrieval with automatic strategy selection...")
+    start_time = time.time()
+    batch_results = retriever.retrieve_batch(queries=queries, n_agents=10, steps=3, top_k=5, parallel_queries=True)
+    latency_per_query = (time.time() - start_time)/len(queries)
+    for q, res in zip(queries, batch_results):
+        ground_truth_batch = [r['id'] for r in res[:3]]
+        batch_metrics = evaluator.calculate_metrics(res, ground_truth_batch, latency_per_query)
+        reporter.add_run("Batch Queries", batch_metrics)
+        print(f"   ✓ Query '{q[:30]}...' -> {len(res)} results, MRR={batch_metrics['MRR']:.4f}")
+
+    large_queries = [f"Test query {i}" for i in range(10)]
+
+    print("\n Testing sequential batch processing...")
+    sequential_results = retriever.retrieve_batch(large_queries, n_agents=5, steps=2, top_k=3, parallel_queries=False)
+    latency_seq = (time.time() - start_time)/len(large_queries)
+    for q, res in zip(large_queries, sequential_results):
+        ground_truth_seq = [r['id'] for r in res[:1]]
+        seq_metrics = evaluator.calculate_metrics(res, ground_truth_seq, latency_seq)
+        reporter.add_run("Sequential Batch", seq_metrics)
+    print(f"   ✓ Sequential batch processed {len(large_queries)} queries in {time.time() - start_time:.3f}s")
+
     print("\n6. Testing custom parallel settings...")
     start_time = time.time()
     parallel_results = retriever.retrieve_batch(
-        queries=large_query_list,
+        queries=large_queries,
         n_agents=5,
         steps=2,
         top_k=3,
@@ -220,94 +178,27 @@ def test_swarm_retriever():
         max_concurrent_queries=4
     )
     parallel_time = time.time() - start_time
-    
-    print(f"   ✓ Parallel batch completed in {parallel_time:.3f}s")
-    print(f"   ✓ Processed {len(large_query_list)} queries with 4 workers")
-    
-    avg_latency_per_query = parallel_time / len(large_query_list)
-    for i, (query, results) in enumerate(zip(large_query_list, parallel_results)):
-        ground_truth_par = [res['id'] for res in results[:1]] # Simulate 1 correct result
-        par_metrics = evaluator.calculate_metrics(results, ground_truth_par, avg_latency_per_query)
-        all_query_metrics.append(par_metrics)
+    avg_latency_per_query = parallel_time / len(large_queries)
 
-    # 7. Performance comparison
-    print("\n7. Performance Summary:")
-    print(f"   Single query:     {single_time:.3f}s")
-    print(f"   Small batch:      {batch_time:.3f}s ({batch_time/len(queries):.3f}s per query)")
-    print(f"   Sequential batch: {sequential_time:.3f}s ({sequential_time/len(large_query_list):.3f}s per query)")
-    print(f"   Parallel batch:   {parallel_time:.3f}s ({parallel_time/len(large_query_list):.3f}s per query)")
+    for q, res in zip(large_queries, parallel_results):
+        ground_truth = [r['id'] for r in res[:1]]  # simulate 1 correct result
+        metrics = evaluator.calculate_metrics(res, ground_truth, avg_latency_per_query)
+        reporter.add_run("Parallel Batch (Custom)", metrics)
+    print(f"   ✓ Parallel batch with 4 workers completed in {parallel_time:.3f}s")
+      
+    aggregated = reporter.aggregate(evaluator)
+    print("\nAGGREGATED RESULTS")
+    for group, df in aggregated.items():
+        print(f"\n{group}:")
+        print(df.to_string(index=False))
+        reporter.plot_metrics(df=df, title=group, metrics=list(df.columns))
     
-    # 8. Verify result consistency
-    print("\n8. Verifying result consistency...")
-    consistent = True
-    for i in range(min(3, len(single_results))):
-        if single_results[i]['id'] != batch_results[0][i]['id']:
-            consistent = False
-            break
-    
-    if consistent:
-        print("   ✓ Results are consistent across single and batch queries")
-    else:
-        print("   ⚠ Results vary (expected due to stochastic nature)")
-    
-    # 9. Test error handling
-    print("\n9. Testing error handling...")
-    try:
-        empty_results = retriever.retrieve_batch(
-            queries=[],
-            parallel_queries=True
-        )
-        print("   ✓ Empty query list handled correctly")
-    except Exception as e:
-        print(f"   ✗ Error with empty queries: {e}")
-    
-    # 10. Resource usage test
-    print("\n10. Resource usage simulation...")
-    print("   Testing with resource constraints...")
-    
-    # Mock low memory scenario
-    original_has_resources = retriever._has_resources_for_parallel
-    retriever._has_resources_for_parallel = lambda: False
-    
-    start_time = time.time()
-    constrained_results = retriever.retrieve_batch(
-        queries=queries[:2],
-        parallel_queries=True  # Will be forced to sequential
-    )
-    constrained_time = time.time() - start_time
-    
-    print(f"   ✓ Constrained processing completed in {constrained_time:.3f}s")
-    
-    avg_latency_per_query = constrained_time / len(queries[:2])
-    for i, (query, results) in enumerate(zip(queries[:2], constrained_results)):
-        ground_truth_con = [res['id'] for res in results[:3]]
-        con_metrics = evaluator.calculate_metrics(results, ground_truth_con, avg_latency_per_query)
-        all_query_metrics.append(con_metrics)
-
-    # Restore original method
-    retriever._has_resources_for_parallel = original_has_resources
-    
-    # 11. Final Aggregation and Reporting
-    print("\n" + "=" * 60)
-    print("AGGREGATED EVALUATION RESULTS")
-    print("=" * 60)
-    
-    final_report = evaluator.aggregate_results(all_query_metrics)
-    
-    if not final_report.empty:
-        print(final_report)
-    else:
-        print("Could not generate final report.")
+    if len(aggregated) > 1:
+        reporter.plot_comparison(aggregated_results=aggregated, metrics=list(df.columns))
 
     print("\n" + "=" * 60)
     print("TEST SUITE COMPLETED")
     print("=" * 60)
 
 if __name__ == "__main__":
-    # Import the SwarmRetriever (assuming it's in the same directory or installed)
-    try:
-        from ..swarm_rag_module.core.swarm_retriever import SwarmRetriever
-        test_swarm_retriever()
-    except ImportError:
-        print("Error: Could not import SwarmRetriever. Make sure it's in your Python path.")
-        print("For testing purposes, you can copy the SwarmRetriever class into this file.")
+    test_swarm_retriever()

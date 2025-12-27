@@ -3,56 +3,35 @@ import numpy as np
 from typing import Any, List, Dict, Optional
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock, Semaphore
+from threading import Lock
 import os
 import psutil
-from functools import lru_cache
+from ..utils import LRUCache
 
-from .heuristics import Heuristics
+from .heuristics import Heuristics, HeuristicContext
 from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
 
-def _create_neighbor_cacher(graph_store: GraphStore, maxsize: int):
-    """
-    Factory function that creates and returns a cached neighbor-getting function.
-    This allows the cache size to be configured at runtime.
-    """
-    @lru_cache(maxsize=maxsize)
-    def _cacher(node_id: int) -> List[int]:
-        """
-        The actual cached function. It closes over the `graph_store` instance.
-        The cache key is simply the `node_id`.
-        """
-        return graph_store.get_neighbors(node_id)
-    return _cacher
-
-def _create_doc_cacher(vector_store: VectorStore, maxsize: int):
-    """
-    Factory to create a cached function for fetching single vectors.
-    """
-    @lru_cache(maxsize=maxsize)
-    def _cacher(node_id: int) -> Optional[np.ndarray]:
-        """
-        The cached function. Closes over the `vector_store` instance.
-        The cache key is the `node_id`.
-        """
-        batch = vector_store.fetch_batch([node_id])
-        return batch.get(node_id)
-    return _cacher
-
-def _create_query_cacher(embedding_provider: EmbeddingProvider, maxsize: int):
-    """
-    Factory to create a cached function for query embeddings.
-    """
-    @lru_cache(maxsize=maxsize)
-    def _cacher(query: Any) -> np.ndarray:
-        """
-        The cached function. Closes over the `embedding_provider`.
-        The cache key is the `query` object itself (must be hashable).
-        """
-        return embedding_provider.embed_query(query)
-    return _cacher
-
 class SwarmRetriever:
+    _DEFAULT_PARAMS = dict(
+        n_agents=20,
+        steps=4,
+        decay=0.5,
+        initial_pool_size=30,
+        start_subset=10,
+        top_k=20,
+        movement_strategies={
+            "semantic": (Heuristics.semantic_similarity, 0.3),
+            "centrality": (Heuristics.node_centrality, 0.4),
+            "diversity": (Heuristics.pheromone_repulsion, 0.3),
+        },
+        ranking_strategies={
+            "visited": (Heuristics.percentage_visited, 0.6),
+            "semantic": (Heuristics.semantic_rank, 0.4),
+        },
+        deposit_strategies={
+            "flat_mark": (Heuristics.deposit_flat, 1.0),
+        },
+    )
     def __init__(
         self, 
         vector_store: VectorStore, 
@@ -62,11 +41,11 @@ class SwarmRetriever:
         cache_neighbors: bool = True,
         neighbor_cache_size: int = 5000,
         cache_vectors: bool = True,
-        vector_cache_size: int = 50000,
+        doc_cache_size: int = 50000,
         query_cache_size: int = 1000
     ):
         self.vector_store = vector_store
-        self.graph = graph_store
+        self.graph_store = graph_store
         self.embed_fn = embedding_provider
         self.max_workers = max_workers
         self.base_pheromones = defaultdict(lambda: 1.0)
@@ -77,32 +56,74 @@ class SwarmRetriever:
         # Performance optimizations
         self.cache_neighbors = cache_neighbors
         if self.cache_neighbors:
-            self.neighbor_cache_size = neighbor_cache_size
-            self._cached_get_neighbors = _create_neighbor_cacher(self.graph, self.neighbor_cache_size)
+            self.neighbor_cache = LRUCache(neighbor_cache_size)
 
         self.cache_vectors = cache_vectors
         if self.cache_vectors:
-            self.vector_cache_size = vector_cache_size
-            self.query_cache_size = query_cache_size
-            self._cached_get_single_vector = _create_doc_cacher(
-                self.vector_store, self.vector_cache_size
-            )
-            self._cached_embed_query = _create_query_cacher(
-                self.embed_fn, self.query_cache_size
-            )
+            self.doc_cache = LRUCache(doc_cache_size)
+            self.query_cache = LRUCache(query_cache_size)
         
-
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        """Shuts down the internal thread pool executor."""
+        self.executor.shutdown(wait=True)
+
+    def _resolve_params(self, **user_params) -> Dict:
+        """
+        Merges user-provided parameters with class defaults.
+        User parameters override defaults only if they are explicitly provided (not None).
+        """
+        # Filter out parameters that were not provided (i.e., are None)
+        # This ensures that a user passing `n_agents=None` doesn't override the default.
+        active_user_params = {k: v for k, v in user_params.items() if v is not None}
+        
+        resolved_params = self._DEFAULT_PARAMS.copy()
+        resolved_params.update(active_user_params)
+        return resolved_params
+
+    def retrieve(
+            self, 
+            query: Any, # Can be string or ID depending on provider
+            n_agents: Optional[int] = None, 
+            steps: Optional[int] = None,
+            decay: Optional[float] = None,
+            initial_pool_size: Optional[int] = None,
+            start_subset: Optional[int] = None,
+            top_k: Optional[int] = None,
+            movement_strategies: Optional[Dict] = None,
+            ranking_strategies: Optional[Dict] = None,
+            deposit_strategies: Optional[Dict] = None
+        ) -> List[Dict]:
+            params = self._resolve_params(
+                n_agents=n_agents,
+                steps=steps,
+                decay=decay,
+                initial_pool_size=initial_pool_size,
+                start_subset=start_subset,
+                top_k=top_k,
+                movement_strategies=movement_strategies,
+                ranking_strategies=ranking_strategies,
+                deposit_strategies=deposit_strategies
+            )
+            query_vec = self._get_cached_query_vector(query)
+            return self._retrieve_internal(query_vec=query_vec, **params)
 
     def retrieve_batch(
         self,
         queries: List[Any],
-        n_agents: int = 20,
-        steps: int = 4,
-        decay: float = 0.5,
-        initial_pool_size: int = 30,
-        start_subset: int = 10,
-        top_k: int = 20,
+        n_agents: Optional[int] = None,
+        steps: Optional[int] = None,
+        decay: Optional[float] = None,
+        initial_pool_size: Optional[int] = None,
+        start_subset: Optional[int] = None,
+        top_k: Optional[int] = None,
         movement_strategies: Optional[Dict] = None,
         ranking_strategies: Optional[Dict] = None,
         deposit_strategies: Optional[Dict] = None,
@@ -125,48 +146,37 @@ class SwarmRetriever:
         if not queries:
             return []
         
-        # 1. Batch embed all queries
-        query_vectors = self.embed_fn.embed_query_batch(queries)
-        
-        # 2. Update cache for all queries
-        for query, vec in zip(queries, query_vectors):
-            query_key = str(query) if isinstance(query, (str, int)) else id(query)
-            self.query_vec_cache[query_key] = vec
-        
-        # 3. Decide processing strategy
-        should_parallel = (
-            parallel_queries 
+        params = self._resolve_params(
+            n_agents=n_agents,
+            steps=steps,
+            decay=decay,
+            initial_pool_size=initial_pool_size,
+            start_subset=start_subset,
+            top_k=top_k,
+            movement_strategies=movement_strategies,
+            ranking_strategies=ranking_strategies,
+            deposit_strategies=deposit_strategies
+        )
+
+        # Batch embed all queries
+        query_vectors = self._get_cached_query_embeddings_batch(queries)
+
+        # Decide processing strategy
+        if (
+            parallel_queries
             and len(queries) > 2
             and self._has_resources_for_parallel()
-        )
-        
-        if should_parallel:
+        ):
             max_concurrent = max_concurrent_queries or self._calculate_optimal_concurrency()
             return self._retrieve_batch_parallel(
                 query_vectors,
-                n_agents=n_agents,
-                steps=steps,
-                decay=decay,
-                initial_pool_size=initial_pool_size,
-                start_subset=start_subset,
-                top_k=top_k,
-                movement_strategies=movement_strategies,
-                ranking_strategies=ranking_strategies,
-                deposit_strategies=deposit_strategies,
-                max_concurrent_queries=max_concurrent
+                max_concurrent_queries=max_concurrent,
+                **params
             )
         else:
             return self._retrieve_batch_sequential(
                 query_vectors,
-                n_agents=n_agents,
-                steps=steps,
-                decay=decay,
-                initial_pool_size=initial_pool_size,
-                start_subset=start_subset,
-                top_k=top_k,
-                movement_strategies=movement_strategies,
-                ranking_strategies=ranking_strategies,
-                deposit_strategies=deposit_strategies
+                **params
             )
 
     def _retrieve_batch_sequential(
@@ -188,13 +198,10 @@ class SwarmRetriever:
         **kwargs
     ) -> List[List[Dict]]:
         """Process queries in parallel with controlled concurrency."""
-        # Create semaphore to limit concurrent queries
-        semaphore = Semaphore(max_concurrent_queries)
         
         def process_single_query(idx: int, vec: np.ndarray) -> tuple[int, List[Dict]]:
-            with semaphore:
-                result = self._retrieve_internal(query_vec=vec, **kwargs)
-                return idx, result
+            result = self._retrieve_internal(query_vec=vec, **kwargs)
+            return idx, result
         
         # Process queries in parallel
         with ThreadPoolExecutor(max_workers=max_concurrent_queries) as executor:
@@ -236,33 +243,6 @@ class SwarmRetriever:
         
         return True
 
-    def retrieve(
-        self, 
-        query: Any, # Can be string or ID depending on provider
-        n_agents: int = 20, 
-        steps: int = 4,
-        decay: float = 0.5,
-        initial_pool_size: int = 30,
-        start_subset: int = 10,
-        top_k : int = 20,
-        movement_strategies = None,
-        ranking_strategies = None,
-        deposit_strategies = None
-    ) -> List[Dict]:
-        query_vec = self._get_cached_query_vector(query)
-        return self._retrieve_internal(
-            query_vec=query_vec,
-            n_agents=n_agents,
-            steps=steps,
-            decay=decay,
-            initial_pool_size=initial_pool_size,
-            start_subset=start_subset,
-            top_k=top_k,
-            movement_strategies=movement_strategies,
-            ranking_strategies=ranking_strategies,
-            deposit_strategies=deposit_strategies
-        )
-
     def _retrieve_internal(
         self,
         query_vec: np.ndarray,
@@ -272,45 +252,27 @@ class SwarmRetriever:
         initial_pool_size: int,
         start_subset: int,
         top_k: int,
-        movement_strategies: Optional[Dict],
-        ranking_strategies: Optional[Dict],
-        deposit_strategies: Optional[Dict]
+        movement_strategies: Dict,
+        ranking_strategies: Dict,
+        deposit_strategies: Dict
     ) -> List[Dict]:
         """
         Core retrieval logic shared between retrieve() and retrieve_batch().
-        """
-        # Setup Default Strategies
-        if movement_strategies is None:
-            movement_strategies = {
-                "semantic": (Heuristics.semantic_similarity, 0.3),
-                "centrality": (Heuristics.node_centrality, 0.4),
-                "diversity": (Heuristics.pheromone_repulsion, 0.3)
-            }
-        
-        if ranking_strategies is None:
-            ranking_strategies = {
-                "consensus": (Heuristics.consensus_vote, 0.6),
-                "semantic": (Heuristics.semantic_rank, 0.4)
-            }
-        if deposit_strategies is None:
-            deposit_strategies = {
-                "flat_mark": (Heuristics.deposit_flat, 1.0) 
-            }
-        
+        """        
         # Initial search with caching
         search_res = self.vector_store.search(query_vec, limit=initial_pool_size)
-        valid_pool = [r['id'] for r in search_res if self.graph.contains(r['id'])]
+        valid_pool = [r['id'] for r in search_res if self.graph_store.contains(r['id'])]
         if not valid_pool: 
             return []
 
         drop_zone = valid_pool[:start_subset]
         
         # Spawn Agents
-        agent_locations = np.array([random.choice(drop_zone) for _ in range(n_agents)])
+        weights = [1.0 + 0.05 * (start_subset - i - 1)  for i in range(start_subset)]
+        # Slightly higher weight on the most relevant for drops (0.05 inc)
+        agent_locations = random.choices(drop_zone, weights=weights, k=n_agents)
         agent_trajectories = [[loc] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
-
-        self._prefetch_vectors(agent_locations)
 
         # --- TRAVERSAL LOOP ---
         for step in range(steps):
@@ -333,29 +295,37 @@ class SwarmRetriever:
             
             for future in as_completed(futures):
                 agent_id = futures[future]
-                try:
-                    result = future.result()
-                    if result:
-                        new_locations[agent_id] = result['new_location']
-                        agent_trajectories[agent_id].append(result['new_location'])
-                        if result['deposit'] > 0:
-                            pheromone_updates[result['node_id']] += result['deposit']
-                except Exception as e:
-                    print(f"Agent {agent_id} failed: {e}")
+                # try:
+                #     result = future.result()
+                #     if result:
+                #         new_locations[agent_id] = result['new_location']
+                #         agent_trajectories[agent_id].append(result['new_location'])
+                #         if result['deposit'] > 0:
+                #             pheromone_updates[result['node_id']] += result['deposit']
+                # except Exception as e:
+                #     print(f"Agent {agent_id} failed: {e}")
+                result = future.result()
+                if result:
+                    new_locations[agent_id] = result['new_location']
+                    agent_trajectories[agent_id].append(result['new_location'])
+                    if result['deposit'] > 0:
+                        pheromone_updates[result['node_id']] += result['deposit']
             
             # Batch update all agents
             agent_locations = new_locations
         
         # Batch update pheromones (thread-safe)
         with self.pheromone_lock:
-            for node_id, amount in pheromone_updates.items():
-                query_pheromones[node_id] += amount
-            # Apply decay to all
+            # Apply decay
             for k in query_pheromones:
                 query_pheromones[k] *= decay
+            # Then add new deposits
+            for node_id, amount in pheromone_updates.items():
+                query_pheromones[node_id] += amount
+            
     
-        # Parallel consensus ranking
-        return self._parallel_consensus_ranking(
+        # Parallel ranking
+        return self._parallel_ranking(
             agent_trajectories, 
             query_vec, 
             ranking_strategies, 
@@ -376,11 +346,11 @@ class SwarmRetriever:
         step: int
     ) -> Optional[Dict]:
         """Process a single agent's movement in one step."""
-        if step % 2 == 0:
-            print(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
         neighbors = self._get_cached_neighbors(current_loc)
         if not neighbors:
             return None
+        if step % 2 == 0:
+            print(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
         
         # Batch fetch vectors for all neighbors
         neighbor_vectors = self._fetch_vectors_batch(neighbors)
@@ -389,47 +359,50 @@ class SwarmRetriever:
         
         # Calculate scores for all neighbors
         scores = []
-        valid_neighbors = []
+        valid_neighbors: List[int] = []
         
         max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
         
-        for neighbor in neighbors:
-            if neighbor not in neighbor_vectors:
+        for i, neighbor in enumerate(neighbors):
+            target_vec = neighbor_vectors[i]
+            if target_vec is None: # Check for missing vector
                 continue
             
-            ctx = {
-                'query_vec': query_vec,
-                'target_vec': neighbor_vectors[neighbor],
-                'target_id': neighbor,
-                'current_id': current_loc,
-                'graph': self.graph,
-                'pheromones': query_pheromones,
-                'max_pheromone': max_pheromone,
-                'step_index': step,
-                'agent_index': agent_id
-            }
+            ctx = HeuristicContext(
+                query_vec=query_vec,
+                target_vec=target_vec,
+                target_id=neighbor,
+                current_id=current_loc,
+                graph=self.graph_store,
+                pheromones=query_pheromones,
+                max_pheromone=max_pheromone,
+                step_index=step,
+                agent_index=agent_id
+            )
             
             total_score = sum(
                 func(ctx) * weight 
                 for name, (func, weight) in movement_strategies.items()
             )
             scores.append(max(total_score, 0.001))
-            valid_neighbors.append(neighbor)
+            valid_neighbors.append(i)
         
         if not valid_neighbors:
             return None
         
         # Stochastic selection
-        next_node = random.choices(valid_neighbors, weights=scores, k=1)[0]
+        chosen_index: int = random.choices(valid_neighbors, weights=scores, k=1)[0]
+        next_node = neighbors[chosen_index]
+        deposit_target_vec = neighbor_vectors[chosen_index]
         
         # Calculate deposit
-        deposit_ctx = {
-            'query_vec': query_vec,
-            'target_vec': neighbor_vectors[next_node],
-            'target_id': next_node,
-            'graph': self.graph,
-            'pheromones': query_pheromones
-        }
+        deposit_ctx = HeuristicContext(
+            query_vec=query_vec,
+            target_vec=deposit_target_vec,
+            target_id=next_node,
+            graph=self.graph_store,
+            pheromones=query_pheromones
+        )
         
         deposit_amount = sum(
             func(deposit_ctx) * weight 
@@ -442,7 +415,7 @@ class SwarmRetriever:
             'deposit': deposit_amount
         }
     
-    def _parallel_consensus_ranking(
+    def _parallel_ranking(
         self, 
         agent_trajectories: List[List[int]], 
         query_vec: np.ndarray,
@@ -450,7 +423,7 @@ class SwarmRetriever:
         top_k: int,
         n_agents: int
     ) -> List[Dict]:
-        """Parallel consensus ranking of visited nodes."""
+        """Parallel ranking of visited nodes."""
         # Count votes
         all_visited = [node for path in agent_trajectories for node in path]
         vote_counts = Counter(all_visited)
@@ -458,22 +431,23 @@ class SwarmRetriever:
         
         # Batch fetch all vectors
         final_vectors = self._fetch_vectors_batch(unique_visited)
-        
+        results = []
         # Parallel score calculation
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(
+            futures = {}
+            for i, node_id in enumerate(unique_visited):
+                vec = final_vectors[i]
+                future = executor.submit(
                     self._calculate_node_score,
-                    node_id,
-                    vote_counts[node_id],
-                    query_vec,
-                    final_vectors.get(node_id),
-                    ranking_strategies,
+                    node_id=node_id,
+                    votes=vote_counts[node_id],
+                    query_vec=query_vec,
+                    target_vec=vec,
+                    ranking_strategies=ranking_strategies,
                     n_agents=n_agents
-                ): node_id for node_id in unique_visited
-            }
+                )
+                futures[future] = node_id
             
-            results = []
             for future in as_completed(futures):
                 node_id = futures[future]
                 try:
@@ -499,60 +473,100 @@ class SwarmRetriever:
         if target_vec is None:
             return 0.0
         
-        ctx = {
-            'query_vec': query_vec,
-            'target_vec': target_vec,
-            'target_id': node_id,
-            'votes': votes,
-            'total_agents': n_agents,
-            'graph': self.graph
-        }
+        node_ctx = HeuristicContext(
+            query_vec=query_vec,
+            target_vec=target_vec,
+            target_id=node_id,
+            graph=self.graph_store,
+            votes=votes,
+            total_agents=n_agents
+        )
         
         return sum(
-            func(ctx) * weight 
+            func(node_ctx) * weight 
             for name, (func, weight) in ranking_strategies.items()
         )
 
     def _get_cached_neighbors(self, node_id: int) -> List[int]:
         """Gets or computes and caches the neighbor list, if enabled."""
-        if self.cache_neighbors:
-            return self._cached_get_neighbors(node_id)
-        else:
-            return self.graph.get_neighbors(node_id)
+        if not self.cache_neighbors:
+            return self.graph_store.get_neighbors(node_id)
+
+        cached = self.neighbor_cache.get(node_id)
+        if cached is not None:
+            return cached
+
+        neighbors = self.graph_store.get_neighbors(node_id)
+        self.neighbor_cache.set(node_id, neighbors)
+        return neighbors
     
-    def _prefetch_vectors(self, node_ids: List[int]):
-        """Prefetch vectors for given nodes."""
-        missing = [nid for nid in node_ids if nid not in self.vector_cache]
-        if missing:
-            batch = self.vector_store.fetch_batch(missing)
-            self.vector_cache.update(batch)
-    
-    def _fetch_vectors_batch(self, node_ids: List[int]) -> Dict[int, np.ndarray]:
+    def _fetch_vectors_batch(self, node_ids: List[int]) -> List[Optional[np.ndarray]]:
         """Fetches vectors efficiently using the cache, if enabled."""
         if not self.cache_vectors:  # Check if caching is enabled
             return self.vector_store.fetch_batch(node_ids)
 
-        result = {}
+        result: List[Optional[np.ndarray]] = [None] * len(node_ids)
+        missing_indices = []
         missing_ids = []
 
-        for nid in node_ids:
-            cached_vec = self._cached_get_single_vector(nid)
+        for i, node_id in enumerate(node_ids):
+            cached_vec = self.doc_cache.get(node_id)
             if cached_vec is not None:
-                result[nid] = cached_vec
+                # Cache hit: place the vector at its correct index.
+                result[i] = cached_vec
             else:
-                missing_ids.append(nid)
+                # Cache miss: record the index and ID for a batch fetch.
+                missing_indices.append(i)
+                missing_ids.append(node_id)
         
         if missing_ids:
-            fetched_batch = self.vector_store.fetch_batch(missing_ids)
-            result.update(fetched_batch)
-        
+            fetched_vecs = self.vector_store.fetch_batch(missing_ids)
+            for i, vec in zip(missing_indices, fetched_vecs):
+                if vec is not None:
+                    self.doc_cache.set(node_ids[i], vec)
+                result[i] = vec
+
         return result
             
     def _get_cached_query_vector(self, query: Any) -> np.ndarray:
         """Gets or computes and caches the query embedding, if enabled."""
-        if self.cache_vectors:
-            # Call the cached helper function
-            self._cached_embed_query(query)
-        else:
-            # Fallback: no caching, direct call
+        if not self.cache_vectors:
             return self.embed_fn.embed_query(query)
+
+        cached = self.query_cache.get(query)
+        if cached is not None:
+            return cached
+
+        emb = self.embed_fn.embed_query(query)
+        self.query_cache.set(query, emb)
+        return emb
+        
+    def _get_cached_query_embeddings_batch(self, queries: list) -> List[np.ndarray]:
+        """
+        Retrieves embeddings for a batch of queries, using the unified
+        single-item cache to avoid redundant computations.
+        """
+        if not self.cache_vectors or not queries:
+            return self.embed_fn.embed_query_batch(queries)
+
+        results_by_index = {}
+        missing_indices = []
+        missing_queries = []
+
+        for i, q in enumerate(queries):
+            cached_vec = self.query_cache.get(q)
+            if cached_vec is not None:
+                results_by_index[i] = cached_vec
+            else:
+                missing_indices.append(i)
+                missing_queries.append(q)
+
+        if missing_queries:
+            batch_embeddings = self.embed_fn.embed_query_batch(missing_queries)
+            for i, emb in zip(missing_indices, batch_embeddings):
+                q = queries[i]
+                self.query_cache.set(q, emb)
+                results_by_index[i] = emb
+
+
+        return [results_by_index[i] for i in range(len(queries))]
