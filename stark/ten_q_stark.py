@@ -104,4 +104,4 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
 
 
 if __name__ == "__main__":
-    test_first_10_questions(["mag"])
+    test_first_10_questions(["prime"])
