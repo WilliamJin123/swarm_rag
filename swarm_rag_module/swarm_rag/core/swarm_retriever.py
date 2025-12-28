@@ -48,7 +48,7 @@ class SwarmRetriever:
         self.graph_store = graph_store
         self.embed_fn = embedding_provider
         self.max_workers = max_workers
-        self.base_pheromones = defaultdict(lambda: 1.0)
+        self.base_pheromones = defaultdict(float) # 0.0 for unvisited
 
         # Thread safety
         self.pheromone_lock = Lock()
@@ -113,7 +113,7 @@ class SwarmRetriever:
                 deposit_strategies=deposit_strategies
             )
             query_vec = self._get_cached_query_vector(query)
-            return self._retrieve_internal(query_vec=query_vec, **params)
+            return self._retrieve(query_vec=query_vec, **params)
 
     def retrieve_batch(
         self,
@@ -187,7 +187,7 @@ class SwarmRetriever:
         """Process queries sequentially."""
         results = []
         for vec in query_vectors:
-            result = self._retrieve_internal(query_vec=vec, **kwargs)
+            result = self._retrieve(query_vec=vec, **kwargs)
             results.append(result)
         return results
 
@@ -200,7 +200,7 @@ class SwarmRetriever:
         """Process queries in parallel with controlled concurrency."""
         
         def process_single_query(idx: int, vec: np.ndarray) -> tuple[int, List[Dict]]:
-            result = self._retrieve_internal(query_vec=vec, **kwargs)
+            result = self._retrieve(query_vec=vec, **kwargs)
             return idx, result
         
         # Process queries in parallel
@@ -243,7 +243,7 @@ class SwarmRetriever:
         
         return True
 
-    def _retrieve_internal(
+    def _retrieve(
         self,
         query_vec: np.ndarray,
         n_agents: int,
@@ -259,6 +259,13 @@ class SwarmRetriever:
         """
         Core retrieval logic shared between retrieve() and retrieve_batch().
         """        
+        # Normalize
+        query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+
+        movement_funcs = [(func, weight) for func, weight in movement_strategies.values()]
+        ranking_funcs = [(func, weight) for func, weight in ranking_strategies.values()]
+        deposit_funcs = [(func, weight) for func, weight in deposit_strategies.values()]
+
         # Initial search with caching
         search_res = self.vector_store.search(query_vec, limit=initial_pool_size)
         valid_pool = [r['id'] for r in search_res if self.graph_store.contains(r['id'])]
@@ -267,6 +274,10 @@ class SwarmRetriever:
 
         drop_zone = valid_pool[:start_subset]
         
+        if self.cache_neighbors:
+            with ThreadPoolExecutor(max_workers=min(4, len(drop_zone))) as ex:
+                list(ex.map(self._get_cached_neighbors, drop_zone))
+
         # Spawn Agents
         weights = [1.0 + 0.05 * (start_subset - i - 1)  for i in range(start_subset)]
         # Slightly higher weight on the most relevant for drops (0.05 inc)
@@ -284,14 +295,14 @@ class SwarmRetriever:
                     current_loc=agent_locations[i],
                     query_vec=query_vec,
                     query_pheromones=query_pheromones,
-                    movement_strategies=movement_strategies,
-                    deposit_strategies=deposit_strategies,
+                    movement_funcs=movement_funcs,
+                    deposit_funcs=deposit_funcs,
                     step=step
                 ): i for i in range(n_agents)
             }
 
             new_locations = agent_locations.copy()
-            pheromone_updates = defaultdict(float)
+            pheromone_updates = {}
             
             for future in as_completed(futures):
                 agent_id = futures[future]
@@ -308,8 +319,10 @@ class SwarmRetriever:
                 if result:
                     new_locations[agent_id] = result['new_location']
                     agent_trajectories[agent_id].append(result['new_location'])
-                    if result['deposit'] > 0:
-                        pheromone_updates[result['node_id']] += result['deposit']
+                    deposit = result['deposit']
+                    if deposit > 0:
+                        node_id = result['node_id']
+                        pheromone_updates[node_id] = pheromone_updates.get(node_id, 0.0) + deposit
             
             # Batch update all agents
             agent_locations = new_locations
@@ -328,7 +341,7 @@ class SwarmRetriever:
         return self._parallel_ranking(
             agent_trajectories, 
             query_vec, 
-            ranking_strategies, 
+            ranking_funcs, 
             top_k,
             n_agents
         )          
@@ -341,8 +354,8 @@ class SwarmRetriever:
         current_loc: int,
         query_vec: np.ndarray,
         query_pheromones: Dict,
-        movement_strategies: Dict,
-        deposit_strategies: Dict,
+        movement_funcs: List[tuple],
+        deposit_funcs: List[tuple],
         step: int
     ) -> Optional[Dict]:
         """Process a single agent's movement in one step."""
@@ -363,27 +376,34 @@ class SwarmRetriever:
         
         max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
         
+        ctx = HeuristicContext(
+            query_vec=query_vec,
+            target_vec=None,  # Will mutate this
+            target_id=None,   # Will mutate this
+            current_id=current_loc,
+            graph=self.graph_store,
+            pheromones=query_pheromones,
+            max_pheromone=max_pheromone,
+            step_index=step,
+            agent_index=agent_id
+        )
+
         for i, neighbor in enumerate(neighbors):
             target_vec = neighbor_vectors[i]
             if target_vec is None: # Check for missing vector
                 continue
             
-            ctx = HeuristicContext(
-                query_vec=query_vec,
-                target_vec=target_vec,
-                target_id=neighbor,
-                current_id=current_loc,
-                graph=self.graph_store,
-                pheromones=query_pheromones,
-                max_pheromone=max_pheromone,
-                step_index=step,
-                agent_index=agent_id
-            )
+            ctx.target_vec = target_vec
+            ctx.target_id = neighbor
             
             total_score = sum(
                 func(ctx) * weight 
-                for name, (func, weight) in movement_strategies.items()
+                for func, weight in movement_funcs
             )
+
+            if len(valid_neighbors) >= 5 and total_score < 0.01:
+                continue
+
             scores.append(max(total_score, 0.001))
             valid_neighbors.append(i)
         
@@ -396,17 +416,12 @@ class SwarmRetriever:
         deposit_target_vec = neighbor_vectors[chosen_index]
         
         # Calculate deposit
-        deposit_ctx = HeuristicContext(
-            query_vec=query_vec,
-            target_vec=deposit_target_vec,
-            target_id=next_node,
-            graph=self.graph_store,
-            pheromones=query_pheromones
-        )
+        ctx.target_vec = deposit_target_vec
+        ctx.target_id = next_node
         
         deposit_amount = sum(
-            func(deposit_ctx) * weight 
-            for name, (func, weight) in deposit_strategies.items()
+        func(ctx) * weight 
+        for func, weight in deposit_funcs
         )
         
         return {
@@ -419,7 +434,7 @@ class SwarmRetriever:
         self, 
         agent_trajectories: List[List[int]], 
         query_vec: np.ndarray,
-        ranking_strategies: Dict,
+        ranking_funcs: List[tuple],
         top_k: int,
         n_agents: int
     ) -> List[Dict]:
@@ -432,29 +447,43 @@ class SwarmRetriever:
         # Batch fetch all vectors
         final_vectors = self._fetch_vectors_batch(unique_visited)
         results = []
-        # Parallel score calculation
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {}
+
+        # Avoid thread overhead for small batches
+        if len(unique_visited) < 50:
             for i, node_id in enumerate(unique_visited):
                 vec = final_vectors[i]
-                future = executor.submit(
-                    self._calculate_node_score,
+                score = self._calculate_node_score(
                     node_id=node_id,
                     votes=vote_counts[node_id],
                     query_vec=query_vec,
                     target_vec=vec,
-                    ranking_strategies=ranking_strategies,
+                    ranking_funcs=ranking_funcs,
                     n_agents=n_agents
                 )
-                futures[future] = node_id
-            
-            for future in as_completed(futures):
-                node_id = futures[future]
-                try:
-                    score = future.result()
-                    results.append({'id': node_id, 'score': score})
-                except Exception as e:
-                    print(f"Failed to score node {node_id}: {e}")
+                results.append({'id': node_id, 'score': score})
+        else:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {}
+                for i, node_id in enumerate(unique_visited):
+                    vec = final_vectors[i]
+                    future = executor.submit(
+                        self._calculate_node_score,
+                        node_id=node_id,
+                        votes=vote_counts[node_id],
+                        query_vec=query_vec,
+                        target_vec=vec,
+                        ranking_funcs=ranking_funcs,
+                        n_agents=n_agents
+                    )
+                    futures[future] = node_id
+                
+                for future in as_completed(futures):
+                    node_id = futures[future]
+                    try:
+                        score = future.result()
+                        results.append({'id': node_id, 'score': score})
+                    except Exception as e:
+                        print(f"Failed to score node {node_id}: {e}")
         
         # Sort and return top-k
         results.sort(key=lambda x: x['score'], reverse=True)
@@ -466,7 +495,7 @@ class SwarmRetriever:
         votes: int,
         query_vec: np.ndarray,
         target_vec: Optional[np.ndarray],
-        ranking_strategies: Dict,
+        ranking_funcs: List[tuple],
         n_agents: int
     ) -> float:
         """Calculate final score for a single node."""
@@ -479,12 +508,13 @@ class SwarmRetriever:
             target_id=node_id,
             graph=self.graph_store,
             votes=votes,
+            pheromones={},
             total_agents=n_agents
         )
         
         return sum(
             func(node_ctx) * weight 
-            for name, (func, weight) in ranking_strategies.items()
+            for func, weight in ranking_funcs
         )
 
     def _get_cached_neighbors(self, node_id: int) -> List[int]:

@@ -34,6 +34,8 @@ def fail_on_missing_imports(modules: list[str], extra_name: str = None):
     raise ImportError(msg) from None
 
 class LRUCache:
+    __slots__ = ['maxsize', 'data', 'lock']
+    
     def __init__(self, maxsize):
         self.maxsize = maxsize
         self.data = OrderedDict()

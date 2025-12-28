@@ -4,14 +4,14 @@ import math
 from dataclasses import dataclass, field
 from ..interfaces.base import GraphStore
 
-@dataclass
+@dataclass(slots=True)
 class HeuristicContext:
     """A shared dataclass to hold context for heuristic functions."""
     query_vec: np.ndarray
     target_vec: np.ndarray
     target_id: int
     graph: GraphStore
-    pheromones: Dict[int, float] = field(default_factory=dict)
+    pheromones: Dict[int, float]
     
     # Optional fields, with default values
     current_id: Optional[int] = None
@@ -38,11 +38,10 @@ class Heuristics:
         - 0.5 = orthogonal/unrelated (cosine = 0)
         - 1.0 = perfect match (cosine = 1)
         """
-        q = ctx.query_vec
+        q = ctx.query_vec  # Already normalized
         t = ctx.target_vec
-        cos_sim = np.dot(q, t) / (np.linalg.norm(q) * np.linalg.norm(t) + 1e-8)
-        
-        # Map [-1, 1] → [0, 1]
+    
+        cos_sim = np.dot(q, t) / (np.linalg.norm(t) + 1e-8)
         return (cos_sim + 1.0) / 2.0
 
     @staticmethod
@@ -52,7 +51,7 @@ class Heuristics:
         """
         q = ctx.query_vec
         t = ctx.target_vec
-        return np.dot(q, t) / (np.linalg.norm(q) * np.linalg.norm(t) + 1e-8)
+        return np.dot(q, t) / (np.linalg.norm(t) + 1e-8)
 
     @staticmethod
     def node_centrality_unnormalized(ctx: HeuristicContext) -> float:
