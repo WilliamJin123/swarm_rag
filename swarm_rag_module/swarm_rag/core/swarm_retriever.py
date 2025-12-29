@@ -462,29 +462,28 @@ class SwarmRetriever:
                 )
                 results.append({'id': node_id, 'score': score})
         else:
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {}
-                for i, node_id in enumerate(unique_visited):
-                    vec = final_vectors[i]
-                    future = executor.submit(
-                        self._calculate_node_score,
-                        node_id=node_id,
-                        votes=vote_counts[node_id],
-                        query_vec=query_vec,
-                        target_vec=vec,
-                        ranking_funcs=ranking_funcs,
-                        n_agents=n_agents
-                    )
-                    futures[future] = node_id
-                
-                for future in as_completed(futures):
-                    node_id = futures[future]
-                    try:
-                        score = future.result()
-                        results.append({'id': node_id, 'score': score})
-                    except Exception as e:
-                        print(f"Failed to score node {node_id}: {e}")
-        
+            futures = {}
+            for i, node_id in enumerate(unique_visited):
+                vec = final_vectors[i]
+                future = self.executor.submit(
+                    self._calculate_node_score,
+                    node_id=node_id,
+                    votes=vote_counts[node_id],
+                    query_vec=query_vec,
+                    target_vec=vec,
+                    ranking_funcs=ranking_funcs,
+                    n_agents=n_agents
+                )
+                futures[future] = node_id
+            
+            for future in as_completed(futures):
+                node_id = futures[future]
+                try:
+                    score = future.result()
+                    results.append({'id': node_id, 'score': score})
+                except Exception as e:
+                    print(f"Failed to score node {node_id}: {e}")
+    
         # Sort and return top-k
         results.sort(key=lambda x: x['score'], reverse=True)
         return results[:top_k]
