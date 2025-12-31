@@ -71,6 +71,21 @@ class HeuristicRegistry:
             **cls._deposit_registry,
             **cls._ranking_registry
         }
+    
+    @classmethod
+    def get(cls, name: str):
+        """
+        Allows EvolutionEngine to find a function by name 
+        without knowing which specific registry it lives in.
+        """
+        if name in cls._movement_registry:
+            return cls._movement_registry[name]
+        if name in cls._ranking_registry:
+            return cls._ranking_registry[name]
+        if name in cls._deposit_registry:
+            return cls._deposit_registry[name]
+        
+        raise ValueError(f"Heuristic '{name}' not found in any registry.")
 
 @dataclass(slots=True)
 class HeuristicContext:

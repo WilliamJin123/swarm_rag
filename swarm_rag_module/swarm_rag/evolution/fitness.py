@@ -9,10 +9,10 @@ class FitnessCalculator:
         """
         self.weights = weights
 
-    def calculate(self, raw_metrics: Dict[str, float]) -> float:
+    def calculate(self, metrics: Dict[str, float]) -> float:
         score = 0.0
         for metric_name, weight in self.weights.items():
             # If the metric wasn't calculated, decide policy (skip or fail)
-            val = raw_metrics.get(metric_name, 0.0)
+            val = metrics.get(metric_name, 0.0)
             score += val * weight
         return max(0.0, score) # Ensure non-negative fitness if desired
