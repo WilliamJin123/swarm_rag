@@ -248,7 +248,7 @@ class Heuristics:
         return 1.0
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("hub_unnormalized")
+    @HeuristicRegistry.register_deposit("hub")
     def deposit_hub(ctx: HeuristicContext) -> float:
         """Hubs get more pheromones."""
         return Heuristics.node_centrality(ctx)
@@ -311,7 +311,7 @@ class Heuristics:
         return base_deposit * multiplier
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("collaborative_amplification")
+    @HeuristicRegistry.register_deposit("collaborative_amp")
     def deposit_collaborative_amplification(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,

@@ -63,15 +63,54 @@ class EvolutionEngine:
             config = config or EvolutionConfig(),
             available_features=list(HeuristicRegistry.all().keys()),
             expression_features={
-                "movement_expr": HeuristicRegistry.all_movement().keys(),
-                "ranking_expr": HeuristicRegistry.all_ranking().keys(),
-                "deposit_expr": HeuristicRegistry.all_deposit().keys(),
+                "movement": HeuristicRegistry.all_movement().keys(),
+                "ranking": HeuristicRegistry.all_ranking().keys(),
+                "deposit": HeuristicRegistry.all_deposit().keys(),
             }
         )        
         # Resolve Strategies from Registry
         self.selection_fn = GeneticRegistry.get_selection(self.evo_context.config.selection_strategy)
         self.crossover_fn = GeneticRegistry.get_crossover(self.evo_context.config.crossover_strategy)
         self.mutation_fn = GeneticRegistry.get_mutation(self.evo_context.config.mutation_strategy)
+
+    def create_initial_genomes(self, count: int) -> List[Genome]:
+        """Creates a diverse initial population using ramped half-and-half."""
+        # Generate diverse expression trees for each heuristic
+        movement_exprs = ExpressionEvolution.generate_ramped_half_and_half(
+            features=self.evo_context.expression_features.get("movement", ['semantic_similarity', 'centrality', 'pheromone_repulsion', 'random_jitter']),
+            population_size=count,
+            max_depth=5
+        )
+        ranking_exprs = ExpressionEvolution.generate_ramped_half_and_half(
+            features=self.evo_context.expression_features.get("ranking", ['percentage_visited', 'semantic_rank']),
+            population_size=count,
+            max_depth=5
+        )
+        deposit_exprs = ExpressionEvolution.generate_ramped_half_and_half(
+            features=self.evo_context.expression_features.get("deposit", ['flat', 'semantic', 'hub', 'exploration_bonus', "collaborative_amp"]),
+            population_size=count,
+            max_depth=5
+        )
+
+        # TO CHANGE
+        population = []
+        for i in range(count):
+            genome = Genome(
+                # Randomly initialize hyperparameters
+                n_agents=random.randint(5, 30),
+                steps=random.randint(5, 20),
+                decay=random.uniform(0.85, 0.99),
+                initial_pool_size=random.randint(10, 50),
+                start_subset=random.randint(5, 15),
+                
+                # Assign the pre-generated, diverse trees
+                movement_expr=movement_exprs[i],
+                ranking_expr=ranking_exprs[i],
+                deposit_expr=deposit_exprs[i],
+            )
+            population.append(genome)
+            
+        return population
 
     def optimize(self, initial_population: List[Genome]) -> Genome:
         population = initial_population

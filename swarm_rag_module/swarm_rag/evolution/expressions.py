@@ -179,28 +179,70 @@ class ExpressionEvolution:
     def random_tree(
         features: List[str],
         max_depth: int = 4,
-        leaf_prob: float = 0.3
+        method: str = 'grow'
     ) -> ExpressionNode:
-        """Generate a random expression tree."""
+        """
+        Generate a random expression tree.
+        
+        Args:
+            features: List of available feature names for leaf nodes.
+            max_depth: The maximum depth of the tree.
+            method: 'grow' or 'full'.
+                    - 'grow': Randomly chooses between a leaf and a function at each level.
+                    - 'full': Ensures every path to a leaf is at max_depth.
+        """
 
         # Base case: create leaf
-        if max_depth <= 1 or random.random() < leaf_prob:
+        if max_depth == 0:
             if random.random() < 0.7:  # Feature
                 return ExpressionNode('feature', random.choice(features))
-            else:  # Constant
+            else:
                 return ExpressionNode('const', random.uniform(0, 1))
         
         # Recursive case: create operator or function
-        if random.random() < 0.7:  # Binary operator
+        if method == 'full' or (method == 'grow' and random.random() < 0.9):
+            # Choose a binary operator
             op = random.choice(ExpressionEvolution.BINARY_OPS)
-            left = ExpressionEvolution.random_tree(features, max_depth - 1, leaf_prob)
-            right = ExpressionEvolution.random_tree(features, max_depth - 1, leaf_prob)
+            left = ExpressionEvolution.random_tree(features, max_depth - 1, method)
+            right = ExpressionEvolution.random_tree(features, max_depth - 1, method)
             return ExpressionNode('op', op, [left, right])
-        else:  # Unary function
-            func = random.choice(ExpressionEvolution.UNARY_FUNCS)
-            child = ExpressionEvolution.random_tree(features, max_depth - 1, leaf_prob)
-            return ExpressionNode('func', func, [child])
+        else: # 'grow' method and we decided to create a leaf
+            if random.random() < 0.7:
+                return ExpressionNode('feature', random.choice(features))
+            else:
+                return ExpressionNode('const', random.uniform(0, 1))
     
+    @staticmethod
+    def generate_ramped_half_and_half(
+        features: List[str],
+        population_size: int,
+        max_depth: int = 6
+    ) -> List[ExpressionNode]:
+        """
+        Generates an initial population using the ramped half-and-half method.
+        """
+        if population_size <= 0:
+            return []
+            
+        population = []
+        num_depths = max_depth - 1 # Start from depth 2 up to max_depth
+        individuals_per_depth = population_size // (num_depths * 2)
+
+        # Ensure we fill the population
+        remaining = population_size - (individuals_per_depth * num_depths * 2)
+
+        for depth in range(2, max_depth + 1):
+            for _ in range(individuals_per_depth):
+                population.append(ExpressionEvolution.random_tree(features, depth, 'grow'))
+                population.append(ExpressionEvolution.random_tree(features, depth, 'full'))
+        
+        # Fill any remaining slots with random trees
+        for _ in range(remaining):
+            population.append(ExpressionEvolution.random_tree(features, max_depth, 'grow'))
+            
+        random.shuffle(population)
+        return population
+
     @staticmethod
     def mutate_tree(tree: ExpressionNode, features: List[str], mutation_rate: float = 0.2) -> ExpressionNode:
         """
