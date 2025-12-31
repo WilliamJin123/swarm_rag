@@ -1,5 +1,5 @@
 import dataclasses
-from typing import List, Callable
+from typing import Any, List, Callable
 import random
 
 from swarm_rag.evolution.evolution_context import EvolutionContext
@@ -106,7 +106,7 @@ class GeneticStrategies:
     @staticmethod
     @GeneticRegistry.register_selection("tournament")
     def tournament_selection(ctx: EvolutionContext) -> Genome:
-        k = ctx.config.get("selection_params", {}).get("k", 3)
+        k = ctx.config.selection_k
         candidates = random.sample(ctx.population, k)
         return max(candidates, key=lambda g: g.fitness)
 
@@ -122,18 +122,6 @@ class GeneticStrategies:
                 return g
         return ctx.population[-1]
 
-    @staticmethod
-    @GeneticRegistry.register_selection("stochastic_universal_sampling")
-    def stochastic_universal_sampling(ctx: EvolutionContext) -> Genome:
-        total_fitness = sum(g.fitness for g in ctx.population)
-        pick = random.uniform(0, total_fitness)
-        current = 0
-        for genome in ctx.population:
-            current += genome.fitness
-            if current > pick:
-                return genome
-        return ctx.population[-1]
-
     # --- CROSSOVER ---
 
     @staticmethod
@@ -141,9 +129,8 @@ class GeneticStrategies:
     def uniform_parameter_mix(parent1: Genome, parent2: Genome, ctx: EvolutionContext) -> Genome:
         """Mixes traits 50/50. """
         # 1. Create a shallow copy of Parent 1 using its exact class
-        # This ensures if we passed in IslandGenome, we get back IslandGenome
         child = dataclasses.replace(parent1)
-        
+
         # 2. Introspect fields
         numerics, trees = GeneticStrategies._get_mutable_fields(parent1)
         
@@ -154,7 +141,7 @@ class GeneticStrategies:
                 val = getattr(parent2, field)
                 setattr(child, field, val)
                 
-        # 4. Mix Trees (With CRITICAL .copy())
+        # 4. Mix Trees (With .copy())
         for field in trees:
             if random.random() > 0.5:
                 # Take from Parent 2
@@ -173,7 +160,7 @@ class GeneticStrategies:
     @staticmethod
     @GeneticRegistry.register_mutation("expression_tree_mutation")
     def expression_tree_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
-        rate = ctx.config.get("mutation_rate", 0.2)
+        rate = ctx.config.mutation_rate
         numerics, trees = GeneticStrategies._get_mutable_fields(genome)
 
         # 1. Generic Numeric Jitter
