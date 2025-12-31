@@ -8,10 +8,10 @@ import math
 import random
 import time
 
-from ..heuristics import HeuristicContext, Heuristics
-from ..swarm_retriever import SwarmRetriever
-from ...interfaces.base import GraphStore, VectorStore, EmbeddingProvider
-from ...eval.metrics import Evaluator
+from ..core.heuristics import HeuristicContext, Heuristics
+from ..core.swarm_retriever import SwarmRetriever
+from ..interfaces.base import GraphStore, VectorStore, EmbeddingProvider
+from ..eval.metrics import Evaluator
 
 from .expressions import ExpressionNode, ExpressionEvolution
 from .genome import Genome
