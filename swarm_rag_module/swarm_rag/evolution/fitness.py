@@ -1,7 +1,8 @@
-from typing import Dict, List
+from typing import Dict
 
 from swarm_rag.evolution.genome import Genome
 
+# TO CHANGE: MORE CUSTOMIZATION and better way of passing in weights
 class FitnessCalculator:
     def __init__(self, weights: Dict[str, float]):
         """

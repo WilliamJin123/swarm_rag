@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 import math
 import random
 
-
 @dataclass
 class ExpressionNode:
     """

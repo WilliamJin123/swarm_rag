@@ -1,8 +1,8 @@
 import dataclasses
-from typing import Any, List, Callable
+from typing import Any, Callable
 import random
 
-from swarm_rag.evolution.evolution_context import EvolutionContext
+from swarm_rag.evolution.context import EvolutionContext
 from swarm_rag.evolution.expressions import ExpressionEvolution, ExpressionNode
 from .genome import Genome
 
