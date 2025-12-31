@@ -63,7 +63,7 @@ class HeuristicRegistry:
     def all_deposit(cls):
         """Get all deposit heuristics."""
         return cls._deposit_registry
-    
+
 @dataclass(slots=True)
 class HeuristicContext:
     """A shared dataclass to hold context for heuristic functions."""
