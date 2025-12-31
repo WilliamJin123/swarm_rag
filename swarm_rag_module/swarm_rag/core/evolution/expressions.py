@@ -1,28 +1,18 @@
-import numpy as np
-from typing import List, Dict, Callable, Any, Optional, Tuple, Union
+from typing import Union, List, Dict, Tuple
 from dataclasses import dataclass, field
-import json
-import copy
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import operator
 import math
 import random
 
-from .heuristics import HeuristicContext, Heuristics
-from .swarm_retriever import SwarmRetriever
-from ..interfaces.base import GraphStore, VectorStore, EmbeddingProvider
-
-# Time complexity: O(population × generations × evaluation)
 
 @dataclass
-class ExprNode:
+class ExpressionNode:
     """
     A node in the expression tree.
     Can be an operator, function, feature, or constant.
     """
     type: str  # 'op', 'func', 'feature', 'const'
     value: Union[str, float]  # operator name, function name, feature name, or constant
-    children: List['ExprNode'] = field(default_factory=list)
+    children: List['ExpressionNode'] = field(default_factory=list)
 
     def evaluate(self, features: Dict[str, float]) -> float:
         """Recursively evaluate the expression tree."""
@@ -101,57 +91,12 @@ class ExprNode:
             return "?"
         return "?"
     
-    def copy(self) -> 'ExprNode':
+    def copy(self) -> 'ExpressionNode':
         """Deep copy of the tree."""
-        return ExprNode(
+        return ExpressionNode(
             type=self.type,
             value=self.value,
             children=[child.copy() for child in self.children]
-        )
-    
-@dataclass 
-class Genome:
-    """
-    A complete retrieval strategy with BOTH hyperparameters
-    and expression trees in one genome.
-    """
-
-    # Hyperparameters
-    n_agents: int
-    steps: int
-    decay: float
-    initial_pool_size: int
-    start_subset: int
-    
-    # Expression trees (the evolved heuristics)
-    movement_expr: ExprNode
-    ranking_expr: ExprNode
-    deposit_expr: ExprNode
-
-    # Available features for each strategy (TO CHANGE)
-    available_movement_features: List[str] = field(default_factory=lambda: [
-        'semantic', 'centrality', 'diversity', 'jitter'
-    ])
-    available_ranking_features: List[str] = field(default_factory=lambda: [
-        'semantic', 'votes', 'centrality'
-    ])
-    available_deposit_features: List[str] = field(default_factory=lambda: [
-        'flat', 'semantic', 'hub', 'explorer'
-    ])
-
-    # Performance metrics
-    fitness: float = 0.0
-    recall_at_k: float = 0.0
-    hit_at_k: float = 0.0
-    mrr: float = 0.0
-    latency_ms: float = 0.0
-
-    def complexity(self) -> int:
-        """Total complexity across all expressions."""
-        return (
-            self.movement_expr.size() +
-            self.ranking_expr.size() +
-            self.deposit_expr.size()
         )
     
 class ExpressionEvolution:
@@ -165,29 +110,29 @@ class ExpressionEvolution:
         features: List[str],
         max_depth: int = 4,
         leaf_prob: float = 0.3
-    ) -> ExprNode:
+    ) -> ExpressionNode:
         """Generate a random expression tree."""
 
         # Base case: create leaf
         if max_depth <= 1 or random.random() < leaf_prob:
             if random.random() < 0.7:  # Feature
-                return ExprNode('feature', random.choice(features))
+                return ExpressionNode('feature', random.choice(features))
             else:  # Constant
-                return ExprNode('const', random.uniform(0, 1))
+                return ExpressionNode('const', random.uniform(0, 1))
         
         # Recursive case: create operator or function
         if random.random() < 0.7:  # Binary operator
             op = random.choice(ExpressionEvolution.BINARY_OPS)
             left = ExpressionEvolution.random_tree(features, max_depth - 1, leaf_prob)
             right = ExpressionEvolution.random_tree(features, max_depth - 1, leaf_prob)
-            return ExprNode('op', op, [left, right])
+            return ExpressionNode('op', op, [left, right])
         else:  # Unary function
             func = random.choice(ExpressionEvolution.UNARY_FUNCS)
             child = ExpressionEvolution.random_tree(features, max_depth - 1, leaf_prob)
-            return ExprNode('func', func, [child])
+            return ExpressionNode('func', func, [child])
     
     @staticmethod
-    def mutate_tree(tree: ExprNode, features: List[str], mutation_rate: float = 0.2) -> ExprNode:
+    def mutate_tree(tree: ExpressionNode, features: List[str], mutation_rate: float = 0.2) -> ExpressionNode:
         """
         Mutate an expression tree.
         Can change operators, constants, features, or replace subtrees.
@@ -216,9 +161,9 @@ class ExpressionEvolution:
             
             elif mut_type == 'constant':
                 # Add/multiply by constant
-                const_node = ExprNode('const', random.uniform(0.5, 1.5))
+                const_node = ExpressionNode('const', random.uniform(0.5, 1.5))
                 op = random.choice(['+', '*'])
-                return ExprNode('op', op, [tree.copy(), const_node])
+                return ExpressionNode('op', op, [tree.copy(), const_node])
         
         # Recursively mutate children
         tree.children = [
@@ -229,7 +174,7 @@ class ExpressionEvolution:
         return tree
     
     @staticmethod
-    def crossover_trees(tree1: ExprNode, tree2: ExprNode) -> Tuple[ExprNode, ExprNode]:
+    def crossover_trees(tree1: ExpressionNode, tree2: ExpressionNode) -> Tuple[ExpressionNode, ExpressionNode]:
         """
         Subtree crossover between two expression trees.
         Swaps random subtrees between parents.
@@ -238,7 +183,7 @@ class ExpressionEvolution:
         t2 = tree2.copy()
         
         # Get all subtrees
-        def get_subtrees(node: ExprNode, depth: int = 0) -> List[Tuple[ExprNode, int]]:
+        def get_subtrees(node: ExpressionNode, depth: int = 0) -> List[Tuple[ExpressionNode, int]]:
             result = [(node, depth)]
             for child in node.children:
                 result.extend(get_subtrees(child, depth + 1))
@@ -260,7 +205,7 @@ class ExpressionEvolution:
         return t1, t2
     
     @staticmethod
-    def simplify_tree(tree: ExprNode, max_size: int = 30) -> ExprNode:
+    def simplify_tree(tree: ExpressionNode, max_size: int = 30) -> ExpressionNode:
         """
         Simplify tree if too complex.
         Prunes to stay under size limit.
@@ -270,61 +215,14 @@ class ExpressionEvolution:
         
         # If too complex, replace with simpler version
         # Strategy: keep the main structure but simplify deepest subtrees
-        def prune(node: ExprNode, depth: int = 0) -> ExprNode:
+        def prune(node: ExpressionNode, depth: int = 0) -> ExpressionNode:
             if depth > 5:  # Too deep, replace with leaf
                 if node.type == 'feature':
                     return node
-                return ExprNode('const', 0.5)
+                return ExpressionNode('const', 0.5)
             
             node.children = [prune(child, depth + 1) for child in node.children]
             return node
         
         return prune(tree.copy())
-    
-class EvolutionaryOptimizer:
-    """
-    Evolves hyperparameters and expression trees together.
-    Single population / evolution loop for both (might change in the future)
-    """
-
-    def __init__(
-        self,
-        retriever,
-        queries: List[str],
-        ground_truth: List[List[int]],
-        population_size: int = 30,
-        n_generations: int = 20,
-        top_k: int = 20,
-        mutation_rate: float = 0.3,
-        crossover_rate: float = 0.6,
-        n_workers: int = 4,
-        max_expr_size: int = 25
-    ):
-        self.retriever = retriever
-        self.queries = queries
-        self.ground_truth = ground_truth
-        self.population_size = population_size
-        self.n_generations = n_generations
-        self.top_k = top_k
-        self.mutation_rate = mutation_rate
-        self.crossover_rate = crossover_rate
-        self.n_workers = n_workers
-        self.max_expr_size = max_expr_size
-        
-        # Feature to function mapping for evaluation
-        # TO CHANGE: add more customizability
-        self.feature_funcs = {
-            'semantic': Heuristics.semantic_similarity,
-            'centrality': Heuristics.node_centrality,
-            'diversity': Heuristics.pheromone_repulsion,
-            'jitter': Heuristics.random_jitter,
-            'votes': Heuristics.percentage_visited,
-            'hub': Heuristics.node_centrality,
-            'explorer': Heuristics.pheromone_repulsion,
-            'flat': Heuristics.deposit_flat,
-        }
-        
-        self.population_history = []
-        self.best_genome = None
-
-
+  

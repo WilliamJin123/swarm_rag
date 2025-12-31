@@ -1,7 +1,6 @@
 import pandas as pd
 from typing import List, Dict, Any, Union
-import numpy as np
-
+from .metric_functions import MetricFunctions
 class Evaluator:
     def __init__(self, k_values=[1, 5, 10, 20], diversity_cutoff=20, index_name="Swarm_RAG"):
         """
@@ -15,10 +14,12 @@ class Evaluator:
         self.index_name = index_name
         
 
-    def calculate_metrics(self, 
+    def calculate_metrics(
+        self, 
         retrieved_nodes: List[Dict[str, Any]], 
         ground_truth_ids: List[Union[str, int]], 
-        latency_sec: float) -> Dict[str, float]:
+        latency_sec: float
+    ) -> Dict[str, float]:
         """
         Computes all metrics for a SINGLE query.
         
@@ -30,55 +31,40 @@ class Evaluator:
         """
         # 1. Setup
         retrieved_ids = [str(n['id']) for n in retrieved_nodes if 'id' in n]
-        gt_set = set([str(g) for g in ground_truth_ids])
+        gt_ids = [str(g) for g in ground_truth_ids]
+        gt_set = set(gt_ids)
         
-        metrics = {"latency": latency_sec}
+        metrics: Dict[str, float] = {}
+        metrics["latency"] = latency_sec
         
         # 2. Hit@K and Recall@K
         for k in self.k_values:
-            # Slice the top K
-            top_k_ids = retrieved_ids[:k]
-            
-            # Intersection (How many relevant items found?)
-            hits = set(top_k_ids).intersection(gt_set)
-            num_hits = len(hits)
-            
-            # Hit@K (Binary: Did we find at least one?)
-            metrics[f"Hit@{k}"] = 1.0 if num_hits > 0 else 0.0
-            
-            # Recall@K (Fraction of total relevant items found)
-            metrics[f"Recall@{k}"] = num_hits / len(gt_set) if gt_set else 0.0
+            metrics[f"Hit@{k}"] = MetricFunctions.hit_at_k(k)(
+                retrieved_ids, gt_ids
+            )
+            metrics[f"Recall@{k}"] = MetricFunctions.recall_at_k(k)(
+                retrieved_ids, gt_ids
+            )
 
         # 3. MRR (Mean Reciprocal Rank)
         # Look for the FIRST relevant item in the entire retrieved list
-        mrr = 0.0
-        for rank, rid in enumerate(retrieved_ids):
-            if rid in gt_set:
-                mrr = 1.0 / (rank + 1)
-                break
-        metrics["MRR"] = mrr
+        metrics["MRR"] = MetricFunctions.mrr(
+            retrieved_ids, gt_ids
+        )
 
         # 4. Diversity Metrics
         cutoff = min(self.diversity_cutoff, len(retrieved_nodes))
-        top_nodes = retrieved_nodes[:cutoff]
-        
-        # Count unique node types
-        node_types = [n.get('node_type', 'unknown') for n in top_nodes]
-        metrics["Diversity_Node_Types"] = len(set(node_types))
 
-        unique_relevant = set(retrieved_ids[:20]).intersection(gt_set)
-        metrics["Diversity_Count"] = len(unique_relevant)
-        
-        
-        # DR@K (Diversity Recall) - using the same cutoff as diversity
-        dr_k = min(20, len(retrieved_ids))  # Standard DR@20
-        if dr_k > 0:
-            top_k_ids = retrieved_ids[:dr_k]
-            hits = set(top_k_ids).intersection(gt_set)
-            metrics["DR@20"] = len(hits) / len(gt_set) if gt_set else 0.0
-        else:
-            metrics["DR@20"] = 0.0
+        node_types = {
+            retrieved_nodes[i].get("node_type", "unknown")
+            for i in range(cutoff)
+        }
+        metrics["Diversity_Node_Types"] = float(len(node_types))
 
+        metrics["Diversity_Count"] = float(
+            len(set(retrieved_ids[:cutoff]) & gt_set)
+        )
+        
         return metrics
 
     def aggregate_results(self, results: List[Dict[str, float]]) -> pd.DataFrame:
