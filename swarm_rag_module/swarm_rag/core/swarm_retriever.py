@@ -262,9 +262,9 @@ class SwarmRetriever:
         # Normalize
         query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
 
-        movement_funcs = self._resolve_strategy_funcs(movement_strategies)
-        ranking_funcs = self._resolve_strategy_funcs(ranking_strategies)
-        deposit_funcs = self._resolve_strategy_funcs(deposit_strategies)
+        movement_funcs = self._resolve_strategy_funcs(movement_strategies, "movement")
+        ranking_funcs = self._resolve_strategy_funcs(ranking_strategies, "ranking")
+        deposit_funcs = self._resolve_strategy_funcs(deposit_strategies, "deposit")
 
         # Initial search with caching
         search_res = self.vector_store.search(query_vec, limit=initial_pool_size)
@@ -348,7 +348,11 @@ class SwarmRetriever:
 
     # === HELPERS ===
        
-    def _resolve_strategy_funcs(self, strategy_dict: Dict) -> list[tuple]:
+    def _resolve_strategy_funcs(
+        self, 
+        strategy_dict: Dict, 
+        strategy_type: str
+    ) -> list[tuple]:
         """
         Resolves a dict of strategies to actual callable functions.
         Supports:
@@ -358,9 +362,18 @@ class SwarmRetriever:
         resolved = []
         for key, (fn_or_name, weight) in strategy_dict.items():
             if callable(fn_or_name):
+                # Still support direct function references for flexibility
                 resolved.append((fn_or_name, weight))
             elif isinstance(fn_or_name, str):
-                resolved.append((HeuristicRegistry.get(fn_or_name), weight))
+                # Use the appropriate registry based on strategy type
+                if strategy_type == "movement":
+                    resolved.append((HeuristicRegistry.get_movement(fn_or_name), weight))
+                elif strategy_type == "ranking":
+                    resolved.append((HeuristicRegistry.get_ranking(fn_or_name), weight))
+                elif strategy_type == "deposit":
+                    resolved.append((HeuristicRegistry.get_deposit(fn_or_name), weight))
+                else:
+                    raise ValueError(f"Unknown strategy type: {strategy_type}")
             else:
                 raise TypeError(f"Invalid heuristic entry: {fn_or_name}")
         return resolved

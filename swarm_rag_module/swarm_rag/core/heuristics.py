@@ -6,22 +6,63 @@ from ..interfaces.base import GraphStore
 
 
 class HeuristicRegistry:
-    _registry = {}
+    _movement_registry = {}
+    _ranking_registry = {}
+    _deposit_registry = {}
 
     @classmethod
-    def register(cls, name: str):
+    def register_movement(cls, name: str):
+        """Decorator for movement heuristics."""
         def decorator(fn):
-            cls._registry[name] = fn
+            cls._movement_registry[name] = fn
             return fn
         return decorator
 
     @classmethod
-    def get(cls, name: str):
-        return cls._registry[name]
+    def register_ranking(cls, name: str):
+        """Decorator for ranking heuristics."""
+        def decorator(fn):
+            cls._ranking_registry[name] = fn
+            return fn
+        return decorator
 
     @classmethod
-    def all(cls):
-        return cls._registry
+    def register_deposit(cls, name: str):
+        """Decorator for deposit heuristics."""
+        def decorator(fn):
+            cls._deposit_registry[name] = fn
+            return fn
+        return decorator
+
+    @classmethod
+    def get_movement(cls, name: str):
+        """Retrieve a movement heuristic."""
+        return cls._movement_registry[name]
+
+    @classmethod
+    def get_ranking(cls, name: str):
+        """Retrieve a ranking heuristic."""
+        return cls._ranking_registry[name]
+
+    @classmethod
+    def get_deposit(cls, name: str):
+        """Retrieve a deposit heuristic."""
+        return cls._deposit_registry[name]
+
+    @classmethod
+    def all_movement(cls):
+        """Get all movement heuristics."""
+        return cls._movement_registry
+
+    @classmethod
+    def all_ranking(cls):
+        """Get all ranking heuristics."""
+        return cls._ranking_registry
+
+    @classmethod
+    def all_deposit(cls):
+        """Get all deposit heuristics."""
+        return cls._deposit_registry
     
 @dataclass(slots=True)
 class HeuristicContext:
@@ -47,10 +88,10 @@ class Heuristics:
     Each function takes a `HeuristicContext` object and returns a float score, normalized to [0,1]
     """
 
-    # --- MOVEMENT HEURISTICS (Agent Step Decision) ---
+    # --- MOVEMENT HEURISTICS ---
     
     @staticmethod
-    @HeuristicRegistry.register("semantic_similarity")
+    @HeuristicRegistry.register_movement("semantic_similarity")
     def semantic_similarity(ctx: HeuristicContext) -> float:
         """
         NORMALIZED Cosine Similarity: Maps [-1, 1] to [0, 1].
@@ -65,7 +106,7 @@ class Heuristics:
         return (cos_sim + 1.0) / 2.0
 
     @staticmethod
-    @HeuristicRegistry.register("semantic_similarity_unnormalized")
+    @HeuristicRegistry.register_movement("semantic_similarity_unnormalized")
     def semantic_similarity_unnormalized(ctx: HeuristicContext) -> float:
         """
         RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
@@ -75,7 +116,7 @@ class Heuristics:
         return np.dot(q, t) / (np.linalg.norm(t) + 1e-8)
 
     @staticmethod
-    @HeuristicRegistry.register("node_centrality_unnormalized")
+    @HeuristicRegistry.register_movement("node_centrality_unnormalized")
     def node_centrality_unnormalized(ctx: HeuristicContext) -> float:
         """
         This version requires ctx.graph.degree which may not exist.
@@ -83,7 +124,7 @@ class Heuristics:
         return math.log(1 + ctx.graph.degree[ctx.target_id])
     
     @staticmethod
-    @HeuristicRegistry.register("node_centrality")
+    @HeuristicRegistry.register_movement("node_centrality")
     def node_centrality(ctx: HeuristicContext) -> float:
         """
         Normalized centrality that works with any GraphStore.
@@ -97,7 +138,7 @@ class Heuristics:
         return log_degree / (log_degree + avg)
 
     @staticmethod
-    @HeuristicRegistry.register("pheromone_repulsion")
+    @HeuristicRegistry.register_movement("pheromone_repulsion")
     def pheromone_repulsion(ctx: HeuristicContext) -> float:
         """
         Inverse Pheromone frequency. 
@@ -109,7 +150,7 @@ class Heuristics:
         return 1.0 - (p_val / max_p)
 
     @staticmethod
-    @HeuristicRegistry.register("random_jitter")
+    @HeuristicRegistry.register_movement("random_jitter")
     def random_jitter(ctx):
         """Adds pure chaos to break loops."""
         return np.random.random()
@@ -117,13 +158,13 @@ class Heuristics:
     # --- RANKING HEURISTICS (Final Consensus) ---
 
     @staticmethod
-    @HeuristicRegistry.register("percentage_visited")
+    @HeuristicRegistry.register_ranking("percentage_visited")
     def percentage_visited(ctx: HeuristicContext) -> float:
         """Percentage of total agents that visited this node."""
         return ctx.votes / ctx.total_agents
     
     @staticmethod
-    @HeuristicRegistry.register("semantic_rank")
+    @HeuristicRegistry.register_ranking("semantic_rank")
     def semantic_rank(ctx: HeuristicContext) -> float:
         """
         RAW semantic similarity for final ranking.
@@ -178,25 +219,25 @@ class Heuristics:
     # --- DEPOSIT HEURISTICS ---
 
     @staticmethod
-    @HeuristicRegistry.register("deposit_flat")
+    @HeuristicRegistry.register_deposit("deposit_flat")
     def deposit_flat(ctx: HeuristicContext) -> float:
         """Standard Ant Colony: Leave a constant amount (1.0)."""
         return 1.0
 
     @staticmethod
-    @HeuristicRegistry.register("deposit_hub")
+    @HeuristicRegistry.register_deposit("deposit_hub_unnormalized")
     def deposit_hub(ctx: HeuristicContext) -> float:
         """Hubs get more pheromones."""
         return Heuristics.node_centrality(ctx)
     
     @staticmethod
-    @HeuristicRegistry.register("deposit_hub_unnormalized")
+    @HeuristicRegistry.register_deposit("deposit_hub_unnormalized")
     def deposit_hub_unnormalized(ctx: HeuristicContext) -> float:
         """Hubs get more pheromones. (UNNORMALIZED)"""
         return Heuristics.node_centrality_unnormalized(ctx)
     
     @staticmethod
-    @HeuristicRegistry.register("deposit_semantic")
+    @HeuristicRegistry.register_deposit("deposit_semantic")
     def deposit_semantic(ctx: HeuristicContext) -> float:
         """
         Semantic-weighted deposit using NORMALIZED similarity.
@@ -209,7 +250,7 @@ class Heuristics:
             return 0.0
 
     @staticmethod
-    @HeuristicRegistry.register("deposit_semantic_unnormalized")
+    @HeuristicRegistry.register_deposit("deposit_semantic_unnormalized")
     def deposit_semantic_unnormalized(ctx: HeuristicContext) -> float:
         """
         Alternative: Uses unnormalized similarity and clamps to [0, 1].
@@ -221,7 +262,7 @@ class Heuristics:
         return max(0.0, unnormalized_sim)
     
     @staticmethod
-    @HeuristicRegistry.register("deposit_exploration_bonus")
+    @HeuristicRegistry.register_deposit("deposit_exploration_bonus")
     def deposit_exploration_bonus(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,
@@ -247,7 +288,7 @@ class Heuristics:
         return base_deposit * multiplier
     
     @staticmethod
-    @HeuristicRegistry.register("deposit_collaborative_amplification")
+    @HeuristicRegistry.register_deposit("deposit_collaborative_amplification")
     def deposit_collaborative_amplification(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,
