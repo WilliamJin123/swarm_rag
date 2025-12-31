@@ -4,6 +4,7 @@ from typing import Any, List, Dict, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from swarm_rag.core.heuristics import HeuristicRegistry
+from swarm_rag.evolution.evolution_context import EvolutionConfig
 from .genome import Genome
 from .genetic_strategies import GeneticRegistry
 from .fitness import FitnessCalculator
@@ -22,18 +23,18 @@ class EvolutionEngine:
     """
 
     # Default configuration
-    _DEFAULT_CONFIG = {
-        "n_generations": 20,
-        "population_size": 30,
-        "elite_fraction": 0.1,
-        "mutation_rate": 0.2,
-        "crossover_rate": 0.6,
-        "selection_strategy": "tournament",
-        "crossover_strategy": "uniform_parameter_mix",
-        "mutation_strategy": "expression_tree_mutation",
-        "selection_params": {"k": 3},
-        "mutation_params": {"max_expr_size": 25}
-    }
+    # _DEFAULT_CONFIG = {
+    #     "n_generations": 20,
+    #     "population_size": 30,
+    #     "elite_fraction": 0.1,
+    #     "mutation_rate": 0.2,
+    #     "crossover_rate": 0.6,
+    #     "selection_strategy": "tournament",
+    #     "crossover_strategy": "uniform_parameter_mix",
+    #     "mutation_strategy": "expression_tree_mutation",
+    #     "selection_params": {"k": 3},
+    #     "mutation_params": {"max_expr_size": 25}
+    # }
 
     def __init__(
         self,
@@ -41,15 +42,13 @@ class EvolutionEngine:
         fitness_calculator: FitnessCalculator,
         queries: List[str],
         ground_truth: List[List[Any]],
-        config: Optional[Dict[str, Any]] = None
+        config: EvolutionConfig = None
     ):
         self.retriever = retriever
         self.fitness_calc = fitness_calculator
         self.queries = queries
         self.ground_truth = ground_truth
-        self.config = self._DEFAULT_CONFIG.copy()
-        if config:
-            self.config.update(config)
+        self.config = config or EvolutionConfig() # Uses defaults if None
         
         # Resolve Strategies from Registry
         self.selection_fn = GeneticRegistry.get_selection(self.config["selection_strategy"])
