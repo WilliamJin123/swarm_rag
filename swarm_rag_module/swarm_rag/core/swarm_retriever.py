@@ -29,7 +29,7 @@ class SwarmRetriever:
             "semantic": ("semantic_rank", 0.4),
         },
         deposit_strategies={
-            "flat_mark": ("deposit_flat", 1.0),
+            "flat_mark": ("flat", 1.0),
         },
     )
     def __init__(

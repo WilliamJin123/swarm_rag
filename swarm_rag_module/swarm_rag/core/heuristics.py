@@ -63,6 +63,14 @@ class HeuristicRegistry:
     def all_deposit(cls):
         """Get all deposit heuristics."""
         return cls._deposit_registry
+    
+    @classmethod
+    def all(cls):
+        return {
+            **cls._movement_registry,
+            **cls._deposit_registry,
+            **cls._ranking_registry
+        }
 
 @dataclass(slots=True)
 class HeuristicContext:
@@ -219,25 +227,25 @@ class Heuristics:
     # --- DEPOSIT HEURISTICS ---
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_flat")
+    @HeuristicRegistry.register_deposit("flat")
     def deposit_flat(ctx: HeuristicContext) -> float:
         """Standard Ant Colony: Leave a constant amount (1.0)."""
         return 1.0
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_hub_unnormalized")
+    @HeuristicRegistry.register_deposit("hub_unnormalized")
     def deposit_hub(ctx: HeuristicContext) -> float:
         """Hubs get more pheromones."""
         return Heuristics.node_centrality(ctx)
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_hub_unnormalized")
+    @HeuristicRegistry.register_deposit("hub_unnormalized")
     def deposit_hub_unnormalized(ctx: HeuristicContext) -> float:
         """Hubs get more pheromones. (UNNORMALIZED)"""
         return Heuristics.node_centrality_unnormalized(ctx)
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_semantic")
+    @HeuristicRegistry.register_deposit("semantic")
     def deposit_semantic(ctx: HeuristicContext) -> float:
         """
         Semantic-weighted deposit using NORMALIZED similarity.
@@ -250,7 +258,7 @@ class Heuristics:
             return 0.0
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_semantic_unnormalized")
+    @HeuristicRegistry.register_deposit("semantic_unnormalized")
     def deposit_semantic_unnormalized(ctx: HeuristicContext) -> float:
         """
         Alternative: Uses unnormalized similarity and clamps to [0, 1].
@@ -262,7 +270,7 @@ class Heuristics:
         return max(0.0, unnormalized_sim)
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_exploration_bonus")
+    @HeuristicRegistry.register_deposit("exploration_bonus")
     def deposit_exploration_bonus(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,
@@ -288,7 +296,7 @@ class Heuristics:
         return base_deposit * multiplier
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("deposit_collaborative_amplification")
+    @HeuristicRegistry.register_deposit("collaborative_amplification")
     def deposit_collaborative_amplification(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,
