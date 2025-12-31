@@ -187,22 +187,14 @@ class GeneticStrategies:
         # Dynamically finds the matching 'available_X_features' list for 'X_expr'
         for tree_field in trees:
             if random.random() < rate:
-                # Infer feature list name: 'movement_expr' -> 'available_movement_features'
-                # We strip '_expr' suffix if present
-                base_name = tree_field.replace("_expr", "")
-                feature_list_name = f"available_{base_name}_features"
-                
-                # Check if the genome has this feature list
-                if hasattr(genome, feature_list_name):
-                    feature_list = getattr(genome, feature_list_name)
-                    
-                    current_tree = getattr(genome, tree_field)
-                    mutated_tree = ExpressionEvolution.mutate_tree(
-                        current_tree,
-                        features=feature_list,
-                        mutation_rate=rate
-                    )
-                    setattr(genome, tree_field, mutated_tree)
+                feature_list = ctx.expression_features.get(tree_field, [])
+                current_tree = getattr(genome, tree_field)
+                mutated_tree = ExpressionEvolution.mutate_tree(
+                    current_tree,
+                    features=feature_list,
+                    mutation_rate=rate
+                )
+                setattr(genome, tree_field, mutated_tree)
 
         return genome
     

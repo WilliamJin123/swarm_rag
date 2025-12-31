@@ -1,4 +1,4 @@
-from typing import Union, List, Dict, Tuple
+from typing import Callable, Union, List, Dict, Tuple
 from dataclasses import dataclass, field
 import math
 import random
@@ -98,7 +98,77 @@ class ExpressionNode:
             value=self.value,
             children=[child.copy() for child in self.children]
         )
+
+    def to_code_string(self) -> str:
+        """
+        Converts the expression tree into a valid Python code string.
+        This is used for fast compilation into a lambda function.
+        """
+        if self.type == 'const':
+            return str(self.value)
+        
+        elif self.type == 'feature':
+            return f"features['{self.value}']"
+        
+        elif self.type == 'func':
+            if not self.children:
+                return "0.0"
+            child_code = self.children[0].to_code_string()
+            
+            if self.value == 'square':
+                return f"({child_code} ** 2)"
+            elif self.value == 'sqrt':
+                return f"math.sqrt(abs({child_code}))"
+            elif self.value == 'exp':
+                return f"math.exp(min({child_code}, 10))"
+            elif self.value == 'log':
+                return f"math.log(abs({child_code}) + 1e-8)"
+            elif self.value == 'abs':
+                return f"abs({child_code})"
+            else:
+                return child_code
+        
+        elif self.type == 'op':
+            if len(self.children) < 2:
+                return "0.0"
+            left_code = self.children[0].to_code_string()
+            right_code = self.children[1].to_code_string()
+            
+            if self.value == '+':
+                return f"({left_code} + {right_code})"
+            elif self.value == '-':
+                return f"({left_code} - {right_code})"
+            elif self.value == '*':
+                return f"({left_code} * {right_code})"
+            elif self.value == '/':
+                # Protected division to prevent ZeroDivisionError
+                return f"({left_code} / ({right_code} + 1e-8))"
+            elif self.value == 'max':
+                return f"max({left_code}, {right_code})"
+            elif self.value == 'min':
+                return f"min({left_code}, {right_code})"
+            else:
+                return left_code
+        
+        return "0.0"
     
+    def compile(self) -> Callable[[Dict[str, float]], float]:
+        """
+        Compiles the expression tree into a fast-executing lambda function.
+        This is a one-time operation that creates a reusable Python function.
+        """
+        code_string = self.to_code_string()
+        lambda_string = f"lambda features: {code_string}"
+        
+        try:
+            # Provide the 'math' module to the eval context so functions like sqrt can be used.
+            compiled_func = eval(lambda_string, {"math": math}, {})
+            return compiled_func
+        except Exception as e:
+            # Fallback to the slow recursive evaluation if compilation fails for any reason.
+            print(f"Warning: Could not compile expression '{self.to_string()}'. Error: {e}. Using slow evaluation.")
+            return lambda features: self.evaluate(features)
+
 class ExpressionEvolution:
     """Genetic operations on expression trees."""
     
@@ -177,31 +247,43 @@ class ExpressionEvolution:
     def crossover_trees(tree1: ExpressionNode, tree2: ExpressionNode) -> Tuple[ExpressionNode, ExpressionNode]:
         """
         Subtree crossover between two expression trees.
-        Swaps random subtrees between parents.
         """
         t1 = tree1.copy()
         t2 = tree2.copy()
         
-        # Get all subtrees
-        def get_subtrees(node: ExpressionNode, depth: int = 0) -> List[Tuple[ExpressionNode, int]]:
-            result = [(node, depth)]
-            for child in node.children:
-                result.extend(get_subtrees(child, depth + 1))
-            return result
+        def get_all_nodes(node: ExpressionNode):
+            """Returns a list of all nodes in the tree."""
+            return [node] + sum([get_all_nodes(c) for c in node.children], [])
         
-        subtrees1 = get_subtrees(t1)
-        subtrees2 = get_subtrees(t2)
+        nodes1 = get_all_nodes(t1)
+        nodes2 = get_all_nodes(t2)
         
-        if len(subtrees1) > 1 and len(subtrees2) > 1:
-            # Pick random subtrees (avoid root for diversity)
-            st1, _ = random.choice(subtrees1[1:] if len(subtrees1) > 1 else subtrees1)
-            st2, _ = random.choice(subtrees2[1:] if len(subtrees2) > 1 else subtrees2)
-            
-            # Swap them
-            st1.type, st2.type = st2.type, st1.type
-            st1.value, st2.value = st2.value, st1.value
-            st1.children, st2.children = st2.children, st1.children
-        
+        if len(nodes1) > 1 and len(nodes2) > 1:
+            # Pick random nodes to swap (avoid root to maintain structure)
+            node1_to_swap = random.choice(nodes1[1:])
+            node2_to_swap = random.choice(nodes2[1:])
+
+            # Find the parents of the selected nodes
+            def find_parent(root, target_node):
+                if target_node in root.children:
+                    return root
+                for child in root.children:
+                    parent = find_parent(child, target_node)
+                    if parent:
+                        return parent
+                return None
+
+            parent1 = find_parent(t1, node1_to_swap)
+            parent2 = find_parent(t2, node2_to_swap)
+
+            if parent1 and parent2:
+                # Find the index of the child in each parent
+                idx1 = parent1.children.index(node1_to_swap)
+                idx2 = parent2.children.index(node2_to_swap)
+
+                # Perform the swap
+                parent1.children[idx1], parent2.children[idx2] = node2_to_swap, node1_to_swap
+
         return t1, t2
     
     @staticmethod

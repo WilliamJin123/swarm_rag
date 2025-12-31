@@ -1,7 +1,9 @@
+import dataclasses
+import json
 import random
 import copy
 import time
-from typing import Any, List, Dict, Optional, Callable, Set
+from typing import Any, List, Dict, Optional, Callable, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -49,6 +51,7 @@ class EvolutionEngine:
         queries: List[str],
         ground_truth: List[List[Any]],
         config: EvolutionConfig = None
+
     ):
         self.retriever = retriever
         self.fitness_calc = fitness_calculator
@@ -56,23 +59,27 @@ class EvolutionEngine:
         self.queries = queries
         self.ground_truth = ground_truth
 
-        self.config = config or EvolutionConfig() # Uses defaults if None
-        
+        self.evo_context = EvolutionContext(
+            config = config or EvolutionConfig(),
+            available_features=list(HeuristicRegistry.all().keys()),
+            expression_features={
+                "movement_expr": HeuristicRegistry.all_movement().keys(),
+                "ranking_expr": HeuristicRegistry.all_ranking().keys(),
+                "deposit_expr": HeuristicRegistry.all_deposit().keys(),
+            }
+        )        
         # Resolve Strategies from Registry
-        self.selection_fn = GeneticRegistry.get_selection(self.config["selection_strategy"])
-        self.crossover_fn = GeneticRegistry.get_crossover(self.config["crossover_strategy"])
-        self.mutation_fn = GeneticRegistry.get_mutation(self.config["mutation_strategy"])
-
-        # TO CHANGE
-        self.available_features = list(HeuristicRegistry.all().keys())
+        self.selection_fn = GeneticRegistry.get_selection(self.evo_context.config.selection_strategy)
+        self.crossover_fn = GeneticRegistry.get_crossover(self.evo_context.config.crossover_strategy)
+        self.mutation_fn = GeneticRegistry.get_mutation(self.evo_context.config.mutation_strategy)
 
     def optimize(self, initial_population: List[Genome]) -> Genome:
         population = initial_population
         best_genome: Genome = None
         
-        print(f"Starting evolution: {len(population)} agents, {self.config.n_generations} gens.")
+        print(f"Starting evolution: {len(population)} agents, {self.evo_context.config.n_generations} gens.")
 
-        for gen in range(self.config.n_generations):
+        for gen in range(self.evo_context.config.n_generations):
             t0 = time.time()
             
             # Evaluate Fitness
@@ -87,7 +94,7 @@ class EvolutionEngine:
             print(f"Gen {gen+1}: Best={population[0].fitness:.4f} | Avg={avg_fit:.4f} | Time={time.time()-t0:.2f}s")
             
             # Breed
-            if gen < self.config.n_generations - 1:
+            if gen < self.evo_context.config.n_generations - 1:
                 population = self._breed_next_generation(population, gen)
 
         print(f"Optimization Complete. Best Fitness: {best_genome.fitness:.4f}")
@@ -99,33 +106,29 @@ class EvolutionEngine:
         Uses EvolutionContext to standardize the breeding pipeline.
         """
         next_gen = []
-        pop_size = self.config.population_size
+        pop_size = self.evo_context.config.population_size
         
-        # Create Context
-        ctx = EvolutionContext(
-            population=population,
-            generation=generation_idx,
-            config=self.config
-        )
-        
+        # Update Context
+        self.evo_context.population = population
+        self.evo_context.generation = generation_idx
         # Elitism (Top N)
-        elite_count = int(pop_size * self.config.elite_fraction)
+        elite_count = int(pop_size * self.evo_context.config.elite_fraction)
         # Deep copy elites to ensure they aren't mutated in the next generation
         next_gen.extend([g.copy() for g in population[:elite_count]])
         
         # Breeding
         while len(next_gen) < pop_size:
-            p1 = self.selection_fn(ctx)
-            p2 = self.selection_fn(ctx)
+            p1 = self.selection_fn(self.evo_context)
+            p2 = self.selection_fn(self.evo_context)
             
             # Crossover (Pass Parents + Context)
-            if random.random() < self.config.crossover_rate:
-                child = self.crossover_fn(p1, p2, ctx)
+            if random.random() < self.evo_context.config.crossover_rate:
+                child = self.crossover_fn(p1, p2, self.evo_context)
             else:
                 child = p1.copy()
             
             # Mutation (Pass Child + Context)
-            child = self.mutation_fn(child, ctx)
+            child = self.mutation_fn(child, self.evo_context)
             next_gen.append(child)
             
         return next_gen
@@ -168,7 +171,7 @@ class EvolutionEngine:
             
             averaged_metrics = self._mean_metrics(all_query_metrics)
 
-            genome.fitness = self.fitness_calc.calculate(averaged_metrics)
+            genome.fitness = self.fitness_calc.calculate(averaged_metrics, genome)
             genome.metrics = averaged_metrics
 
     def _mean_metrics(self, all_metrics: List[Dict[str, float]]) -> Dict[str, float]:
@@ -196,18 +199,23 @@ class EvolutionEngine:
         return kwargs
 
     def _compile_tree(self, expr_tree: ExpressionNode) -> Callable[[HeuristicContext], float]:
-        """Compiles expression tree into a callable strategy."""
+        """Compiles expression tree into a callable strategy using a fast lambda."""
+        
+        # 1. Extract the feature names the tree needs to run.
         required_features = self._extract_features(expr_tree)
         
+        # 2. Compile the tree structure into a lambda function ONCE.
+        compiled_lambda = expr_tree.compile()
+        
+        # 3. Return a wrapper that prepares the inputs for the lambda at runtime.
         def strategy_wrapper(ctx: HeuristicContext) -> float:
-            feature_values = {}
-            for name in required_features:
-                func = HeuristicRegistry.get(name)
-                feature_values[name] = func(ctx)
+            # Build the feature dictionary from the HeuristicContext.
+            feature_values = {name: HeuristicRegistry.get(name)(ctx) for name in required_features}
             
-            # Evaluate the tree logic
-            score = expr_tree.evaluate(feature_values)
-            # Clamp for safety            
+            # Execute the pre-compiled, fast lambda.
+            score = compiled_lambda(feature_values)
+            
+            # Clamp the final score for safety.
             return max(0.0, min(1.0, score))
             
         return strategy_wrapper
@@ -220,3 +228,20 @@ class EvolutionEngine:
         for child in node.children:
             features.update(self._extract_features(child))
         return features
+
+    def save_checkpoint(self, filepath: str, population: List[Genome], generation: int, best_genome: Genome):
+        state = {
+            "population": [dataclasses.asdict(g) for g in population],
+            "generation": generation,
+            "best_genome": dataclasses.asdict(best_genome),
+            "config": dataclasses.asdict(self.config)
+        }
+        # You'll need a custom way to serialize/deserialize ExpressionNodes
+        # e.g., using to_string() and a parser, or custom JSON encoder.
+        with open(filepath, 'w') as f:
+            json.dump(state, f, indent=2)
+
+    def load_checkpoint(self, filepath: str) -> Tuple[List[Genome], int, Genome]:
+    # ... logic to load and reconstruct Genome objects from the dict ...
+    # This requires a parser for the expression strings.
+        pass

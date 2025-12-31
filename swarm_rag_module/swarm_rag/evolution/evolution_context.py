@@ -38,3 +38,4 @@ class EvolutionContext:
     config: EvolutionConfig
     # Registry Data (What features can we mutate into?)
     available_features: List[str] = None
+    expression_features: Dict[str, List[str]] = None
