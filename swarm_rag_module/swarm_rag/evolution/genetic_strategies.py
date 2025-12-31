@@ -33,40 +33,40 @@ class GeneticRegistry:
         return decorator
 
     @classmethod
-    def get_selection(cls, name: str) -> Callable:
+    def get_selection(cls, name: str) -> Callable[..., Genome]:
         return cls._selection_registry[name]
 
     @classmethod
-    def get_crossover(cls, name: str) -> Callable:
+    def get_crossover(cls, name: str) -> Callable[..., Genome]:
         return cls._crossover_registry[name]
 
     @classmethod
-    def get_mutation(cls, name: str) -> Callable:
+    def get_mutation(cls, name: str) -> Callable[..., Genome]:
         return cls._mutation_registry[name]
     
     @classmethod
-    def all_selection(cls) -> dict[str, Callable]:
+    def all_selection(cls) -> dict[str, Callable[..., Genome]]:
         """
         Return the complete selection registry.
         """
         return cls._selection_registry
 
     @classmethod
-    def all_crossover(cls) -> dict[str, Callable]:
+    def all_crossover(cls) -> dict[str, Callable[..., Genome]]:
         """
         Return the complete crossover registry.
         """
         return cls._crossover_registry
 
     @classmethod
-    def all_mutation(cls) -> dict[str, Callable]:
+    def all_mutation(cls) -> dict[str, Callable[..., Genome]]:
         """
         Return the complete mutation registry.
         """
         return cls._mutation_registry
     
     @classmethod
-    def all(cls) -> dict[str, Callable]:
+    def all(cls) -> dict[str, Callable[..., Genome]]:
         return {
             **cls._selection_registry,
             **cls._crossover_registry,

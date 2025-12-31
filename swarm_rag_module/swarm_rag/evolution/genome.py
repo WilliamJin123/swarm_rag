@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Callable, Optional
 from dataclasses import dataclass, field
 from .expressions import ExpressionNode
 
@@ -21,6 +21,12 @@ class Genome:
     ranking_expr: ExpressionNode
     deposit_expr: ExpressionNode
 
+    # TO CACHE
+    # compiled_movement: Optional[Callable] = None
+    # compiled_ranking: Optional[Callable] = None
+    # compiled_deposit: Optional[Callable] = None
+
+
     # Available features for each strategy (TO CHANGE)
     available_movement_features: List[str] = field(default_factory=lambda: [
         'semantic', 'centrality', 'diversity', 'jitter'
@@ -36,6 +42,8 @@ class Genome:
     fitness: float = 0.0
     metrics: Dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0
+
+    evaluated: bool = False
 
     def complexity(self) -> int:
         """Total complexity across all expressions."""

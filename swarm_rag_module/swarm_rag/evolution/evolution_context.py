@@ -23,8 +23,28 @@ class EvolutionConfig:
     
     # --- Strategy-Specific Hyperparameters ---
     # We flatten these for transparency (instead of a opaque 'params' dict)
+    # --- Strategy Hyperparameters ---
     selection_k: int = 3
     mutation_max_expr_size: int = 25
+
+    # --- Genome Hyperparameter RANGES (FLAT, TYPED) ---
+    n_agents_min: int = 5
+    n_agents_max: int = 30
+
+    steps_min: int = 5
+    steps_max: int = 20
+
+    decay_min: float = 0.85
+    decay_max: float = 0.99
+
+    initial_pool_size_min: int = 10
+    initial_pool_size_max: int = 50
+
+    start_subset_min: int = 5
+    start_subset_max: int = 15
+
+    # --- Expression Initialization ---
+    expr_max_depth: int = 5
 
 @dataclass
 class EvolutionContext:
@@ -33,9 +53,9 @@ class EvolutionContext:
     Replaces the messy **kwargs passing.
     """
     # Current State
-    population: List[Genome]
+    population: List[Genome] = field(default_factory=list)
     generation: int
-    config: EvolutionConfig
+    config: EvolutionConfig = None
     # Registry Data (What features can we mutate into?)
-    available_features: List[str] = None
-    expression_features: Dict[str, List[str]] = None
+    available_features: List[str] = field(default_factory=list)
+    expression_features: Dict[str, List[str]] = field(default_factory=dict)

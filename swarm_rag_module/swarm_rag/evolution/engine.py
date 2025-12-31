@@ -75,40 +75,43 @@ class EvolutionEngine:
 
     def create_initial_genomes(self, count: int) -> List[Genome]:
         """Creates a diverse initial population using ramped half-and-half."""
+        cfg = self.evo_context.config
         # Generate diverse expression trees for each heuristic
         movement_exprs = ExpressionEvolution.generate_ramped_half_and_half(
-            features=self.evo_context.expression_features.get("movement", ['semantic_similarity', 'centrality', 'pheromone_repulsion', 'random_jitter']),
+            features=list(self.evo_context.expression_features["movement"]),
             population_size=count,
-            max_depth=5
+            max_depth=cfg.expr_max_depth
         )
         ranking_exprs = ExpressionEvolution.generate_ramped_half_and_half(
-            features=self.evo_context.expression_features.get("ranking", ['percentage_visited', 'semantic_rank']),
+            features=list(self.evo_context.expression_features["ranking"]),
             population_size=count,
-            max_depth=5
+            max_depth=cfg.expr_max_depth
         )
         deposit_exprs = ExpressionEvolution.generate_ramped_half_and_half(
-            features=self.evo_context.expression_features.get("deposit", ['flat', 'semantic', 'hub', 'exploration_bonus', "collaborative_amp"]),
+            features=list(self.evo_context.expression_features["deposit"]),
             population_size=count,
-            max_depth=5
+            max_depth=cfg.expr_max_depth
         )
+
 
         # TO CHANGE
         population = []
         for i in range(count):
             genome = Genome(
-                # Randomly initialize hyperparameters
-                n_agents=random.randint(5, 30),
-                steps=random.randint(5, 20),
-                decay=random.uniform(0.85, 0.99),
-                initial_pool_size=random.randint(10, 50),
-                start_subset=random.randint(5, 15),
-                
-                # Assign the pre-generated, diverse trees
-                movement_expr=movement_exprs[i],
-                ranking_expr=ranking_exprs[i],
-                deposit_expr=deposit_exprs[i],
-            )
-            population.append(genome)
+                n_agents=random.randint(cfg.n_agents_min, cfg.n_agents_max),
+            steps=random.randint(cfg.steps_min, cfg.steps_max),
+            decay=random.uniform(cfg.decay_min, cfg.decay_max),
+            initial_pool_size=random.randint(
+                cfg.initial_pool_size_min, cfg.initial_pool_size_max
+            ),
+            start_subset=random.randint(
+                cfg.start_subset_min, cfg.start_subset_max
+            ),
+            movement_expr=movement_exprs[i],
+            ranking_expr=ranking_exprs[i],
+            deposit_expr=deposit_exprs[i],
+        )
+        population.append(genome)
             
         return population
 
@@ -144,19 +147,16 @@ class EvolutionEngine:
         """
         Uses EvolutionContext to standardize the breeding pipeline.
         """
-        next_gen = []
+        parents = population
+        offspring = []
         pop_size = self.evo_context.config.population_size
         
         # Update Context
         self.evo_context.population = population
         self.evo_context.generation = generation_idx
-        # Elitism (Top N)
-        elite_count = int(pop_size * self.evo_context.config.elite_fraction)
-        # Deep copy elites to ensure they aren't mutated in the next generation
-        next_gen.extend([g.copy() for g in population[:elite_count]])
         
         # Breeding
-        while len(next_gen) < pop_size:
+        while len(offspring) < pop_size:
             p1 = self.selection_fn(self.evo_context)
             p2 = self.selection_fn(self.evo_context)
             
@@ -168,17 +168,24 @@ class EvolutionEngine:
             
             # Mutation (Pass Child + Context)
             child = self.mutation_fn(child, self.evo_context)
-            next_gen.append(child)
+            child.fitness = None
+            child.metrics = None
+            child.evaluated = False
+            offspring.append(child)
             
-        return next_gen
-    
+        combined = parents + offspring
+        combined.sort(key=lambda g: g.fitness, reverse=True)
+        population = combined[:pop_size]    
+
+        return population
+        
     def _evaluate_population(self, population: List[Genome]):
         """
         Evaluates the entire population.
         """
         for i, genome in enumerate(population):
             # Skip evaluation if we already know the fitness (e.g., Elitism)
-            if genome.fitness > 0 and genome.metrics:
+            if genome.evaluated:
                 continue
                 
             # 1. Convert Genome to Retriever Arguments
@@ -193,7 +200,7 @@ class EvolutionEngine:
                 **retriever_kwargs
             )
             total_latency = time.time() - start_time
-            avg_latency = total_latency / len(self.queries) if self.queries else 0.0
+            avg_latency = total_latency / max(1, len(self.queries))
 
             # TO CHANGE
 
@@ -212,6 +219,7 @@ class EvolutionEngine:
 
             genome.fitness = self.fitness_calc.calculate(averaged_metrics, genome)
             genome.metrics = averaged_metrics
+            genome.evaluated = True
 
     def _mean_metrics(self, all_metrics: List[Dict[str, float]]) -> Dict[str, float]:
         """Averages metric dictionaries into a single result."""
