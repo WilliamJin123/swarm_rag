@@ -8,7 +8,7 @@ import os
 import psutil
 from ..utils import LRUCache
 
-from .heuristics import Heuristics, HeuristicContext
+from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
 from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
 
 class SwarmRetriever:
@@ -20,16 +20,16 @@ class SwarmRetriever:
         start_subset=10,
         top_k=20,
         movement_strategies={
-            "semantic": (Heuristics.semantic_similarity, 0.3),
-            "centrality": (Heuristics.node_centrality, 0.4),
-            "diversity": (Heuristics.pheromone_repulsion, 0.3),
+            "semantic": ("semantic_similarity", 0.3),
+            "centrality": ("node_centrality", 0.4),
+            "diversity": ("pheromone_repulsion", 0.3),
         },
         ranking_strategies={
-            "visited": (Heuristics.percentage_visited, 0.6),
-            "semantic": (Heuristics.semantic_rank, 0.4),
+            "visited": ("percentage_visited", 0.6),
+            "semantic": ("semantic_rank", 0.4),
         },
         deposit_strategies={
-            "flat_mark": (Heuristics.deposit_flat, 1.0),
+            "flat_mark": ("deposit_flat", 1.0),
         },
     )
     def __init__(
@@ -262,9 +262,9 @@ class SwarmRetriever:
         # Normalize
         query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
 
-        movement_funcs = [(func, weight) for func, weight in movement_strategies.values()]
-        ranking_funcs = [(func, weight) for func, weight in ranking_strategies.values()]
-        deposit_funcs = [(func, weight) for func, weight in deposit_strategies.values()]
+        movement_funcs = self._resolve_strategy_funcs(movement_strategies)
+        ranking_funcs = self._resolve_strategy_funcs(ranking_strategies)
+        deposit_funcs = self._resolve_strategy_funcs(deposit_strategies)
 
         # Initial search with caching
         search_res = self.vector_store.search(query_vec, limit=initial_pool_size)
@@ -348,6 +348,23 @@ class SwarmRetriever:
 
     # === HELPERS ===
        
+    def _resolve_strategy_funcs(self, strategy_dict: Dict) -> list[tuple]:
+        """
+        Resolves a dict of strategies to actual callable functions.
+        Supports:
+        - Function references (old way)
+        - Names registered in HeuristicRegistry (new way)
+        """
+        resolved = []
+        for key, (fn_or_name, weight) in strategy_dict.items():
+            if callable(fn_or_name):
+                resolved.append((fn_or_name, weight))
+            elif isinstance(fn_or_name, str):
+                resolved.append((HeuristicRegistry.get(fn_or_name), weight))
+            else:
+                raise TypeError(f"Invalid heuristic entry: {fn_or_name}")
+        return resolved
+
     def _process_agent_step(
         self, 
         agent_id: int,
