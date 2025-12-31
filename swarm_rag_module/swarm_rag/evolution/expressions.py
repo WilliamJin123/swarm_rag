@@ -243,12 +243,18 @@ class ExpressionEvolution:
         return population
 
     @staticmethod
-    def mutate_tree(tree: ExpressionNode, features: List[str], mutation_rate: float = 0.2) -> ExpressionNode:
+    def mutate_tree(
+        tree: ExpressionNode, 
+        features: List[str], 
+        mutation_rate: float = 0.2,
+        inplace: bool = False
+    ) -> ExpressionNode:
         """
         Mutate an expression tree.
         Can change operators, constants, features, or replace subtrees.
         """
-        tree = tree.copy()
+        if not inplace:
+            tree = tree.copy()
         
         if random.random() < mutation_rate:
             # Mutation types

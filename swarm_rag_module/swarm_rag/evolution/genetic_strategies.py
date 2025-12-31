@@ -192,7 +192,8 @@ class GeneticStrategies:
                 mutated_tree = ExpressionEvolution.mutate_tree(
                     current_tree,
                     features=feature_list,
-                    mutation_rate=rate
+                    mutation_rate=rate,
+                    inplace=True # save Tree copy
                 )
                 setattr(genome, tree_field, mutated_tree)
 

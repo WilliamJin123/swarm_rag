@@ -58,7 +58,37 @@ class Genome:
     def get_metric(self, metric_name: str, default: float = 0.0) -> float:
         """Safely get a metric value."""
         return self.metrics.get(metric_name, default)
-    
+
+    def copy(self) -> 'Genome':
+        """
+        Creates a deep copy of the Genome.
+        Crucial for preventing mutations from affecting parents/elites.
+        """
+        return Genome(
+            # 1. Primitives (Copy by value automatically)
+            n_agents=self.n_agents,
+            steps=self.steps,
+            decay=self.decay,
+            initial_pool_size=self.initial_pool_size,
+            start_subset=self.start_subset,
+            
+            # 2. Expression Trees (MUST use their .copy() method)
+            movement_expr=self.movement_expr.copy(),
+            ranking_expr=self.ranking_expr.copy(),
+            deposit_expr=self.deposit_expr.copy(),
+            
+            # 3. Mutable Lists/Dicts (Create new objects)
+            metrics=self.metrics.copy(),
+            available_movement_features=list(self.available_movement_features),
+            available_ranking_features=list(self.available_ranking_features),
+            available_deposit_features=list(self.available_deposit_features),
+            
+            # 4. State Flags
+            fitness=self.fitness,
+            latency_ms=self.latency_ms,
+            evaluated=self.evaluated
+        )
+
 class GenomeCompiler:
     """
     Responsible for converting a Genome's symbolic expression trees

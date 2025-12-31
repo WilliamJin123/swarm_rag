@@ -23,10 +23,12 @@ class EvolutionEngine:
         evaluator: Evaluator,
         queries: List[str],
         ground_truth: List[List[Any]],
-        config: EvolutionConfig = None
+        config: EvolutionConfig = None,
+        max_workers: int = 16
     ):
         self.config = config or EvolutionConfig()
-        
+        self.max_workers = max_workers
+
         # 1. Setup Context
         self.evo_context = EvolutionContext(
             config=self.config,
@@ -40,8 +42,9 @@ class EvolutionEngine:
         )
         
         # 2. Initialize Sub-Systems
-        self.evaluator_service = PopulationEvaluator(
-            retriever, evaluator, fitness_calculator, queries, ground_truth
+        self.population_evaluator = PopulationEvaluator(
+            retriever, evaluator, fitness_calculator, queries, ground_truth,
+            max_workers=self.max_workers
         )
         self.loop = EvolutionLoop(self.evo_context)
 
@@ -86,17 +89,18 @@ class EvolutionEngine:
             
         return population
 
-    def optimize(self, initial_population: List[Genome] = None) -> Genome:
+    def optimize(self, initial_population: List[Genome] = None, parallel = True) -> Genome:
         population = initial_population or self.create_initial_genomes()
         best_genome: Genome = None
 
         print(f"Starting evolution: {len(population)} agents, {self.config.n_generations} gens.")
+        print(f"Global Concurrency: {self.max_workers} workers")
 
         for gen in range(self.config.n_generations):
             t0 = time.time()
             
             # 1. EVALUATE
-            self.evaluator_service.evaluate(population)
+            self.population_evaluator.evaluate(population, parallel_eval=parallel)
             
             # 2. STATS
             population.sort(key=lambda g: g.fitness, reverse=True)

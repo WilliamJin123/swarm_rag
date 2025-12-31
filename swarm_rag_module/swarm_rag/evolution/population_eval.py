@@ -1,11 +1,26 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import numpy as np
-from typing import List, Dict, Any
-from ..core.swarm_retriever import SwarmRetriever
+from typing import List, Dict, Any, Protocol, runtime_checkable
 from ..eval.metrics import Evaluator
+from ..core.swarm_retriever import SwarmRetriever
 from .genome import Genome
 from .fitness import FitnessCalculator
 from .genome import GenomeCompiler
+
+
+@runtime_checkable
+class RetrievalBackend(Protocol):
+    """
+    Protocol defining the contract for any system that can be optimized 
+    by this Evolution Engine.
+    """
+    def retrieve_batch(self, queries: List[str], **kwargs) -> List[List[Any]]:
+        """
+        Must accept queries and arbitrary keyword arguments (the genome),
+        and return a list of results (IDs, Nodes, or Strings) matching the ground truth.
+        """
+        ...
 
 # TO CHANGE: PLUGGING IN CUSTOM EVALUATION FUNCTIONS / PROCESSESES
 class PopulationEvaluator:
@@ -14,11 +29,12 @@ class PopulationEvaluator:
     """
     def __init__(
         self, 
-        retriever: SwarmRetriever,
+        retriever: RetrievalBackend, # SwarmRetriever conforms to this protocol
         evaluator: Evaluator,
         fitness_calc: FitnessCalculator,
         queries: List[str],
-        ground_truth: List[List[Any]]
+        ground_truth: List[List[Any]],
+        max_workers: int = 16
     ):
         self.retriever = retriever
         self.evaluator = evaluator
@@ -26,8 +42,10 @@ class PopulationEvaluator:
         self.queries = queries
         self.ground_truth = ground_truth
         self.compiler = GenomeCompiler()
+        self.max_workers = max_workers
 
-    def evaluate(self, population: List[Genome]) -> None:
+
+    def evaluate(self, population: List[Genome], parallel_eval: bool = True) -> None:
         """
         Evaluates the population in-place.
         """
@@ -38,10 +56,36 @@ class PopulationEvaluator:
 
         print(f"Evaluating {len(unevaluated)} new genomes...")
 
-        for genome in unevaluated:
-            self._evaluate_single(genome)
+        if parallel_eval and len(unevaluated) > 1:
+            # Heuristic: Don't run more genomes than we have threads/2
+            # (Reserve threads for the actual retrieval work)
+            concurrent_genomes = min(len(unevaluated), max(1, self.max_workers // 4))
 
-    def _evaluate_single(self, genome: Genome):
+            # Calculate worker budget per genome
+            workers_per_genome = max(1, self.max_workers // concurrent_genomes)
+
+            print(f"Parallel Eval: {concurrent_genomes} genomes at a time (Limit: {workers_per_genome} threads/genome)")
+
+            with ThreadPoolExecutor(max_workers=concurrent_genomes) as executor:
+                # We map the evaluate_single function with the allocated worker budget
+                futures = {
+                    executor.submit(self._evaluate_single, g, workers_per_genome): g 
+                    for g in unevaluated
+                }
+                
+                for future in as_completed(futures):
+                    g = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"Genome evaluation failed for {g}: {e}")
+                        g.fitness = -1.0 # Penalize failures
+                        g.evaluated = True
+        else:
+            for genome in unevaluated:
+                self._evaluate_single(genome, max_workers=self.max_workers)
+
+    def _evaluate_single(self, genome: Genome, max_workers: int):
         """
         Evaluating one by one allows for finer error handling, though
         batching at the retriever level (as you had) is still possible here.
@@ -50,9 +94,6 @@ class PopulationEvaluator:
         retriever_kwargs = self.compiler.compile(genome)
 
         # 2. Run Retrieval (The expensive part)
-        # Note: If your retriever supports batching DIFFERENT configs, use that. 
-        # Since it likely doesn't, we iterate. 
-        # (If your retriever.retrieve_batch supports running the SAME config for multiple queries, this is correct).
         start_time = time.time()
         
         batch_results = self.retriever.retrieve_batch(
