@@ -37,7 +37,6 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
             vector_store=vector_store,
             graph_store=graph_store,
             embedding_provider=embedding_provider,
-            max_workers=4,
             cache_neighbors=False, # Graph adapter handles caching
         )
 

@@ -317,7 +317,7 @@ class SwarmRetriever:
             new_locations = agent_locations.copy()
             pheromone_updates = {}
             max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
-            # Run agents sequentially for this query (Vectorization makes this fast)
+            # Run agents sequentially (Vectorization makes this fast)
             for i in range(n_agents):
                 result = self._process_agent_step(
                     agent_id=i,
