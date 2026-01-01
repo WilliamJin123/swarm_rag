@@ -55,6 +55,11 @@ class EvolutionConfig:
     log_file: str = "evo_log.jsonl"
     plot_file: str = "evo_plot.png"
 
+    # --- Checkpointing ---
+    checkpoint_frequency: int = 5        
+    checkpoint_path: str = "evo_checkpoint.pkl"
+    resume_from_checkpoint: bool = True   
+
 @dataclass
 class EvolutionContext:
     """

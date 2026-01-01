@@ -57,34 +57,48 @@ class PopulationEvaluator:
         print(f"Evaluating {len(unevaluated)} genomes...")
 
         # Calculate Resource Budget
-        actual_concurrency = min(len(unevaluated), self.concurrent_evaluations)
-        threads_per_retriever = max(1, self.global_max_threads // actual_concurrency)
-        print(f"Resource Budget: {actual_concurrency} Concurrent Genomes x {threads_per_retriever} Threads/Retriever")
+        batch_size = min(len(unevaluated), self.concurrent_evaluations)
+        threads_per_retriever = max(1, self.global_max_threads // batch_size)
+        print(f"  > Concurrency: {batch_size} genomes")
+        print(f"  > Thread Budget: {threads_per_retriever} threads per genome")
 
-        # Execution
-        if actual_concurrency > 1:
-            with ThreadPoolExecutor(max_workers=actual_concurrency) as executor:
-                futures = {
-                    executor.submit(self._evaluate_single, g, threads_per_retriever): g 
-                    for g in unevaluated
-                }
-                
-                for future in as_completed(futures):
-                    g = futures[future]
-                    try:
-                        future.result()
-                    except Exception as e:
-                        print(f"Genome evaluation failed for {g}: {e}")
-                        g.fitness = -1.0 # Penalize failures
-                        g.evaluated = True
-        else:
-            for genome in unevaluated:
-                self._evaluate_single(
+        # Process in chunks to respect concurrency limits
+        for i in range(0, len(unevaluated), batch_size):
+            batch = unevaluated[i : i + batch_size]
+            self._evaluate_batch(batch, queries, ground_truth, threads_per_retriever)
+
+    def _evaluate_batch(
+        self, 
+        batch: List[Genome], 
+        queries: List[str], 
+        ground_truth: List[List[Any]],
+        max_workers_per_query: int
+    ):
+        """
+        Runs a batch of evaluations concurrently.
+        """
+        # We use a ThreadPool here to run multiple *Genome Evaluations* at once.
+        # Each Genome Evaluation will internally run multiple *Query Retrievals*.
+        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+            future_to_genome = {
+                executor.submit(
+                    self._evaluate_single, 
                     genome, 
-                    self.global_max_threads,
-                    queries,
-                    ground_truth
-                )
+                    queries, 
+                    ground_truth, 
+                    max_workers_per_query
+                ): genome 
+                for genome in batch
+            }
+            
+            for future in as_completed(future_to_genome):
+                genome = future_to_genome[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Genome {genome.id} evaluation failed: {e}")
+                    genome.fitness = -1.0
+                    genome.evaluated = True
 
     def _evaluate_single(
         self, 

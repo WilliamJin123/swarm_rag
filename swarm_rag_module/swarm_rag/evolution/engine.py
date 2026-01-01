@@ -1,5 +1,7 @@
+import os
 import time
 import random
+import pickle
 import numpy as np
 from typing import List, Any
 
@@ -147,14 +149,55 @@ class EvolutionEngine:
                 "best_fitness": current_best.fitness,
                 "avg_fitness": np.mean([g.fitness for g in population]),
                 "best_complexity": current_best.complexity()
-            }
-            
+            }  
             self.tracker.log(gen, train_stats, val_stats)
             self.tracker.print_summary(gen)
+
+            # CHECKPOINTING
+            if (gen % self.config.checkpoint_frequency == 0):
+                self.save_checkpoint(population, best_genome, gen)
 
             # BREED (Skip on last gen)
             if gen < self.config.n_generations - 1:
                 population = self.loop.step(population)
 
+        self.save_checkpoint(population, best_genome, self.config.n_generations - 1)
         self.tracker.plot(save_path=self.config.plot_file)
         return best_genome
+    
+    def save_checkpoint(self, population: List[Genome], best_genome: Genome, generation: int):
+        """Saves the full state of evolution to a pickle file."""
+        state = {
+            "generation": generation,
+            "population": population,
+            "best_genome": best_genome,
+            "random_state": random.getstate(),
+            "np_random_state": np.random.get_state(),
+            "tracker_history": self.tracker.history
+        }
+        
+        # Save to a temporary file first, then rename to avoid corruption if interrupted
+        temp_path = self.config.checkpoint_path + ".tmp"
+        with open(temp_path, "wb") as f:
+            pickle.dump(state, f)
+        os.replace(temp_path, self.config.checkpoint_path)
+        print(f"--> Checkpoint saved to {self.config.checkpoint_path} (Gen {generation})")
+
+    def load_checkpoint(self) -> tuple[int, List[Genome], Genome]:
+        """Loads state from pickle if it exists."""
+        if not os.path.exists(self.config.checkpoint_path):
+            return 0, None, None
+
+        print(f"--> Resuming from checkpoint: {self.config.checkpoint_path}")
+        with open(self.config.checkpoint_path, "rb") as f:
+            state = pickle.load(f)
+
+        # Restore RNG states
+        random.setstate(state["random_state"])
+        np.random.set_state(state["np_random_state"])
+        
+        # Restore Tracker History (so plots don't start from empty)
+        if "tracker_history" in state:
+            self.tracker.history = state["tracker_history"]
+
+        return state["generation"], state["population"], state["best_genome"]

@@ -1,7 +1,7 @@
 import time
 from typing import List
 
-from swarm_rag.core import Heuristics, SwarmRetriever
+from swarm_rag.core import Heuristics, SwarmRetriever, HeuristicRegistry
 from swarm_rag.integrations.stark import StarkInMemoryVectorStore, StarkPreComputedEmbeddingHandler, StarkSKBAdapter
 from swarm_rag.eval import Evaluator, EvalReporter
 from load_stark import load_and_download_embeddings, load_and_download_skb, load_and_download_qa, precompute_stark_adjacency
@@ -62,7 +62,7 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
                 top_k=20,
                 movement_strategies={
                     "semantic": (Heuristics.semantic_similarity, 0.35),  # Higher weight on relevance
-                    "centrality": (graph_store.centrality_heuristic, 0.2),  # Lower weight to reduce hub attraction
+                    "centrality": (HeuristicRegistry.get("stark_centrality"), 0.2),  # Lower weight to reduce hub attraction
                     "diversity": (Heuristics.pheromone_repulsion, 0.4),  # Exploration
                     "jitter": (Heuristics.random_jitter, 0.05),  # Small randomness
                 },

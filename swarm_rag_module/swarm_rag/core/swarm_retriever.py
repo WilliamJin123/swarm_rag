@@ -1,6 +1,6 @@
 import random
 import numpy as np
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Tuple
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -49,9 +49,6 @@ class SwarmRetriever:
         self.embed_fn = embedding_provider
         self.max_workers = max_workers
         self.base_pheromones = defaultdict(float) # 0.0 for unvisited
-
-        # Thread safety
-        self.pheromone_lock = Lock()
         
         # Performance optimizations
         self.cache_neighbors = cache_neighbors
@@ -260,7 +257,9 @@ class SwarmRetriever:
         """
         Core retrieval logic shared between retrieve() and retrieve_batch().
         """        
-        # Normalize
+        # Normalize and Flatten
+        if query_vec.ndim > 1:
+            query_vec = query_vec.flatten()
         query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
 
         movement_funcs = self._resolve_strategy_funcs(movement_strategies, "movement")
@@ -288,10 +287,11 @@ class SwarmRetriever:
 
         # --- TRAVERSAL LOOP ---
         for step in range(steps):
-            # Submit all agent tasks
-            futures = {
-                self.executor.submit(
-                    self._process_agent_step,
+            new_locations = agent_locations.copy()
+            pheromone_updates = {}
+            # Run agents sequentially for this query (Vectorization makes this fast)
+            for i in range(n_agents):
+                result = self._process_agent_step(
                     agent_id=i,
                     current_loc=agent_locations[i],
                     query_vec=query_vec,
@@ -299,27 +299,11 @@ class SwarmRetriever:
                     movement_funcs=movement_funcs,
                     deposit_funcs=deposit_funcs,
                     step=step
-                ): i for i in range(n_agents)
-            }
+                )
 
-            new_locations = agent_locations.copy()
-            pheromone_updates = {}
-            
-            for future in as_completed(futures):
-                agent_id = futures[future]
-                # try:
-                #     result = future.result()
-                #     if result:
-                #         new_locations[agent_id] = result['new_location']
-                #         agent_trajectories[agent_id].append(result['new_location'])
-                #         if result['deposit'] > 0:
-                #             pheromone_updates[result['node_id']] += result['deposit']
-                # except Exception as e:
-                #     print(f"Agent {agent_id} failed: {e}")
-                result = future.result()
                 if result:
-                    new_locations[agent_id] = result['new_location']
-                    agent_trajectories[agent_id].append(result['new_location'])
+                    new_locations[i] = result['new_location']
+                    agent_trajectories[i].append(result['new_location'])
                     deposit = result['deposit']
                     if deposit > 0:
                         node_id = result['node_id']
@@ -328,18 +312,17 @@ class SwarmRetriever:
             # Batch update all agents
             agent_locations = new_locations
         
-        # Batch update pheromones (thread-safe)
-        with self.pheromone_lock:
+            # Batch update pheromones
             # Apply decay
             for k in query_pheromones:
                 query_pheromones[k] *= decay
+
             # Then add new deposits
             for node_id, amount in pheromone_updates.items():
                 query_pheromones[node_id] += amount
             
-    
-        # Parallel ranking
-        return self._parallel_ranking(
+        # Ranking
+        return self._ranking(
             agent_trajectories, 
             query_vec, 
             ranking_funcs, 
@@ -389,71 +372,67 @@ class SwarmRetriever:
         deposit_funcs: List[tuple],
         step: int
     ) -> Optional[Dict]:
-        """Process a single agent's movement in one step."""
+        """Vectorized agent step processing."""
         neighbors = self._get_cached_neighbors(current_loc)
         if not neighbors:
             return None
         if step % 2 == 0:
             print(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
         
-        # Batch fetch vectors for all neighbors
-        neighbor_vectors = self._fetch_vectors_batch(neighbors)
-        if not neighbor_vectors:
+        # Fetch Matrix & IDs
+        candidate_matrix, valid_ids = self._fetch_vectors_batch(neighbors)
+        if len(valid_ids) == 0:
             return None
-        
-        # Calculate scores for all neighbors
-        scores = []
-        valid_neighbors: List[int] = []
+        # Prefetch Vectorization Metadata
+        p_vals = np.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
+        degrees = np.array([len(self._get_cached_neighbors(nid)) for nid in valid_ids])
         
         max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
         
         ctx = HeuristicContext(
             query_vec=query_vec,
-            target_vec=None,  # Will mutate this
-            target_id=None,   # Will mutate this
-            current_id=current_loc,
-            graph=self.graph_store,
-            pheromones=query_pheromones,
+            target_vecs=candidate_matrix,
+            target_ids=valid_ids,
+            pheromone_values=p_vals,
+            node_degrees=degrees,
             max_pheromone=max_pheromone,
+            avg_degree=10.0, # PLACEHOLDER 
             step_index=step,
-            agent_index=agent_id
+            agent_index=agent_id,
+            graph=self.graph_store
         )
 
-        for i, neighbor in enumerate(neighbors):
-            target_vec = neighbor_vectors[i]
-            if target_vec is None: # Check for missing vector
-                continue
-            
-            ctx.target_vec = target_vec
-            ctx.target_id = neighbor
-            
-            total_score = sum(
-                func(ctx) * weight 
-                for func, weight in movement_funcs
-            )
-
-            if len(valid_neighbors) >= 5 and total_score < 0.01:
-                continue
-
-            scores.append(max(total_score, 0.001))
-            valid_neighbors.append(i)
+        # Calculate weighted scores
+        total_scores = np.zeros(len(valid_ids), dtype=np.float32)
+        for func, weight in movement_funcs:
+            scores = func(ctx)
+            total_scores += scores * weight
+        total_scores = np.maximum(total_scores, 0.001)
         
-        if not valid_neighbors:
+        if len(valid_ids) > 5:
+             total_scores[total_scores < 0.01] = 0.0
+             
+        if np.sum(total_scores) == 0:
             return None
-        
-        # Stochastic selection
-        chosen_index: int = random.choices(valid_neighbors, weights=scores, k=1)[0]
-        next_node = neighbors[chosen_index]
-        deposit_target_vec = neighbor_vectors[chosen_index]
+
+        # Selection
+        probs = total_scores / np.sum(total_scores)
+        chosen_idx = np.random.choice(len(valid_ids), p=probs)
+        next_node = valid_ids[chosen_idx]
         
         # Calculate deposit
-        ctx.target_vec = deposit_target_vec
-        ctx.target_id = next_node
+        ctx.target_vecs = candidate_matrix[chosen_idx : chosen_idx+1]
+        ctx.target_ids = [next_node]
+        ctx.pheromone_values = p_vals[chosen_idx : chosen_idx+1]
+        ctx.node_degrees = degrees[chosen_idx : chosen_idx+1]
         
-        deposit_amount = sum(
-        func(ctx) * weight 
-        for func, weight in deposit_funcs
-        )
+        # Summing arrays of shape (1,)
+        deposit_array = np.zeros(1)
+        for func, weight in deposit_funcs:
+             deposit_array += func(ctx) * weight
+
+        # Explicitly extract the float for our python dict
+        deposit_amount = deposit_array.item()
         
         return {
             'new_location': next_node,
@@ -461,7 +440,7 @@ class SwarmRetriever:
             'deposit': deposit_amount
         }
     
-    def _parallel_ranking(
+    def _ranking(
         self, 
         agent_trajectories: List[List[int]], 
         query_vec: np.ndarray,
@@ -475,47 +454,22 @@ class SwarmRetriever:
         vote_counts = Counter(all_visited)
         unique_visited = list(vote_counts.keys())
         
-        # Batch fetch all vectors
-        final_vectors = self._fetch_vectors_batch(unique_visited)
+        vectors_matrix, valid_ids = self._fetch_vectors_batch(unique_visited)
         results = []
 
-        # Avoid thread overhead for small batches
-        if len(unique_visited) < 50:
-            for i, node_id in enumerate(unique_visited):
-                vec = final_vectors[i]
-                score = self._calculate_node_score(
-                    node_id=node_id,
-                    votes=vote_counts[node_id],
-                    query_vec=query_vec,
-                    target_vec=vec,
-                    ranking_funcs=ranking_funcs,
-                    n_agents=n_agents
-                )
-                results.append({'id': node_id, 'score': score})
-        else:
-            futures = {}
-            for i, node_id in enumerate(unique_visited):
-                vec = final_vectors[i]
-                future = self.executor.submit(
-                    self._calculate_node_score,
-                    node_id=node_id,
-                    votes=vote_counts[node_id],
-                    query_vec=query_vec,
-                    target_vec=vec,
-                    ranking_funcs=ranking_funcs,
-                    n_agents=n_agents
-                )
-                futures[future] = node_id
-            
-            for future in as_completed(futures):
-                node_id = futures[future]
-                try:
-                    score = future.result()
-                    results.append({'id': node_id, 'score': score})
-                except Exception as e:
-                    print(f"Failed to score node {node_id}: {e}")
+        # Iterate over valid vectors
+        for i, node_id in enumerate(valid_ids):
+            vec = vectors_matrix[i]
+            score = self._calculate_node_score(
+                node_id=node_id,
+                votes=vote_counts[node_id],
+                query_vec=query_vec,
+                target_vec=vec,
+                ranking_funcs=ranking_funcs,
+                n_agents=n_agents
+            )
+            results.append({'id': node_id, 'score': score})
     
-        # Sort and return top-k
         results.sort(key=lambda x: x['score'], reverse=True)
         return results[:top_k]
 
@@ -534,11 +488,10 @@ class SwarmRetriever:
         
         node_ctx = HeuristicContext(
             query_vec=query_vec,
-            target_vec=target_vec,
-            target_id=node_id,
+            target_vecs=target_vec,
+            target_ids=node_id,
             graph=self.graph_store,
             votes=votes,
-            pheromones={},
             total_agents=n_agents
         )
         
@@ -560,34 +513,47 @@ class SwarmRetriever:
         self.neighbor_cache.set(node_id, neighbors)
         return neighbors
     
-    def _fetch_vectors_batch(self, node_ids: List[int]) -> List[Optional[np.ndarray]]:
-        """Fetches vectors efficiently using the cache, if enabled."""
-        if not self.cache_vectors:  # Check if caching is enabled
-            return self.vector_store.fetch_batch(node_ids)
-
-        result: List[Optional[np.ndarray]] = [None] * len(node_ids)
-        missing_indices = []
-        missing_ids = []
-
-        for i, node_id in enumerate(node_ids):
-            cached_vec = self.doc_cache.get(node_id)
-            if cached_vec is not None:
-                # Cache hit: place the vector at its correct index.
-                result[i] = cached_vec
-            else:
-                # Cache miss: record the index and ID for a batch fetch.
-                missing_indices.append(i)
-                missing_ids.append(node_id)
+    def _fetch_vectors_batch(self, node_ids: List[int]) -> Tuple[np.ndarray, List[int]]:
+        """
+        Fetches vectors efficiently and returns a dense matrix of foundn vectors.
         
-        if missing_ids:
-            fetched_vecs = self.vector_store.fetch_batch(missing_ids)
-            for i, vec in zip(missing_indices, fetched_vecs):
-                if vec is not None:
-                    self.doc_cache.set(node_ids[i], vec)
-                result[i] = vec
+        Returns:
+            matrix: np.ndarray of shape (N_found, Dimension)
+            valid_ids: List[int] of length N_found, mapping rows to node IDs.
+        """
+        if not self.cache_vectors:
+            raw_vecs = self.vector_store.fetch_batch(node_ids)
+        else:
+            raw_vecs = [None] * len(node_ids)
+            missing_indices = []
+            missing_ids = []
 
-        return result
+            for i, node_id in enumerate(node_ids):
+                cached_vec = self.doc_cache.get(node_id)
+                if cached_vec is not None:
+                    raw_vecs[i] = cached_vec
+                else:
+                    missing_indices.append(i)
+                    missing_ids.append(node_id)
             
+            if missing_ids:
+                fetched_vecs = self.vector_store.fetch_batch(missing_ids)
+                for i, vec in zip(missing_indices, fetched_vecs):
+                    if vec is not None:
+                        self.doc_cache.set(node_ids[i], vec)
+                    raw_vecs[i] = vec
+            
+        valid_data = [(nid, v) for nid, v in zip(node_ids, raw_vecs) if v is not None]
+        
+        if not valid_data:
+            return np.array([]), []
+            
+        valid_ids, valid_vecs = zip(*valid_data)
+        
+        # Stack into (N, D) matrix
+        matrix = np.stack(valid_vecs)
+        return matrix, list(valid_ids)
+
     def _get_cached_query_vector(self, query: Any) -> np.ndarray:
         """Gets or computes and caches the query embedding, if enabled."""
         if not self.cache_vectors:

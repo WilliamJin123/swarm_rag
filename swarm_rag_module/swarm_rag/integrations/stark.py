@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
 from ..utils import fail_on_missing_imports, LRUCache
-from ..core import HeuristicContext
+from ..core import HeuristicContext, HeuristicRegistry
 try:
     import torch
     import faiss
@@ -95,13 +95,18 @@ class StarkSKBAdapter(GraphStore):
             return node_id in self.adjacency_dict
         return self.skb.node_info.get(node_id, "") != ""
     
-    def centrality_heuristic(self, ctx :HeuristicContext) -> float:
+    @staticmethod
+    @HeuristicRegistry.register_movement("stark_centrality")
+    def centrality_heuristic(ctx :HeuristicContext) -> np.ndarray:
+        """
+        Vectorized centrality heuristic. 
+        Uses pre-fetched ctx.node_degrees for speed.
+        """
         graph: StarkSKBAdapter = ctx.graph
-        degree = graph.get_degree(ctx.target_id)
-        log_degree = math.log(1 + degree)
+        log_degrees = np.log(1 + ctx.node_degrees)
 
         #Sigmoid normalization
-        normalized = log_degree / (log_degree + graph.avg_log_degree)
+        normalized = log_degrees / (log_degrees + graph.avg_log_degree + 1e-8)
         
         return normalized
         
