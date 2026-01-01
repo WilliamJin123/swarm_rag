@@ -128,7 +128,7 @@ class SwarmRetriever:
         ranking_strategies: Optional[Dict] = None,
         deposit_strategies: Optional[Dict] = None,
         parallel_queries: bool = True,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = 4
     ) -> List[List[Dict]]:
         """
         Hybrid batch retrieval that intelligently chooses between sequential and parallel processing.

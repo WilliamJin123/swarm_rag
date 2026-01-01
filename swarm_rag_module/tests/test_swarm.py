@@ -175,7 +175,7 @@ def test_swarm_retriever():
         steps=2,
         top_k=3,
         parallel_queries=True,
-        max_concurrent_queries=4
+        max_workers=4
     )
     parallel_time = time.time() - start_time
     avg_latency_per_query = parallel_time / len(large_queries)
