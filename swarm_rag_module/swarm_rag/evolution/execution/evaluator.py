@@ -3,7 +3,7 @@ import time
 import numpy as np
 from typing import List, Dict, Any, Protocol, runtime_checkable
 
-from swarm_rag.evolution.types.interfaces import RetrievalBackend
+from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
 from ...core.swarm_retriever import SwarmRetriever
 from ..types.genome import Genome
@@ -21,9 +21,10 @@ class PopulationEvaluator:
         retriever: RetrievalBackend, # SwarmRetriever conforms to this protocol
         evaluator: Evaluator,
         fitness_calc: FitnessCalculator,
-        queries: List[str],
-        ground_truth: List[List[Any]],
-        max_workers: int = 16
+        global_max_threads: int = 16,
+        concurrent_evaluations: int = 4,
+        queries: List[str] = None,
+        ground_truth: List[List[Any]] = None
     ):
         self.retriever = retriever
         self.evaluator = evaluator
@@ -31,34 +32,40 @@ class PopulationEvaluator:
         self.queries = queries
         self.ground_truth = ground_truth
         self.compiler = GenomeCompiler()
-        self.max_workers = max_workers
+        
+        self.concurrent_evaluations = min(concurrent_evaluations, global_max_threads)
+        self.global_max_threads = global_max_threads
 
 
-    def evaluate(self, population: List[Genome], parallel_eval: bool = True) -> None:
+    def evaluate(
+        self, 
+        population: List[Genome],
+        queries: List[str] = None,
+        ground_truth: List[List[Any]] = None
+    ) -> None:
         """
         Evaluates the population in-place.
         """
-        # 1. Filter unevaluated genomes to save compute
+        queries = queries or self.queries
+        ground_truth = ground_truth or self.ground_truth
+        if queries is None or ground_truth is None:
+            raise Exception
+
         unevaluated = [g for g in population if not g.evaluated]
         if not unevaluated:
             return
+        print(f"Evaluating {len(unevaluated)} genomes...")
 
-        print(f"Evaluating {len(unevaluated)} new genomes...")
+        # Calculate Resource Budget
+        actual_concurrency = min(len(unevaluated), self.concurrent_evaluations)
+        threads_per_retriever = max(1, self.global_max_threads // actual_concurrency)
+        print(f"Resource Budget: {actual_concurrency} Concurrent Genomes x {threads_per_retriever} Threads/Retriever")
 
-        if parallel_eval and len(unevaluated) > 1:
-            # Heuristic: Don't run more genomes than we have threads/2
-            # (Reserve threads for the actual retrieval work)
-            concurrent_genomes = min(len(unevaluated), max(1, self.max_workers // 4))
-
-            # Calculate worker budget per genome
-            workers_per_genome = max(1, self.max_workers // concurrent_genomes)
-
-            print(f"Parallel Eval: {concurrent_genomes} genomes at a time (Limit: {workers_per_genome} threads/genome)")
-
-            with ThreadPoolExecutor(max_workers=concurrent_genomes) as executor:
-                # We map the evaluate_single function with the allocated worker budget
+        # Execution
+        if actual_concurrency > 1:
+            with ThreadPoolExecutor(max_workers=actual_concurrency) as executor:
                 futures = {
-                    executor.submit(self._evaluate_single, g, workers_per_genome): g 
+                    executor.submit(self._evaluate_single, g, threads_per_retriever): g 
                     for g in unevaluated
                 }
                 
@@ -72,34 +79,44 @@ class PopulationEvaluator:
                         g.evaluated = True
         else:
             for genome in unevaluated:
-                self._evaluate_single(genome, max_workers=self.max_workers)
+                self._evaluate_single(
+                    genome, 
+                    self.global_max_threads,
+                    queries,
+                    ground_truth
+                )
 
-    def _evaluate_single(self, genome: Genome, max_workers: int):
+    def _evaluate_single(
+        self, 
+        genome: Genome, 
+        max_workers: int,
+        queries: List[str],
+        ground_truth: List[List[Any]]
+    ):
         """
-        Evaluating one by one allows for finer error handling, though
-        batching at the retriever level (as you had) is still possible here.
+        Runs a single evaluation with a strict thread budget.
         """
-        # 1. Compile
+        # Compile
         retriever_kwargs = self.compiler.compile(genome)
 
-        # 2. Run Retrieval (The expensive part)
+        # Run Retrieval
         start_time = time.time()
         
         batch_results = self.retriever.retrieve_batch(
-            queries=self.queries,
-            parallel_queries=True, 
+            queries=queries,
+            max_workers=max_workers,
             **retriever_kwargs
         )
         
         total_latency = time.time() - start_time
-        avg_latency = total_latency / max(1, len(self.queries))
+        avg_latency = total_latency / max(1, len(queries))
 
         # 3. Compute Metrics
         all_query_metrics = []
         for q_idx, retrieved_items in enumerate(batch_results):
             q_metrics = self.evaluator.calculate_metrics(
                 retrieved_nodes=retrieved_items, 
-                ground_truth_ids=self.ground_truth[q_idx], 
+                ground_truth_ids=ground_truth[q_idx], 
                 latency_sec=avg_latency 
             )
             all_query_metrics.append(q_metrics)

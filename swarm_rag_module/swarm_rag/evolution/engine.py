@@ -4,32 +4,38 @@ import numpy as np
 from typing import List, Any
 
 from ..core.swarm_retriever import SwarmRetriever
+from ..core.heuristics import HeuristicRegistry
 from ..eval.metrics import Evaluator
-from .types.genome import Genome
-from .execution.fitness import FitnessCalculator
-from .types.config import EvolutionConfig, EvolutionContext
-from swarm_rag.evolution.types.expressions import ExpressionEvolution
-from swarm_rag.core.heuristics import HeuristicRegistry
 
-# New Components
+from .types.genome import Genome
+from .types.config import EvolutionConfig, EvolutionContext
+from .types.expressions import ExpressionEvolution
+
 from .execution.evaluator import PopulationEvaluator
 from .execution.loop import EvolutionLoop
-
+from .execution.fitness import FitnessCalculator
+from .execution.tracker import ProgressTracker
 class EvolutionEngine:
     def __init__(
         self,
         retriever: SwarmRetriever,
         fitness_calculator: FitnessCalculator,
         evaluator: Evaluator,
-        queries: List[str],
-        ground_truth: List[List[Any]],
+        train_queries: List[str],
+        train_ground_truth: List[List[Any]],
+        val_queries: List[str],
+        val_ground_truth: List[List[Any]],
         config: EvolutionConfig = None,
-        max_workers: int = 16
     ):
         self.config = config or EvolutionConfig()
-        self.max_workers = max_workers
 
-        # 1. Setup Context
+        # Data
+        self.train_queries = train_queries
+        self.train_gt = train_ground_truth
+        self.val_queries = val_queries
+        self.val_gt = val_ground_truth
+
+        # Components
         self.evo_context = EvolutionContext(
             config=self.config,
             generation=0,
@@ -40,13 +46,19 @@ class EvolutionEngine:
                 "deposit": list(HeuristicRegistry.all_deposit().keys()),
             }
         )
-        
-        # 2. Initialize Sub-Systems
         self.population_evaluator = PopulationEvaluator(
-            retriever, evaluator, fitness_calculator, queries, ground_truth,
-            max_workers=self.max_workers
+            retriever=retriever, 
+            evaluator=evaluator, 
+            fitness_calc=fitness_calculator, 
+            queries=train_queries, 
+            ground_truth=train_ground_truth,
+            global_max_threads=self.config.global_max_threads,
+            concurrent_evaluations=self.config.concurrent_evaluations
         )
         self.loop = EvolutionLoop(self.evo_context)
+
+        # Tracking
+        self.tracker = ProgressTracker(log_path=self.config.log_file)
 
     def create_initial_genomes(self) -> List[Genome]:
         """Boots up the first random population."""
@@ -89,32 +101,60 @@ class EvolutionEngine:
             
         return population
 
-    def optimize(self, initial_population: List[Genome] = None, parallel = True) -> Genome:
+    def optimize(self, initial_population: List[Genome] = None) -> Genome:
         population = initial_population or self.create_initial_genomes()
         best_genome: Genome = None
 
         print(f"Starting evolution: {len(population)} agents, {self.config.n_generations} gens.")
-        print(f"Global Concurrency: {self.max_workers} workers")
+        print(f"Global Thread Cap: {self.config.global_max_threads}")
 
         for gen in range(self.config.n_generations):
             t0 = time.time()
             
-            # 1. EVALUATE
-            self.population_evaluator.evaluate(population, parallel_eval=parallel)
+            # EVALUATE
+            self.population_evaluator.evaluate(population)
+            # Should default to training queries and gts
             
-            # 2. STATS
+            # STATS & ELITISM
             population.sort(key=lambda g: g.fitness, reverse=True)
             current_best = population[0]
             
             if best_genome is None or current_best.fitness > best_genome.fitness:
                 best_genome = current_best.copy() # Important: Copy so it doesn't get mutated later
 
-            avg_fit = np.mean([g.fitness for g in population])
-            print(f"Gen {gen+1}: Best={current_best.fitness:.4f} (All Time: {best_genome.fitness:.4f}) | Avg={avg_fit:.4f} | Time={time.time()-t0:.2f}s")
+            # VALIDATION
+            val_stats = None
+            if (gen % self.config.validation_frequency == 0) or (gen == self.config.n_generations - 1):
+                print(f"Running Validation on Gen {gen} Best...")
+                # Create a copy to not mess up the training metrics/state
+                val_candidate = current_best.copy()
+                val_candidate.evaluated = False # Force evaluation
+
+                # Evaluate on VALIDATION set
+                self.population_evaluator.evaluate(
+                    [val_candidate], 
+                    queries=self.val_queries, 
+                    ground_truth=self.val_gt
+                )
+                
+                val_stats = {
+                    "best_fitness": val_candidate.fitness, # This is now the VAL fitness
+                    "recall": val_candidate.metrics.get("Recall", 0.0) # Example metric
+                }
             
-            # 3. BREED (Skip on last gen)
+            # LOGGING
+            train_stats = {
+                "best_fitness": current_best.fitness,
+                "avg_fitness": np.mean([g.fitness for g in population]),
+                "best_complexity": current_best.complexity()
+            }
+            
+            self.tracker.log(gen, train_stats, val_stats)
+            self.tracker.print_summary(gen)
+
+            # BREED (Skip on last gen)
             if gen < self.config.n_generations - 1:
                 population = self.loop.step(population)
 
-        print(f"Optimization Complete. Best Fitness: {best_genome.fitness:.4f}")
+        self.tracker.plot(save_path=self.config.plot_file)
         return best_genome

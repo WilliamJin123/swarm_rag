@@ -7,6 +7,10 @@ class EvolutionConfig:
     """
     Central type-safe configuration for the Evolution Engine.
     """
+    # --- Resource Management ---
+    global_max_threads: int = 16
+    concurrent_evaluations: int = 4
+
     # --- Loop Control ---
     n_generations: int = 20
     population_size: int = 30
@@ -45,6 +49,11 @@ class EvolutionConfig:
 
     # --- Expression Initialization ---
     expr_max_depth: int = 5
+    
+    # --- Validation & Tracking ---
+    validation_frequency: int = 5   # Run validation every N generations
+    log_file: str = "evo_log.jsonl"
+    plot_file: str = "evo_plot.png"
 
 @dataclass
 class EvolutionContext:

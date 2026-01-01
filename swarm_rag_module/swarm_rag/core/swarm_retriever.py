@@ -128,7 +128,7 @@ class SwarmRetriever:
         ranking_strategies: Optional[Dict] = None,
         deposit_strategies: Optional[Dict] = None,
         parallel_queries: bool = True,
-        max_concurrent_queries: Optional[int] = None
+        max_workers: Optional[int] = None
     ) -> List[List[Dict]]:
         """
         Hybrid batch retrieval that intelligently chooses between sequential and parallel processing.
@@ -136,7 +136,7 @@ class SwarmRetriever:
         Args:
             queries: List of queries to process
             parallel_queries: Whether to enable parallel query processing
-            max_concurrent_queries: Max concurrent queries (auto-calculated if None)
+            max_workers: Max concurrent queries (auto-calculated if None)
             Other args: Same as retrieve()
         
         Returns:
@@ -165,12 +165,13 @@ class SwarmRetriever:
         if (
             parallel_queries
             and len(queries) > 2
+            and max_workers > 1
             and self._has_resources_for_parallel()
         ):
-            max_concurrent = max_concurrent_queries or self._calculate_optimal_concurrency()
+            max_concurrent = max_workers or self._calculate_optimal_concurrency()
             return self._retrieve_batch_parallel(
                 query_vectors,
-                max_concurrent_queries=max_concurrent,
+                max_workers=max_concurrent,
                 **params
             )
         else:
@@ -194,7 +195,7 @@ class SwarmRetriever:
     def _retrieve_batch_parallel(
         self,
         query_vectors: List[np.ndarray],
-        max_concurrent_queries: int,
+        max_workers: int,
         **kwargs
     ) -> List[List[Dict]]:
         """Process queries in parallel with controlled concurrency."""
@@ -204,7 +205,7 @@ class SwarmRetriever:
             return idx, result
         
         # Process queries in parallel
-        with ThreadPoolExecutor(max_workers=max_concurrent_queries) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks with their indices
             future_to_index = {
                 executor.submit(process_single_query, i, vec): i
