@@ -2,9 +2,9 @@ import dataclasses
 from typing import Any, Callable
 import random
 
-from swarm_rag.evolution.context import EvolutionContext
-from swarm_rag.evolution.expressions import ExpressionEvolution, ExpressionNode
-from .genome import Genome
+from swarm_rag.evolution.types.config import EvolutionContext
+from swarm_rag.evolution.types.expressions import ExpressionEvolution, ExpressionNode
+from ..types.genome import Genome
 
 class GeneticRegistry:
     _selection_registry = {}

@@ -2,25 +2,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import numpy as np
 from typing import List, Dict, Any, Protocol, runtime_checkable
-from ..eval.metrics import Evaluator
-from ..core.swarm_retriever import SwarmRetriever
-from .genome import Genome
+from ...eval.metrics import Evaluator
+from ...core.swarm_retriever import SwarmRetriever
+from ..types.genome import Genome
 from .fitness import FitnessCalculator
-from .genome import GenomeCompiler
+from ..types.genome import GenomeCompiler
 
 
-@runtime_checkable
-class RetrievalBackend(Protocol):
-    """
-    Protocol defining the contract for any system that can be optimized 
-    by this Evolution Engine.
-    """
-    def retrieve_batch(self, queries: List[str], **kwargs) -> List[List[Any]]:
-        """
-        Must accept queries and arbitrary keyword arguments (the genome),
-        and return a list of results (IDs, Nodes, or Strings) matching the ground truth.
-        """
-        ...
 
 # TO CHANGE: PLUGGING IN CUSTOM EVALUATION FUNCTIONS / PROCESSESES
 class PopulationEvaluator:

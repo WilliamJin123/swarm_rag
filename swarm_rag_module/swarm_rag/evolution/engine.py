@@ -5,15 +5,15 @@ from typing import List, Any
 
 from ..core.swarm_retriever import SwarmRetriever
 from ..eval.metrics import Evaluator
-from .genome import Genome
-from .fitness import FitnessCalculator
-from .context import EvolutionConfig, EvolutionContext
-from swarm_rag.evolution.expressions import ExpressionEvolution
+from .types.genome import Genome
+from .execution.fitness import FitnessCalculator
+from .types.config import EvolutionConfig, EvolutionContext
+from swarm_rag.evolution.types.expressions import ExpressionEvolution
 from swarm_rag.core.heuristics import HeuristicRegistry
 
 # New Components
-from .population_eval import PopulationEvaluator
-from .loop import EvolutionLoop
+from .execution.evaluator import PopulationEvaluator
+from .execution.loop import EvolutionLoop
 
 class EvolutionEngine:
     def __init__(

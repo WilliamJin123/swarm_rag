@@ -1,14 +1,9 @@
-from .expressions import ExpressionEvolution, ExpressionNode
-from .genome import Genome
-from .engine import EvolutionOptimizer
-from .genetic_strategies import GeneticRegistry, GeneticStrategies
-
+from .engine import EvolutionEngine
+# re-export the most important types for convenience
+from .types import EvolutionConfig, Genome
 
 __all__ = [
-    "ExpressionEvolution",
-    "ExpressionNode",
-    "Genome",
-    "EvolutionOptimizer",
-    "GeneticRegistry",
-    "GeneticStrategies"
+    "EvolutionEngine",
+    "EvolutionConfig",
+    "Genome"
 ]

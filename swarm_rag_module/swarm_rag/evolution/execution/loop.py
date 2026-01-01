@@ -1,8 +1,8 @@
 import random
 from typing import List
-from .genome import Genome
-from .context import EvolutionContext
-from .genetic_strategies import GeneticRegistry
+from ..types.genome import Genome
+from ..types.config import EvolutionContext
+from .strategies import GeneticRegistry
 
 class EvolutionLoop:
     """

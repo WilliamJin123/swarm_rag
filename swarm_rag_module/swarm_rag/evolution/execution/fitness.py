@@ -1,6 +1,6 @@
 from typing import Dict
 
-from swarm_rag.evolution.genome import Genome
+from swarm_rag.evolution.types.genome import Genome
 
 # TO CHANGE: MORE CUSTOMIZATION and better way of passing in weights
 class FitnessCalculator:

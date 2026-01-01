@@ -1,7 +1,7 @@
 from typing import Dict, List, Callable, Any, Set
 from dataclasses import dataclass, field
 from .expressions import ExpressionNode
-from ..core.heuristics import HeuristicContext, HeuristicRegistry
+from ...core.heuristics import HeuristicContext, HeuristicRegistry
 from .expressions import ExpressionNode
 
 @dataclass 
