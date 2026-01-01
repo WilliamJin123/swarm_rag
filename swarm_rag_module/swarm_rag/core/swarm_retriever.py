@@ -37,19 +37,21 @@ class SwarmRetriever:
         vector_store: VectorStore, 
         graph_store: GraphStore, 
         embedding_provider: EmbeddingProvider,
-        max_workers: int = 16,
+        deterministic=False, seed=0,
         cache_neighbors: bool = True,
         neighbor_cache_size: int = 5000,
         cache_vectors: bool = True,
         doc_cache_size: int = 50000,
-        query_cache_size: int = 1000
+        query_cache_size: int = 1000,
     ):
         self.vector_store = vector_store
         self.graph_store = graph_store
         self.embed_fn = embedding_provider
-        self.max_workers = max_workers
         self.base_pheromones = defaultdict(float) # 0.0 for unvisited
         
+        self.deterministic = deterministic
+        self.seed = seed
+
         # Performance optimizations
         self.cache_neighbors = cache_neighbors
         if self.cache_neighbors:
@@ -59,18 +61,6 @@ class SwarmRetriever:
         if self.cache_vectors:
             self.doc_cache = LRUCache(doc_cache_size)
             self.query_cache = LRUCache(query_cache_size)
-        
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def close(self):
-        """Shuts down the internal thread pool executor."""
-        self.executor.shutdown(wait=True)
 
     def _resolve_params(self, **user_params) -> Dict:
         """
@@ -88,6 +78,8 @@ class SwarmRetriever:
     def retrieve(
             self, 
             query: Any, # Can be string or ID depending on provider
+            deterministic: Optional[bool] = None,
+            seed: Optional[int] = None,
             n_agents: Optional[int] = None, 
             steps: Optional[int] = None,
             decay: Optional[float] = None,
@@ -98,6 +90,9 @@ class SwarmRetriever:
             ranking_strategies: Optional[Dict] = None,
             deposit_strategies: Optional[Dict] = None
         ) -> List[Dict]:
+            current_deterministic = deterministic if deterministic is not None else self.deterministic
+            current_seed = seed if seed is not None else self.seed
+
             params = self._resolve_params(
                 n_agents=n_agents,
                 steps=steps,
@@ -110,11 +105,17 @@ class SwarmRetriever:
                 deposit_strategies=deposit_strategies
             )
             query_vec = self._get_cached_query_vector(query)
-            return self._retrieve(query_vec=query_vec, **params)
+            return self._retrieve(
+                query_vec=query_vec, 
+                deterministic=current_deterministic,
+                seed=current_seed,
+                **params)
 
     def retrieve_batch(
         self,
         queries: List[Any],
+        deterministic: Optional[bool] = None,
+        seed: Optional[int] = None,
         n_agents: Optional[int] = None,
         steps: Optional[int] = None,
         decay: Optional[float] = None,
@@ -143,6 +144,9 @@ class SwarmRetriever:
         if not queries:
             return []
         
+        current_deterministic = deterministic if deterministic is not None else self.deterministic
+        current_seed = seed if seed is not None else self.seed
+
         params = self._resolve_params(
             n_agents=n_agents,
             steps=steps,
@@ -169,36 +173,50 @@ class SwarmRetriever:
             return self._retrieve_batch_parallel(
                 query_vectors,
                 max_workers=max_concurrent,
+                deterministic=current_deterministic,
+                seed=current_seed,
                 **params
             )
         else:
             return self._retrieve_batch_sequential(
                 query_vectors,
+                deterministic=current_deterministic,
+                seed=current_seed,
                 **params
             )
 
     def _retrieve_batch_sequential(
         self,
         query_vectors: List[np.ndarray],
+        deterministic: bool,
+        seed: int,
         **kwargs
     ) -> List[List[Dict]]:
         """Process queries sequentially."""
         results = []
         for vec in query_vectors:
-            result = self._retrieve(query_vec=vec, **kwargs)
+            result = self._retrieve(
+                query_vec=vec, 
+                deterministic=deterministic, 
+                seed=seed, 
+                **kwargs
+            )
             results.append(result)
         return results
 
     def _retrieve_batch_parallel(
         self,
         query_vectors: List[np.ndarray],
+        deterministic: bool,
+        seed: int,
         max_workers: int,
         **kwargs
     ) -> List[List[Dict]]:
         """Process queries in parallel with controlled concurrency."""
         
         def process_single_query(idx: int, vec: np.ndarray) -> tuple[int, List[Dict]]:
-            result = self._retrieve(query_vec=vec, **kwargs)
+            unique_seed = seed + idx
+            result = self._retrieve(query_vec=vec, deterministic=deterministic, seed=unique_seed, **kwargs)
             return idx, result
         
         # Process queries in parallel
@@ -244,6 +262,8 @@ class SwarmRetriever:
     def _retrieve(
         self,
         query_vec: np.ndarray,
+        deterministic: bool,
+        seed: int,
         n_agents: int,
         steps: int,
         decay: float,
@@ -256,10 +276,16 @@ class SwarmRetriever:
     ) -> List[Dict]:
         """
         Core retrieval logic shared between retrieve() and retrieve_batch().
-        """        
+        """  
+        if deterministic:
+            py_rng = random.Random(seed)
+            np_rng = np.random.default_rng(seed)
+        else:
+            py_rng = random
+            np_rng = np.random
+
         # Normalize and Flatten
-        if query_vec.ndim > 1:
-            query_vec = query_vec.flatten()
+        query_vec = query_vec.flatten()
         query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
 
         movement_funcs = self._resolve_strategy_funcs(movement_strategies, "movement")
@@ -275,13 +301,14 @@ class SwarmRetriever:
         drop_zone = valid_pool[:start_subset]
         
         if self.cache_neighbors:
+            # Use a thread pool to warm up the neighbor cache for the initial drop zone
             with ThreadPoolExecutor(max_workers=min(4, len(drop_zone))) as ex:
                 list(ex.map(self._get_cached_neighbors, drop_zone))
 
         # Spawn Agents
         weights = [1.0 + 0.05 * (start_subset - i - 1)  for i in range(start_subset)]
         # Slightly higher weight on the most relevant for drops (0.05 inc)
-        agent_locations = random.choices(drop_zone, weights=weights, k=n_agents)
+        agent_locations = py_rng.choices(drop_zone, weights=weights, k=n_agents)
         agent_trajectories = [[loc] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
 
@@ -289,6 +316,7 @@ class SwarmRetriever:
         for step in range(steps):
             new_locations = agent_locations.copy()
             pheromone_updates = {}
+            max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
             # Run agents sequentially for this query (Vectorization makes this fast)
             for i in range(n_agents):
                 result = self._process_agent_step(
@@ -298,7 +326,9 @@ class SwarmRetriever:
                     query_pheromones=query_pheromones,
                     movement_funcs=movement_funcs,
                     deposit_funcs=deposit_funcs,
-                    step=step
+                    step=step,
+                    max_pheromone=max_pheromone,
+                    np_rng=np_rng
                 )
 
                 if result:
@@ -370,7 +400,9 @@ class SwarmRetriever:
         query_pheromones: Dict,
         movement_funcs: List[tuple],
         deposit_funcs: List[tuple],
-        step: int
+        step: int,
+        max_pheromone: float,
+        np_rng: np.random.Generator
     ) -> Optional[Dict]:
         """Vectorized agent step processing."""
         neighbors = self._get_cached_neighbors(current_loc)
@@ -387,8 +419,9 @@ class SwarmRetriever:
         p_vals = np.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
         degrees = np.array([len(self._get_cached_neighbors(nid)) for nid in valid_ids])
         
-        max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
-        
+        # NOTE: avg_degree is a placeholder. A more accurate value could be calculated from the graph statistics once and stored.
+        avg_degree_placeholder = 10.0
+
         ctx = HeuristicContext(
             query_vec=query_vec,
             target_vecs=candidate_matrix,
@@ -396,7 +429,7 @@ class SwarmRetriever:
             pheromone_values=p_vals,
             node_degrees=degrees,
             max_pheromone=max_pheromone,
-            avg_degree=10.0, # PLACEHOLDER 
+            avg_degree=avg_degree_placeholder,
             step_index=step,
             agent_index=agent_id,
             graph=self.graph_store
@@ -417,7 +450,7 @@ class SwarmRetriever:
 
         # Selection
         probs = total_scores / np.sum(total_scores)
-        chosen_idx = np.random.choice(len(valid_ids), p=probs)
+        chosen_idx = np_rng.choice(len(valid_ids), p=probs)
         next_node = valid_ids[chosen_idx]
         
         # Calculate deposit
