@@ -1,6 +1,7 @@
 from typing import Callable, Union, List, Dict, Tuple
 from dataclasses import dataclass, field
 import math
+import numpy as np
 import random
 
 @dataclass
@@ -13,13 +14,15 @@ class ExpressionNode:
     value: Union[str, float]  # operator name, function name, feature name, or constant
     children: List['ExpressionNode'] = field(default_factory=list)
 
-    def evaluate(self, features: Dict[str, float]) -> float:
+    def evaluate(self, features: Dict[str, np.ndarray]) -> Union[float, np.ndarray]:
         """Recursively evaluate the expression tree."""
         if self.type == 'const':
             return float(self.value)
         
         elif self.type == 'feature':
-            return features.get(self.value, 0.0)
+            # Returns an Array (N,) or scalar depending on input
+            val = features.get(self.value, 0.0)
+            return val
         
         elif self.type == 'func':
             if not self.children:
@@ -27,22 +30,34 @@ class ExpressionNode:
             arg = self.children[0].evaluate(features)
             
             if self.value == 'square':
-                return arg ** 2
+                return np.square(arg)
             elif self.value == 'sqrt':
-                return math.sqrt(abs(arg))
+                return np.sqrt(np.abs(arg))
             elif self.value == 'exp':
-                return math.exp(min(arg, 10))  # Prevent overflow
+                return np.exp(np.minimum(arg, 10))  # Prevent overflow
             elif self.value == 'log':
-                return math.log(abs(arg) + 1e-8)
+                return np.log(np.abs(arg) + 1e-8)
             elif self.value == 'abs':
-                return abs(arg)
-            else:
-                return arg
+                return np.abs(arg)
+            elif self.value == 'sin':
+                return np.sin(arg)
+            elif self.value == 'tanh':
+                return np.tanh(arg)
+            elif self.value == 'sigmoid':
+                # Stable sigmoid
+                return 1.0 / (1.0 + np.exp(-np.clip(arg, -10, 10)))
+            
+            return 0.0
         
         elif self.type == 'op':
-            if len(self.children) < 2:
+            if not self.children:
                 return 0.0
             left = self.children[0].evaluate(features)
+            if len(self.children) == 1:
+                if self.value == '-':
+                    return -left
+                return left
+            
             right = self.children[1].evaluate(features)
             
             if self.value == '+':
@@ -52,13 +67,12 @@ class ExpressionNode:
             elif self.value == '*':
                 return left * right
             elif self.value == '/':
-                return left / (right + 1e-8)
+                denom = np.where(right == 0, 1e-8, right) if isinstance(right, np.ndarray) else (right if right != 0 else 1e-8)
+                return left / denom
             elif self.value == 'max':
-                return max(left, right)
+                return np.maximum(left, right)
             elif self.value == 'min':
-                return min(left, right)
-            else:
-                return left
+                return np.minimum(left, right)
         
         return 0.0
     
@@ -107,7 +121,8 @@ class ExpressionNode:
             return str(self.value)
         
         elif self.type == 'feature':
-            return f"features['{self.value}']"
+            # e.g., "node.degree" -> "node_degree"
+            return str(self.value).replace(".", "_").replace(" ", "_").replace("-", "_")
         
         elif self.type == 'func':
             if not self.children:
@@ -115,21 +130,30 @@ class ExpressionNode:
             child_code = self.children[0].to_code_string()
             
             if self.value == 'square':
-                return f"({child_code} ** 2)"
+                return f"(np.square{child_code})"
             elif self.value == 'sqrt':
-                return f"math.sqrt(abs({child_code}))"
+                return f"np.sqrt(np.abs({child_code}))"
             elif self.value == 'exp':
-                return f"math.exp(min({child_code}, 10))"
+                return f"np.exp(np.minimum({child_code}, 10))"
             elif self.value == 'log':
-                return f"math.log(abs({child_code}) + 1e-8)"
+                return f"np.log(np.abs({child_code}) + 1e-8)"
             elif self.value == 'abs':
-                return f"abs({child_code})"
+                return f"np.abs({child_code})"
+            elif self.value == 'sin':
+                return f"np.sin({child_code})"
+            elif self.value == 'tanh':
+                return f"np.tanh({child_code})"
+            elif self.value == 'sigmoid':
+                return f"(1.0 / (1.0 + np.exp(-np.clip({child_code}, -10, 10))))"
             else:
                 return child_code
         
         elif self.type == 'op':
             if len(self.children) < 2:
+                if len(self.children) == 1 and self.value == '-':
+                    return f"(-{self.children[0].to_code_string()})"
                 return "0.0"
+            
             left_code = self.children[0].to_code_string()
             right_code = self.children[1].to_code_string()
             
@@ -140,39 +164,38 @@ class ExpressionNode:
             elif self.value == '*':
                 return f"({left_code} * {right_code})"
             elif self.value == '/':
-                # Protected division to prevent ZeroDivisionError
                 return f"({left_code} / ({right_code} + 1e-8))"
             elif self.value == 'max':
-                return f"max({left_code}, {right_code})"
+                return f"np.maximum({left_code}, {right_code})"
             elif self.value == 'min':
-                return f"min({left_code}, {right_code})"
+                return f"np.minimum({left_code}, {right_code})"
             else:
                 return left_code
         
         return "0.0"
     
-    def compile(self) -> Callable[[Dict[str, float]], float]:
+    def compile(self, arg_names: List[str]) -> Callable:
         """
-        Compiles the expression tree into a fast-executing lambda function.
-        This is a one-time operation that creates a reusable Python function.
+        Compiles the tree into a function that accepts specific positional arguments.
+        Args:
+            arg_names: A list of strings defining the function signature. 
+                       e.g., ['degree', 'pheromone']
         """
         code_string = self.to_code_string()
-        lambda_string = f"lambda features: {code_string}"
+        args_str = ", ".join(arg_names)
+        lambda_string = f"lambda {args_str}: {code_string}"
         
         try:
-            # Provide the 'math' module to the eval context so functions like sqrt can be used.
-            compiled_func = eval(lambda_string, {"math": math}, {})
-            return compiled_func
+            # Inject np
+            return eval(lambda_string, {"np": np}, {})
         except Exception as e:
-            # Fallback to the slow recursive evaluation if compilation fails for any reason.
-            print(f"Warning: Could not compile expression '{self.to_string()}'. Error: {e}. Using slow evaluation.")
-            return lambda features: self.evaluate(features)
-
+            print(f"Compilation Failed: {lambda_string}")
+            raise e
 class ExpressionEvolution:
     """Genetic operations on expression trees."""
     
     BINARY_OPS = ['+', '-', '*', '/', 'max', 'min']
-    UNARY_FUNCS = ['square', 'sqrt', 'exp', 'log', 'abs']
+    UNARY_FUNCS = ['square', 'sqrt', 'exp', 'log', 'abs', 'sin', 'tanh', 'sigmoid']
     
     @staticmethod
     def random_tree(
