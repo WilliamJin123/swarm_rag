@@ -1,5 +1,5 @@
 from typing import List
-from ..interfaces.base import EmbeddingProvider
+from ..interfaces.abstract_classes import EmbeddingProvider
 from ..utils import fail_on_missing_imports
 import numpy as np
 

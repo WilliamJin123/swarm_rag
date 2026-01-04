@@ -9,7 +9,7 @@ import psutil
 from ..utils import LRUCache
 
 from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
-from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
+from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 
 class SwarmRetriever:
     _DEFAULT_PARAMS = dict(

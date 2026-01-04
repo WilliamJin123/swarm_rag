@@ -61,7 +61,7 @@ def test_first_10_questions(dataset_names: List[str]) -> None:
                 top_k=20,
                 movement_strategies={
                     "semantic": (Heuristics.semantic_similarity, 0.35),  # Higher weight on relevance
-                    "centrality": (HeuristicRegistry.get("stark_centrality"), 0.2),  # Lower weight to reduce hub attraction
+                    "centrality": (HeuristicRegistry.get_movement("stark_centrality"), 0.2),  # Lower weight to reduce hub attraction
                     "diversity": (Heuristics.pheromone_repulsion, 0.4),  # Exploration
                     "jitter": (Heuristics.random_jitter, 0.05),  # Small randomness
                 },

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from swarm_rag.evolution.types.genome import Genome, SwarmParams, DEFAULT_PARAMS
 from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfigDict, DEFAULT_EVO_CONFIG
-from swarm_rag.evolution.strategies import GeneticStrategies
+from swarm_rag.evolution.execution.strategies import GeneticStrategies
 from swarm_rag.evolution.execution.fitness import FitnessResult
 
 # Helper to make dummy genomes

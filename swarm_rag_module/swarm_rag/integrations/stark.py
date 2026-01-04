@@ -1,7 +1,8 @@
 import math
 from typing import Any, Dict, List, Optional
 import numpy as np
-from ..interfaces.base import VectorStore, GraphStore, EmbeddingProvider
+from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
+from ..interfaces.enums import HeuristicKey
 from ..utils import fail_on_missing_imports, LRUCache
 from ..core import HeuristicContext, HeuristicRegistry
 try:
@@ -96,7 +97,7 @@ class StarkSKBAdapter(GraphStore):
         return self.skb.node_info.get(node_id, "") != ""
     
     @staticmethod
-    @HeuristicRegistry.register_movement("stark_centrality")
+    @HeuristicRegistry.register_movement(HeuristicKey.STARK_CENTRALITY)
     def centrality_heuristic(ctx :HeuristicContext) -> np.ndarray:
         """
         Vectorized centrality heuristic. 

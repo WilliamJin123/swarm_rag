@@ -1,91 +1,68 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable, ClassVar
 import numpy as np
 import math
 from dataclasses import dataclass, field
-from ..interfaces.base import GraphStore
+
+from ..interfaces.enums import HeuristicKey
+from ..interfaces.registry import _MovementRegistry, _RankingRegistry, _DepositRegistry
+from ..interfaces.abstract_classes import GraphStore
+
 
 
 class HeuristicRegistry:
-    _movement_registry = {}
-    _ranking_registry = {}
-    _deposit_registry = {}
+    """
+    Public API that mirrors the original three-registry design but re-uses
+    the generic implementation from `_BaseRegistry`.
+    """
+    # expose the three concrete registries as class attributes
+    movement = _MovementRegistry
+    ranking  = _RankingRegistry
+    deposit  = _DepositRegistry
+
+    # Registration helpers – keep the original method names.
+    @classmethod
+    def register_movement(cls, name: "HeuristicKey"):
+        """Decorator (or direct call) for a movement heuristic."""
+        return cls.movement.register(name)
 
     @classmethod
-    def register_movement(cls, name: str):
-        """Decorator for movement heuristics."""
-        def decorator(fn):
-            cls._movement_registry[name] = fn
-            return fn
-        return decorator
+    def register_ranking(cls, name: "HeuristicKey"):
+        """Decorator (or direct call) for a ranking heuristic."""
+        return cls.ranking.register(name)
 
     @classmethod
-    def register_ranking(cls, name: str):
-        """Decorator for ranking heuristics."""
-        def decorator(fn):
-            cls._ranking_registry[name] = fn
-            return fn
-        return decorator
+    def register_deposit(cls, name: "HeuristicKey"):
+        """Decorator (or direct call) for a deposit heuristic."""
+        return cls.deposit.register(name)
 
     @classmethod
-    def register_deposit(cls, name: str):
-        """Decorator for deposit heuristics."""
-        def decorator(fn):
-            cls._deposit_registry[name] = fn
-            return fn
-        return decorator
+    def get_movement(cls, name: Union["HeuristicKey", str]):
+        return cls.movement.get(name)
 
     @classmethod
-    def get_movement(cls, name: str):
-        """Retrieve a movement heuristic."""
-        return cls._movement_registry[name]
+    def get_ranking(cls, name: Union["HeuristicKey", str]):
+        return cls.ranking.get(name)
 
     @classmethod
-    def get_ranking(cls, name: str):
-        """Retrieve a ranking heuristic."""
-        return cls._ranking_registry[name]
-
-    @classmethod
-    def get_deposit(cls, name: str):
-        """Retrieve a deposit heuristic."""
-        return cls._deposit_registry[name]
+    def get_deposit(cls, name: Union["HeuristicKey", str]):
+        return cls.deposit.get(name)
 
     @classmethod
     def all_movement(cls):
-        """Get all movement heuristics."""
-        return cls._movement_registry
+        return cls.movement.all()
 
     @classmethod
     def all_ranking(cls):
-        """Get all ranking heuristics."""
-        return cls._ranking_registry
+        return cls.ranking.all()
 
     @classmethod
     def all_deposit(cls):
-        """Get all deposit heuristics."""
-        return cls._deposit_registry
-    
+        return cls.deposit.all()
+
     @classmethod
     def all(cls):
-        return {
-            **cls._movement_registry,
-            **cls._deposit_registry,
-            **cls._ranking_registry
-        }
-    
-    @classmethod
-    def get(cls, name: str):
-        """
-        Allows EvolutionEngine to find a function by name 
-        without knowing which specific registry it lives in.
-        """
-        if name in cls._movement_registry:
-            return cls._movement_registry[name]
-        if name in cls._ranking_registry:
-            return cls._ranking_registry[name]
-        if name in cls._deposit_registry:
-            return cls._deposit_registry[name]
-        
-        raise ValueError(f"Heuristic '{name}' not found in any registry.")
+        """Merge the three dictionaries into one view."""
+        return {**cls.movement.all(), **cls.ranking.all(), **cls.deposit.all()}
 
 @dataclass(slots=True)
 class HeuristicContext:
@@ -116,7 +93,7 @@ class Heuristics:
     # --- MOVEMENT HEURISTICS ---
     
     @staticmethod
-    @HeuristicRegistry.register_movement("semantic_similarity")
+    @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY)
     def semantic_similarity(ctx: HeuristicContext) -> np.ndarray:
         """
         NORMALIZED Cosine Similarity: Maps [-1, 1] to [0, 1].
@@ -129,7 +106,7 @@ class Heuristics:
         return (scores + 1.0) / 2.0
 
     @staticmethod
-    @HeuristicRegistry.register_movement("semantic_similarity_unnormalized")
+    @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY_UNNORMALIZED)
     def semantic_similarity_unnormalized(ctx: HeuristicContext) -> np.ndarray:
         """
         RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
@@ -137,7 +114,7 @@ class Heuristics:
         return np.dot(ctx.target_vecs, ctx.query_vec)
     
     @staticmethod
-    @HeuristicRegistry.register_movement("node_centrality")
+    @HeuristicRegistry.register_movement(HeuristicKey.NODE_CENTRALITY)
     def node_centrality(ctx: HeuristicContext) -> np.ndarray:
         """
         Normalized centrality that works with any GraphStore.
@@ -151,7 +128,7 @@ class Heuristics:
         return log_degree / (log_degree + log_avg + 1e-8)
 
     @staticmethod
-    @HeuristicRegistry.register_movement("pheromone_repulsion")
+    @HeuristicRegistry.register_movement(HeuristicKey.PHEROMONE_REPULSION)
     def pheromone_repulsion(ctx: HeuristicContext) -> np.ndarray:
         """
         Inverse Pheromone frequency. 
@@ -161,7 +138,7 @@ class Heuristics:
         return 1.0 - (ctx.pheromone_values / max_p)
 
     @staticmethod
-    @HeuristicRegistry.register_movement("random_jitter")
+    @HeuristicRegistry.register_movement(HeuristicKey.RANDOM_JITTER)
     def random_jitter(ctx: HeuristicContext) -> np.ndarray:
         """Adds pure chaos to break loops."""
         count = len(ctx.target_ids) if ctx.target_ids is not None else 1
@@ -170,14 +147,14 @@ class Heuristics:
     # --- RANKING HEURISTICS (Final Consensus) ---
 
     @staticmethod
-    @HeuristicRegistry.register_ranking("percentage_visited")
+    @HeuristicRegistry.register_ranking(HeuristicKey.PERCENTAGE_VISITED)
     def percentage_visited(ctx: HeuristicContext) -> float:
         """Percentage of total agents that visited this node."""
         if ctx.total_agents == 0: return 0.0
         return ctx.votes / ctx.total_agents
     
     @staticmethod
-    @HeuristicRegistry.register_ranking("semantic_rank")
+    @HeuristicRegistry.register_ranking(HeuristicKey.SEMANTIC_RANK)
     def semantic_rank(ctx: HeuristicContext) -> float:
         """
         RAW semantic similarity for final ranking.
@@ -186,66 +163,22 @@ class Heuristics:
         val = Heuristics.semantic_similarity_unnormalized(ctx)
         return val.item() if isinstance(val, np.ndarray) else val
 
-    # @staticmethod
-    # def edge_type_preference(
-    #     ctx: HeuristicContext,
-    #     edge_type_dict: Optional[Dict[Any, Any]] = None,
-    #     edge_weights: Optional[Dict[Any, float]] = None,
-    #     default_weight: float = 0.5
-    # ) -> float:
-    #     """
-    #     Weights neighbors based on the edge type connecting current node to target.
-    #     Useful for STARK where edge types indicate relationship types.
-        
-    #     Args:
-    #         edge_type_dict: Dict mapping edge_type_id -> edge_type_name
-    #                     e.g. {0: "treats", 1: "metabolizes", 2: "indicates"}
-    #         edge_weights: Dict mapping edge_type_name -> weight score [0, 1]
-    #                     e.g. {"treats": 1.0, "metabolizes": 0.1, "indicates": 0.8}
-    #         default_weight: Weight for edge types not in edge_weights dict (default 0.5)
-        
-    #     Returns:
-    #         Weight in [0, 1] based on edge type relevance
-        
-    #     Example usage:
-    #         # User provides edge type mapping
-    #         edge_type_dict = {0: "treats", 1: "metabolizes", 2: "indicates"}
-            
-    #         # LLM determines relevant edges ONCE per query
-    #         edge_weights = {"treats": 1.0, "indicates": 0.8, "metabolizes": 0.0}
-    #     """
-    #     if edge_type_dict is None or edge_weights is None:
-    #         return default_weight
-    #     edge_type_id = ctx.extra_data.get('edge_type_id')
-    
-    #     if edge_type_id is None:
-    #         return default_weight
-        
-    #     # Map edge type ID to name
-    #     edge_type_name = edge_type_dict.get(edge_type_id)
-    
-    #     if edge_type_name is None:
-    #         return default_weight
-        
-    #     # Return weight for this edge type
-    #     return edge_weights.get(edge_type_name, default_weight)
-
     # --- DEPOSIT HEURISTICS ---
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("flat")
+    @HeuristicRegistry.register_deposit(HeuristicKey.FLAT)
     def deposit_flat(ctx: HeuristicContext) -> np.ndarray:
         """Returns array of 1.0s matching input size."""
         return np.ones_like(ctx.pheromone_values)
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("hub")
+    @HeuristicRegistry.register_deposit(HeuristicKey.HUB)
     def deposit_hub(ctx: HeuristicContext) -> np.ndarray:
         """Hubs get more pheromones."""
         return Heuristics.node_centrality(ctx)
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("semantic")
+    @HeuristicRegistry.register_deposit(HeuristicKey.SEMANTIC)
     def deposit_semantic(ctx: HeuristicContext) -> np.ndarray:
         """
         Semantic-weighted deposit using NORMALIZED similarity.
@@ -255,7 +188,7 @@ class Heuristics:
         return np.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0, 0.0)
 
     @staticmethod
-    @HeuristicRegistry.register_deposit("semantic_unnormalized")
+    @HeuristicRegistry.register_deposit(HeuristicKey.SEMANTIC_UNNORMALIZED)
     def deposit_semantic_unnormalized(ctx: HeuristicContext) -> np.ndarray:
         """
         Alternative: Uses unnormalized similarity and clamps to [0, 1].
@@ -267,7 +200,7 @@ class Heuristics:
         return np.maximum(0.0, sim)
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("exploration_bonus")
+    @HeuristicRegistry.register_deposit(HeuristicKey.EXPLORATION_BONUS)
     def deposit_exploration_bonus(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,
@@ -293,7 +226,7 @@ class Heuristics:
         return base_deposit * multiplier
     
     @staticmethod
-    @HeuristicRegistry.register_deposit("collaborative_amp")
+    @HeuristicRegistry.register_deposit(HeuristicKey.COLLABORATIVE_AMP)
     def deposit_collaborative_amplification(
         ctx: HeuristicContext,
         base_deposit: float = 1.0,

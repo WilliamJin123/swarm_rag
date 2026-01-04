@@ -1,79 +1,62 @@
 
-from typing import Callable
+from typing import Callable, ClassVar, Dict
 import random
 import numpy as np
 
-from swarm_rag.evolution.types.config import EvolutionContext
-from swarm_rag.evolution.types.expressions import ExpressionEvolution
+from ..types.config import EvolutionContext
+from ..types.expressions import ExpressionEvolution
+from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry
+from ...interfaces.enums import GeneticKey
 from ..types.genome import Genome
 
 class GeneticRegistry:
-    _selection_registry = {}
-    _crossover_registry = {}
-    _mutation_registry = {}
+    selection = _SelectionRegistry
+    crossover = _CrossoverRegistry
+    mutation  = _MutationRegistry
 
     @classmethod
-    def register_selection(cls, name: str):
-        def decorator(fn):
-            cls._selection_registry[name] = fn
-            return fn
-        return decorator
+    def register_selection(cls, name: "GeneticKey"):
+        return cls.selection.register(name)
 
     @classmethod
-    def register_crossover(cls, name: str):
-        def decorator(fn):
-            cls._crossover_registry[name] = fn
-            return fn
-        return decorator
+    def register_crossover(cls, name: "GeneticKey"):
+        return cls.crossover.register(name)
 
     @classmethod
-    def register_mutation(cls, name: str):
-        def decorator(fn):
-            cls._mutation_registry[name] = fn
-            return fn
-        return decorator
+    def register_mutation(cls, name: "GeneticKey"):
+        return cls.mutation.register(name)
 
     @classmethod
-    def get_selection(cls, name: str) -> Callable[..., Genome]:
-        return cls._selection_registry[name]
+    def get_selection(cls, name: "GeneticKey" | str):
+        return cls.selection.get(name)
 
     @classmethod
-    def get_crossover(cls, name: str) -> Callable[..., Genome]:
-        return cls._crossover_registry[name]
+    def get_crossover(cls, name: "GeneticKey" | str):
+        return cls.crossover.get(name)
 
     @classmethod
-    def get_mutation(cls, name: str) -> Callable[..., Genome]:
-        return cls._mutation_registry[name]
-    
-    @classmethod
-    def all_selection(cls) -> dict[str, Callable[..., Genome]]:
-        """
-        Return the complete selection registry.
-        """
-        return cls._selection_registry
+    def get_mutation(cls, name: "GeneticKey" | str):
+        return cls.mutation.get(name)
 
     @classmethod
-    def all_crossover(cls) -> dict[str, Callable[..., Genome]]:
-        """
-        Return the complete crossover registry.
-        """
-        return cls._crossover_registry
+    def all_selection(cls):
+        return cls.selection.all()
 
     @classmethod
-    def all_mutation(cls) -> dict[str, Callable[..., Genome]]:
-        """
-        Return the complete mutation registry.
-        """
-        return cls._mutation_registry
-    
+    def all_crossover(cls):
+        return cls.crossover.all()
+
     @classmethod
-    def all(cls) -> dict[str, Callable[..., Genome]]:
+    def all_mutation(cls):
+        return cls.mutation.all()
+
+    @classmethod
+    def all(cls):
         return {
-            **cls._selection_registry,
-            **cls._crossover_registry,
-            **cls._mutation_registry,
+            **cls.selection.all(),
+            **cls.crossover.all(),
+            **cls.mutation.all(),
         }
-
 class GeneticStrategies:
     """
     Standard library of genetic operators.
@@ -82,14 +65,14 @@ class GeneticStrategies:
     # --- SELECTION ---
 
     @staticmethod
-    @GeneticRegistry.register_selection("tournament")
+    @GeneticRegistry.register_selection(GeneticKey.TOURNAMENT)
     def tournament_selection(ctx: EvolutionContext) -> Genome:
         k = ctx.config.selection_k
         candidates = random.sample(ctx.population, k)
         return max(candidates, key=lambda g: g.fitness)
 
     @staticmethod
-    @GeneticRegistry.register_selection("roulette")
+    @GeneticRegistry.register_selection(GeneticKey.ROULETTE)
     def roulette_selection(ctx: EvolutionContext) -> Genome:
         scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
         total_fit = np.sum(scores)
@@ -103,7 +86,7 @@ class GeneticStrategies:
         return ctx.population[-1]
 
     @staticmethod
-    @GeneticRegistry.register_selection("truncation")
+    @GeneticRegistry.register_selection(GeneticKey.TRUNCATION)
     def truncation_selection(ctx: EvolutionContext) -> Genome:
         """
         Adaptive Truncation:
@@ -131,7 +114,7 @@ class GeneticStrategies:
         return random.choice(pool)
 
     @staticmethod
-    @GeneticRegistry.register_selection("diversity_truncation")
+    @GeneticRegistry.register_selection(GeneticKey.DIVERSITY_TRUNCATION)
     def diversity_truncation_selection(ctx: EvolutionContext) -> Genome:
         # Calculate standard deviation of Quality Scores
         qualities = [g.fitness.quality_score for g in ctx.population]
@@ -149,7 +132,7 @@ class GeneticStrategies:
     # --- CROSSOVER ---
 
     @staticmethod
-    @GeneticRegistry.register_crossover("uniform_parameter_mix")
+    @GeneticRegistry.register_crossover(GeneticKey.UNIFORM_PARAMETER_MIX)
     def uniform_parameter_mix(parent1: Genome, parent2: Genome, ctx: EvolutionContext) -> Genome:
         """Mixes traits 50/50. """
         # Create a shallow copy of Parent 1 using its exact class
@@ -168,7 +151,7 @@ class GeneticStrategies:
     # --- MUTATION ---
 
     @staticmethod
-    @GeneticRegistry.register_mutation("expression_tree_mutation")
+    @GeneticRegistry.register_mutation(GeneticKey.EXPRESSION_TREE_MUTATION)
     def expression_tree_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
         rate = ctx.config['mutation_rate']
         

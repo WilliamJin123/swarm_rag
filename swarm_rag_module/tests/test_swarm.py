@@ -5,7 +5,7 @@ import random
 import time
 from typing import List, Dict, Any, Optional, Union
 from swarm_rag.core.swarm_retriever import SwarmRetriever
-from swarm_rag.interfaces.base import VectorStore, GraphStore, EmbeddingProvider
+from swarm_rag.interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 from swarm_rag.eval import Evaluator, EvalReporter
 
 # Dummy implementations of abstract classes
