@@ -1,5 +1,4 @@
 import os
-import time
 import random
 import pickle
 import numpy as np
@@ -17,6 +16,9 @@ from .execution.evaluator import PopulationEvaluator
 from .execution.loop import EvolutionLoop
 from .execution.fitness import FitnessCalculator
 from .execution.tracker import ProgressTracker
+
+from .extensions.base import EvolutionExtension
+
 class EvolutionEngine:
     def __init__(
         self,
@@ -28,6 +30,7 @@ class EvolutionEngine:
         val_queries: List[str],
         val_ground_truth: List[List[Any]],
         config: EvolutionConfigDict = None,
+        extensions: List['EvolutionExtension'] = None,
         overwrite_logs: bool = True
     ):
         self.config = config or DEFAULT_EVO_CONFIG
@@ -58,6 +61,10 @@ class EvolutionEngine:
         )
         self.loop = EvolutionLoop(self.evo_context)
         self.tracker = ProgressTracker(log_path=self.config["log_file"], overwrite=overwrite_logs)
+
+        self.extensions = extensions or []
+        for ext in self.extensions:
+            ext.on_init(self.evo_context)
 
     def create_initial_genomes(self) -> List[Genome]:
         """Boots up the first random population."""
@@ -119,11 +126,19 @@ class EvolutionEngine:
 
         print(f"Starting evolution: {len(population)} agents, Gens {start_gen} to {n_gen-1}.")
 
-        for gen in range(start_gen, n_gen):            
+        for gen in range(start_gen, n_gen): 
+            self.evo_context.generation = gen      
+
+            # HOOK: Gen Start
+            for ext in self.extensions: ext.on_generation_start(self.evo_context)
+
             # EVALUATE
             self.population_evaluator.evaluate(population)
             # Should default to training queries and gts
             
+            # HOOK: Post-Eval (Niching happens here)
+            for ext in self.extensions: ext.on_after_evaluation(self.evo_context)
+
             # STATS & ELITISM
             population.sort(key=lambda g: g.fitness, reverse=True)
             current_best = population[0]
@@ -170,13 +185,19 @@ class EvolutionEngine:
             if (gen % self.config["checkpoint_frequency"] == 0):
                 self.save_checkpoint(population, best_genome, gen)
 
+            # HOOK: Pre-Breed (Random Immigration happens here)
+            for ext in self.extensions: ext.on_before_breeding(self.evo_context)
+
             # BREED (Skip on last gen)
             if gen < n_gen - 1:
                 population = self.loop.step(population)
 
+            # HOOK: Gen End
+            for ext in self.extensions: ext.on_generation_end(self.evo_context)
+
         self.save_checkpoint(population, best_genome, n_gen - 1)
-        
         self.tracker.plot(save_path=self.config["plot_file"], title=self.config["plot_title"])
+        
         return best_genome
     
     def save_checkpoint(self, population: List[Genome], best_genome: Genome, generation: int):
