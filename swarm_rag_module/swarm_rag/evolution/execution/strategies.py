@@ -1,5 +1,5 @@
 
-from typing import Callable, ClassVar, Dict
+from typing import Callable, ClassVar, Dict, List, Union
 import random
 import numpy as np
 
@@ -27,16 +27,40 @@ class GeneticRegistry:
         return cls.mutation.register(name)
 
     @classmethod
-    def get_selection(cls, name: "GeneticKey" | str):
+    def get_selection(cls, name: Union["GeneticKey", str]) -> Callable:
         return cls.selection.get(name)
 
     @classmethod
-    def get_crossover(cls, name: "GeneticKey" | str):
+    def get_crossover(cls, name: Union["GeneticKey", str]) -> Callable:
         return cls.crossover.get(name)
 
     @classmethod
-    def get_mutation(cls, name: "GeneticKey" | str):
+    def get_mutation(cls, name: Union["GeneticKey", str]) -> Callable:
         return cls.mutation.get(name)
+
+    @classmethod
+    def get(cls, name: Union["GeneticKey", str]) -> Callable:
+        """
+        Search **all** genetic registries for name
+        """
+        try:
+            return cls.selection.get(name)
+        except KeyError:
+            pass
+
+        try:
+            return cls.crossover.get(name)
+        except KeyError:
+            pass
+
+        try:
+            return cls.mutation.get(name)
+        except KeyError:
+            raise KeyError(
+                f"Genetic heuristic '{name}' is not registered in "
+                "selection, crossover, or mutation registries."
+            ) from None
+
 
     @classmethod
     def all_selection(cls):
@@ -66,68 +90,94 @@ class GeneticStrategies:
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.TOURNAMENT)
-    def tournament_selection(ctx: EvolutionContext) -> Genome:
-        k = ctx.config.selection_k
-        candidates = random.sample(ctx.population, k)
-        return max(candidates, key=lambda g: g.fitness)
+    def tournament_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
+        """
+        Selects 'k' parents using Tournament logic.
+        """
+        tourn_size = ctx.config["selection_k"]
+        pop_size = len(ctx.population)
+        contestant_indices = np.random.randint(0, pop_size, size=(k, tourn_size))
+        winner_indices = np.min(contestant_indices, axis=1)
+        return [ctx.population[i] for i in winner_indices]
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.ROULETTE)
-    def roulette_selection(ctx: EvolutionContext) -> Genome:
+    def roulette_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
+        """
+        Vectorized Roulette Selection (O(N) setup + O(k) sampling).
+        Much faster than calling single roulette k times.
+        """
+        # 1. Setup Probabilities (ONCE)
         scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
-        total_fit = np.sum(scores)
+        total = np.sum(scores)
+        probs = scores / total
         
-        pick = random.uniform(0, total_fit)
-        current = 0
-        for i, g in enumerate(ctx.population):
-            current += scores[i]
-            if current > pick:
-                return g
-        return ctx.population[-1]
+        # 2. Sample k times (Vectorized)
+        # return list of k genomes
+        return list(np.random.choice(ctx.population, size=k, p=probs))
+
+    @staticmethod
+    @GeneticRegistry.register_selection(GeneticKey.STOCHASTIC_UNIVERSAL_SAMPLING)
+    def stochastic_universal_sampling(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
+        """
+        TVectorized SUS (Stochastic Universal Sampling).
+        Uses searchsorted for O(log N) lookup instead of O(N) linear scan.
+        """
+        scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
+
+        cum_scores = np.cumsum(scores)
+        total_fit = cum_scores[-1]
+        
+        if total_fit <= 0:
+            return random.choices(ctx.population, k=k)
+        
+        step = total_fit / k
+        start = random.uniform(0, step)
+        points = start + np.arange(k) * step
+        
+        indices = np.searchsorted(cum_scores, points)
+
+        indices = np.clip(indices, 0, len(ctx.population) - 1)
+        
+        return [ctx.population[i] for i in indices]
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.TRUNCATION)
-    def truncation_selection(ctx: EvolutionContext) -> Genome:
+    def truncation_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
         """
-        Adaptive Truncation:
-        - Early Gens: Wide pool (Top 50%) -> encourages diversity/exploration.
-        - Late Gens: Narrow pool (Top 10%) -> forces convergence/exploitation.
+        Adaptive Truncation (Batched).
         """
-        # Calculate Progress (0.0 to 1.0)
         max_gens = ctx.config['n_generations']
         progress = ctx.generation / max(1, max_gens)
         
-        # Define Range (Start Loose -> End Strict)
-        start_k = 0.5  # Top 50%
-        end_k = 0.1    # Top 10%
-        
-        # Linear Interpolation (Annealing)
+        start_k = 0.5 
+        end_k = 0.1    
         current_k = start_k - ((start_k - end_k) * progress)
         
-        # Determine Cutoff index
-        # We assume population is sorted Best -> Worst by the Loop
         pop_size = len(ctx.population)
         cutoff = max(1, int(pop_size * current_k))
         
-        # Pick
         pool = ctx.population[:cutoff]
-        return random.choice(pool)
+        return random.choices(pool, k=k)
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.DIVERSITY_TRUNCATION)
-    def diversity_truncation_selection(ctx: EvolutionContext) -> Genome:
-        # Calculate standard deviation of Quality Scores
+    def diversity_truncation_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
+        """
+        Diversity Truncation (Batched).
+        """
         qualities = [g.fitness.quality_score for g in ctx.population]
         diversity = np.std(qualities) if qualities else 0.0
         
-        # Heuristic: If diversity drops below 0.01, Panic Mode!
+        # Dynamic cutoff based on population stagnation
         if diversity < 0.01:
-            current_k = 0.6 # Open the floodgates (Top 60%)
+            current_k = 0.6  # High diversity mode
         else:
-            current_k = 0.2 # Standard strict mode (Top 20%)
+            current_k = 0.2  # High exploitation mode
             
         cutoff = max(1, int(len(ctx.population) * current_k))
-        return random.choice(ctx.population[:cutoff])
+        pool = ctx.population[:cutoff]
+        return random.choices(pool, k=k)
 
     # --- CROSSOVER ---
 
@@ -135,7 +185,6 @@ class GeneticStrategies:
     @GeneticRegistry.register_crossover(GeneticKey.UNIFORM_PARAMETER_MIX)
     def uniform_parameter_mix(parent1: Genome, parent2: Genome, ctx: EvolutionContext) -> Genome:
         """Mixes traits 50/50. """
-        # Create a shallow copy of Parent 1 using its exact class
         child = parent1.copy()
         for key in child.params:
             if random.random() > 0.5:

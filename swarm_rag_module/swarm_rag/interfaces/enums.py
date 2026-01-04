@@ -31,6 +31,7 @@ class GeneticKey(Enum):
     # --- SELECTION ---
     TOURNAMENT = "tournament"
     ROULETTE = "roulette"
+    STOCHASTIC_UNIVERSAL_SAMPLING="stochastic_universal_sampling"
     TRUNCATION = "truncation"
     DIVERSITY_TRUNCATION = "diversity_truncation"
 

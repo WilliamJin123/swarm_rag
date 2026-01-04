@@ -36,7 +36,7 @@ def test_selection_ops():
     ctx.config['selection_k'] = 5
     wins = 0
     for _ in range(100):
-        selected = GeneticStrategies.tournament_selection(ctx)
+        selected = GeneticStrategies(ctx)
         if selected.id == "best": wins += 1
     
     print(f"  ✓ Tournament selected 'best' {wins}/100 times (Expected > 80)")
@@ -70,7 +70,7 @@ def test_crossover_ops():
     n_trials = 100
     
     for _ in range(n_trials):
-        child = GeneticStrategies.uniform_parameter_mix(parent1, parent2, ctx)
+        child : Genome = GeneticStrategies.uniform_parameter_mix(parent1, parent2, ctx)
         n_agents_sum += child.params['n_agents']
         decay_sum += child.params['decay']
         

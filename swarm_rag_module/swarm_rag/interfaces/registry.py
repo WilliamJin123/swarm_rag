@@ -18,7 +18,7 @@ class _BaseRegistry(Generic[K, P, R]):
     and as a plain function call.
 
     Concrete subclasses only have to provide a class‑level mapping
-    (``_registry``) and, optionally, a convenience ``all`` method.
+    ('_registry') and, optionally, a convenience 'all' method.
     """
 
     # The concrete subclass must create a dict that lives on the class.
@@ -49,7 +49,7 @@ class _BaseRegistry(Generic[K, P, R]):
         3 MyRegistry.register(MyEnum.FOO, fn)       # direct call, explicit key
         4 MyRegistry.register(fn)                  # direct call, inferred key
         ------------------------------------------------------------
-        The function (or the wrapper produced by ``functools.wraps``) is
+        The function (or the wrapper produced by 'functools.wraps') is
         stored under the supplied key (or the inferred one). The original
         callable is returned unchanged so that the decorator can be used
         transparently.
@@ -91,13 +91,13 @@ class _BaseRegistry(Generic[K, P, R]):
     @classmethod
     def _normalise_key(cls, key: K | str) -> K | str:
         """
-        Turn ``key`` into the form stored inside ``_registry``.
+        Turn 'key' into the form stored inside '_registry'.
 
-        * If ``key`` is already an enum member → return it unchanged.
-        * If ``key`` is a string that equals the ``value`` of any enum member
-          of type ``K`` → return that enum member (canonical form).
+        * If 'key' is already an enum member → return it unchanged.
+        * If 'key' is a string that equals the 'value' of any enum member
+          of type 'K' → return that enum member (canonical form).
         * Otherwise return the string unchanged – this covers custom
-          user‑defined keys that are not part of the enum.
+          user-defined keys that are not part of the enum.
         """
         if isinstance(key, Enum):
             return key
@@ -113,7 +113,7 @@ class _BaseRegistry(Generic[K, P, R]):
 
     @classmethod
     def get(cls, key: K | str) -> Callable[P, R]:
-        """Return the callable registered under ``key`` (or raise KeyError)."""
+        """Return the callable registered under 'key' (or raise KeyError)."""
         normalised = cls._normalise_key(key)
         try:
             return cls._registry[normalised]
@@ -129,7 +129,7 @@ class _BaseRegistry(Generic[K, P, R]):
 
     @classmethod
     def all(cls) -> Dict[K | str, Callable[P, R]]:
-        """A shallow copy of the internal dict – callers can read but not modify."""
+        """A shallow copy of the internal dict callers can read but not modify."""
         return dict(cls._registry)
     
 

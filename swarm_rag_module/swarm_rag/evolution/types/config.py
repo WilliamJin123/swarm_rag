@@ -78,7 +78,7 @@ class EvolutionContext:
     Replaces the messy **kwargs passing.
     """
     # Current State
-    current_mutation_rate: float
+    current_mutation_rate: float = None
     population: List[Genome] = field(default_factory=list)
     generation: int = 0
     config: EvolutionConfigDict = field(default_factory=lambda: DEFAULT_EVO_CONFIG.copy())

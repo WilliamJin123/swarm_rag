@@ -52,6 +52,7 @@ class EvolutionLoop:
         # Update Context
         self.context.population = population
         self.context.generation += 1 
+        current_gen_idx = self.context.generation
 
         # Calculate dynamic rate
         effective_rate = self.get_mutation_rate(population)
@@ -65,26 +66,26 @@ class EvolutionLoop:
         elite_count = int(self.context.config['population_size'] * self.context.config['elite_fraction'])
         offspring = population[:elite_count]
         
-        # Breed 
-        while len(offspring) < self.context.config["population_size"]:
-            # Selection
-            p1 = self.selection_fn(self.context)
-            p2 = self.selection_fn(self.context)
+        needed = self.context.config['population_size'] - len(offspring)
+
+        parents = self.selection_fn(self.context, k=needed * 2)
+
+        for i in range(0, len(parents), 2):
+            if i + 1 >= len(parents): break
             
-            # Crossover
-            if random.random() < self.context.config["crossover_rate"]:
+            p1 = parents[i]
+            p2 = parents[i+1]
+            
+            # Crossover (Standard)
+            if random.random() < self.context.config['crossover_rate']:
                 child = self.crossover_fn(p1, p2, self.context)
             else:
                 child = p1.copy()
             
-            # Mutation
+            # Mutation (Standard)
             child = self.mutation_fn(child, self.context)
             
-            # Reset metadata
-            child.fitness = None 
-            child.metrics = {}
-            child.evaluated = False
-            
+            # ... (ID assignment & Reset) ...
             offspring.append(child)
             
         return offspring

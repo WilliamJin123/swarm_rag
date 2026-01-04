@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Callable, ClassVar
+from typing import Any, Dict, List, Optional, Union, Callable
 import numpy as np
 import math
 from dataclasses import dataclass, field
@@ -12,7 +12,7 @@ from ..interfaces.abstract_classes import GraphStore
 class HeuristicRegistry:
     """
     Public API that mirrors the original three-registry design but re-uses
-    the generic implementation from `_BaseRegistry`.
+    the generic implementation from '_BaseRegistry'.
     """
     # expose the three concrete registries as class attributes
     movement = _MovementRegistry
@@ -36,16 +36,41 @@ class HeuristicRegistry:
         return cls.deposit.register(name)
 
     @classmethod
-    def get_movement(cls, name: Union["HeuristicKey", str]):
+    def get_movement(cls, name: Union["HeuristicKey", str]) -> Callable:
         return cls.movement.get(name)
 
     @classmethod
-    def get_ranking(cls, name: Union["HeuristicKey", str]):
+    def get_ranking(cls, name: Union["HeuristicKey", str]) -> Callable:
         return cls.ranking.get(name)
 
     @classmethod
-    def get_deposit(cls, name: Union["HeuristicKey", str]):
+    def get_deposit(cls, name: Union["HeuristicKey", str]) -> Callable:
         return cls.deposit.get(name)
+
+    @classmethod
+    def get(cls, name: Union["HeuristicKey", str]) -> Callable:
+        """
+        Search all registries (movement, ranking, deposit) for name and
+        return the first matching heuristic.
+
+        The lookup order is deterministic and mirrors the order of the
+        attributes defined above: movement → ranking → deposit.
+        """
+        try:
+            return cls.movement.get(name)
+        except KeyError:
+            pass
+
+        try:
+            return cls.ranking.get(name)
+        except KeyError:
+            pass
+
+        try:
+            return cls.deposit.get(name)
+        except KeyError:
+            raise KeyError(f"Heuristic '{name}' is not registered "
+                           f"in movement, ranking, or deposit registries.") from None
 
     @classmethod
     def all_movement(cls):

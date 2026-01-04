@@ -40,7 +40,7 @@ class Genome:
     A complete retrieval strategy with BOTH hyperparameters
     and expression trees in one genome.
     """
-
+    id: str
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
 
@@ -51,6 +51,16 @@ class Genome:
     evaluated: bool = False
 
     _compiled_cache: Dict[str, Callable] = field(default_factory=dict, repr=False)
+
+    def __hash__(self):
+        """Allows Genome to be used in sets or as dict keys."""
+        return hash(self.id)
+
+    def __eq__(self, other):
+        """Genomes with the same ID are considered the same object."""
+        if not isinstance(other, Genome):
+            return False
+        return self.id == other.id
 
     def complexity(self) -> int:
         """Sum of the size of all expression trees."""
@@ -89,7 +99,6 @@ class Genome:
             metrics=self.metrics.copy(),
             latency_ms=self.latency_ms,
             evaluated=self.evaluated,
-            # Do NOT copy the cache; the new genome might be mutated
             _compiled_cache={} 
         )
 
