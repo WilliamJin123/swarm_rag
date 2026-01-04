@@ -68,9 +68,32 @@ class ToyStochasticRetriever:
 
 # --- 2. THE TEST ---
 
-CKPT_FILE = "sim_test.pkl"
-LOG_FILE = "sim_log.jsonl"
-PLOT_FILE = "sim_plot.png"
+CKPT_FILE = "test_data/sim_test.pkl"
+LOG_FILE = "test_data/sim_log.jsonl"
+PLOT_FILE = "test_data/sim_plot.png"
+
+def get_test_config():
+    """Returns a consistent config for both tests to avoid default file leakage."""
+    config = DEFAULT_EVO_CONFIG.copy()
+    config.update({
+        # Standard Params
+        "population_size": 10,
+        "selection_k": 3,
+        "validation_frequency": 1,
+        
+        # KEY FIX: Always enforce these paths!
+        "checkpoint_path": CKPT_FILE,
+        "log_file": LOG_FILE,
+        "plot_file": PLOT_FILE,
+        
+        # Toy Problem Search Space
+        "param_ranges": {
+            "n_agents": (1, 5),
+            "alpha": (0.1, 0.99),
+            "decay": (0.1, 0.99)
+        }
+    })
+    return config
 
 def setup_module():
     # Clean artifacts
@@ -92,7 +115,7 @@ def test_evolution_solves_toy_problem():
     print("\n\n=== STARTING FULL SYSTEM SIMULATION ===")
     
     # 1. Configuration
-    config = DEFAULT_EVO_CONFIG.copy()
+    config = get_test_config()
     config.update({
         "n_generations": 3,           # Short run
         "population_size": 10,        # Enough diversity
@@ -191,7 +214,7 @@ def test_resume_simulation():
 
     # 1. Config for RESUME
     # Extend generations from 3 to 5
-    config = DEFAULT_EVO_CONFIG.copy()
+    config = get_test_config()
     config["n_generations"] = 5
     config["log_file"] = LOG_FILE # Append to same log
     
@@ -233,4 +256,4 @@ if __name__ == "__main__":
         test_evolution_solves_toy_problem()
         test_resume_simulation()
     finally:
-        teardown_module()
+        pass
