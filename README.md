@@ -30,5 +30,11 @@ Learning about genetic algorithm nuances
 - We are doing (μ + λ): elitist; parents and offspring compete (best case for our proj)
 - Need to decide selection strategies (tournament vs SUS vs Top-k trunc vs Roulette vs Rank-based, etc.) --> Multiple impleemnted in strategies.py
 - Crossover: Subtree Crossover for expressions
-- Mutation: need to figure out
-- Fitness function strategies: need to figure out
+- Mutation: ought to use "decaying" mutation rate or adaptive based on population "health" signals
+- Fitness function strategies: ought to use pareto optimization, EX: Maximize Hit@k, Minimize traversal cost, Minimize variance across queries
+- Ought to normalize fitness, fitness sharing (penalize super similar "genomes")
+- Reward Novelty?
+
+- Techniques: Niching (cluster similar heuristics, different ones coexist), Island models (occasional migration), random immigrants (inject fresh heuristics periodically)
+
+NOTE: Switching to CMA-ES for hyperparameters in comb with Symbolic Regression for heuristic functions
