@@ -53,7 +53,7 @@ class Genome:
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
 
-    fitness: FitnessResult = FitnessResult()
+    fitness: FitnessResult = field(default_factory=lambda: FitnessResult())
 
     metrics: Dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0

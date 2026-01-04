@@ -109,7 +109,7 @@ class FileMigrationExtension(EvolutionExtension):
     def _inject_migrants(self, ctx, migrants: List[Genome]):
         """Replaces the worst members of the population with immigrants."""
         pop = ctx.population
-        
+
         # Sort current population: Best -> Worst
         pop.sort(key=lambda g: g.fitness.quality_score, reverse=True)
         
