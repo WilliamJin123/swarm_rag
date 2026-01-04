@@ -9,8 +9,8 @@ from ..core.swarm_retriever import SwarmRetriever
 from ..core.heuristics import HeuristicRegistry
 from ..eval.metrics import Evaluator
 
-from .types.genome import Genome
-from .types.config import EvolutionConfig, EvolutionContext
+from .types.genome import Genome, DEFAULT_PARAMS
+from .types.config import EvolutionContext, EvolutionConfigDict, DEFAULT_EVO_CONFIG
 from .types.expressions import ExpressionEvolution
 
 from .execution.evaluator import PopulationEvaluator
@@ -27,9 +27,9 @@ class EvolutionEngine:
         train_ground_truth: List[List[Any]],
         val_queries: List[str],
         val_ground_truth: List[List[Any]],
-        config: EvolutionConfig = None,
+        config: EvolutionConfigDict = None,
     ):
-        self.config = config or EvolutionConfig()
+        self.config = config or DEFAULT_EVO_CONFIG
         omp_threads = os.environ.get("OMP_NUM_THREADS")
         if omp_threads != "1":
             print("\n[WARNING] Engine: Vectorized ops are enabled but OMP_NUM_THREADS is not '1'.")
@@ -37,17 +37,16 @@ class EvolutionEngine:
             print("          This may cause severe performance degradation due to thread contention.")
             print("          Recommendation: export OMP_NUM_THREADS=1\n")
 
-        # Data
         self.train_queries = train_queries
         self.train_gt = train_ground_truth
         self.val_queries = val_queries
         self.val_gt = val_ground_truth
 
-        # Components
         self.evo_context = EvolutionContext(
             config=self.config,
             generation=0,
             available_features=list(HeuristicRegistry.all().keys()),
+            # Maps "movement" -> ["semantic", "degree", ...]
             expression_features={
                 "movement": list(HeuristicRegistry.all_movement().keys()),
                 "ranking": list(HeuristicRegistry.all_ranking().keys()),
@@ -67,40 +66,40 @@ class EvolutionEngine:
 
     def create_initial_genomes(self) -> List[Genome]:
         """Boots up the first random population."""
-        count = self.config.population_size
-        cfg = self.config
+        count = self.config['population_size']
+        ranges = self.config['param_ranges']
+        max_d = self.config['expr_max_depth']
         
-        movement_exprs = ExpressionEvolution.generate_ramped_half_and_half(
-            features=self.evo_context.expression_features["movement"],
-            population_size=count,
-            max_depth=cfg.expr_max_depth
-        )
-        ranking_exprs = ExpressionEvolution.generate_ramped_half_and_half(
-            features=self.evo_context.expression_features["ranking"],
-            population_size=count,
-            max_depth=cfg.expr_max_depth
-        )
-        deposit_exprs = ExpressionEvolution.generate_ramped_half_and_half(
-            features=self.evo_context.expression_features["deposit"],
-            population_size=count,
-            max_depth=cfg.expr_max_depth
-        )
+        strat_trees = {}
+        for strat_type in ["movement", "ranking", "deposit"]:
+            features = self.evo_context.expression_features[strat_type]
+            strat_trees[strat_type] = ExpressionEvolution.generate_ramped_half_and_half(
+                features=features,
+                population_size=count,
+                max_depth=max_d
+            )
 
-        # 2. Assemble Genomes
         population = []
         for i in range(count):
+            # Randomize Params
+            params = DEFAULT_PARAMS.copy()
+            for key, (min_v, max_v) in ranges.items():
+                if isinstance(min_v, int):
+                    params[key] = random.randint(min_v, max_v)
+                else:
+                    params[key] = random.uniform(min_v, max_v)
+
+            # Assign Trees (Pop from the generated lists)
+            strategies = {
+                "movement": strat_trees["movement"][i],
+                "ranking": strat_trees["ranking"][i],
+                "deposit": strat_trees["deposit"][i]
+            }
+
             genome = Genome(
-                # Hyperparameters (Uniform Random within Config Ranges)
-                n_agents=random.randint(cfg.n_agents_min, cfg.n_agents_max),
-                steps=random.randint(cfg.steps_min, cfg.steps_max),
-                decay=random.uniform(cfg.decay_min, cfg.decay_max),
-                initial_pool_size=random.randint(cfg.initial_pool_size_min, cfg.initial_pool_size_max),
-                start_subset=random.randint(cfg.start_subset_min, cfg.start_subset_max),
-                
-                # Assign the pre-generated trees
-                movement_expr=movement_exprs[i],
-                ranking_expr=ranking_exprs[i],
-                deposit_expr=deposit_exprs[i],
+                id=f"gen0_{i}",
+                params=params,
+                strategies=strategies
             )
             population.append(genome)
             
@@ -109,13 +108,11 @@ class EvolutionEngine:
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
         population = initial_population or self.create_initial_genomes()
         best_genome: Genome = None
+        n_gen = n_gen
 
-        print(f"Starting evolution: {len(population)} agents, {self.config.n_generations} gens.")
-        print(f"Global Thread Cap: {self.config.global_max_threads}")
+        print(f"Starting evolution: {len(population)} agents, {n_gen} gens.")
 
-        for gen in range(self.config.n_generations):
-            t0 = time.time()
-            
+        for gen in range(n_gen):            
             # EVALUATE
             self.population_evaluator.evaluate(population)
             # Should default to training queries and gts
@@ -129,7 +126,7 @@ class EvolutionEngine:
 
             # VALIDATION
             val_stats = None
-            if (gen % self.config.validation_frequency == 0) or (gen == self.config.n_generations - 1):
+            if (gen % self.config["validation_frequency"] == 0) or (gen == n_gen - 1):
                 print(f"Running Validation on Gen {gen} Best...")
                 # Create a copy to not mess up the training metrics/state
                 val_candidate = current_best.copy()
@@ -143,28 +140,30 @@ class EvolutionEngine:
                 )
                 
                 val_stats = {
-                    "best_fitness": val_candidate.fitness, # This is now the VAL fitness
-                    "recall": val_candidate.metrics.get("Recall", 0.0) # Example metric
+                    "best_quality": val_candidate.fitness.quality_score,
+                    "recall": val_candidate.metrics.get("Recall@20", 0.0)
                 }
             
             # LOGGING
+            qualities = [g.fitness.quality_score for g in population]
             train_stats = {
-                "best_fitness": current_best.fitness,
-                "avg_fitness": np.mean([g.fitness for g in population]),
+                "best_quality": current_best.fitness.quality_score,
+                "avg_quality": np.mean(qualities),
+                "best_cost": current_best.fitness.cost_score,
                 "best_complexity": current_best.complexity()
-            }  
+            }
             self.tracker.log(gen, train_stats, val_stats)
             self.tracker.print_summary(gen)
 
             # CHECKPOINTING
-            if (gen % self.config.checkpoint_frequency == 0):
+            if (gen % self.config["checkpoint_frequency"] == 0):
                 self.save_checkpoint(population, best_genome, gen)
 
             # BREED (Skip on last gen)
-            if gen < self.config.n_generations - 1:
+            if gen < n_gen - 1:
                 population = self.loop.step(population)
 
-        self.save_checkpoint(population, best_genome, self.config.n_generations - 1)
+        self.save_checkpoint(population, best_genome, n_gen - 1)
         self.tracker.plot(save_path=self.config.plot_file)
         return best_genome
     

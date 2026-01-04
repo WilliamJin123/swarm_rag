@@ -247,20 +247,31 @@ class ExpressionEvolution:
             return []
             
         population = []
-        num_depths = max_depth - 1 # Start from depth 2 up to max_depth
-        individuals_per_depth = population_size // (num_depths * 2)
+        # Depths from 2 to max_depth
+        depths = list(range(2, max_depth + 1))
 
-        # Ensure we fill the population
-        remaining = population_size - (individuals_per_depth * num_depths * 2)
-
-        for depth in range(2, max_depth + 1):
-            for _ in range(individuals_per_depth):
+        # We need to distribute population across these depths
+        # and for each depth, split 50/50 between 'grow' and 'full'
+        
+        # Calculate how many trees per (depth, method) pair
+        # There are len(depths) * 2 groups
+        n_groups = len(depths) * 2
+        per_group = population_size // n_groups
+        
+        # 1. Systematic Generation
+        for depth in depths:
+            # Half Grow
+            for _ in range(per_group):
                 population.append(ExpressionEvolution.random_tree(features, depth, 'grow'))
+            # Half Full
+            for _ in range(per_group):
                 population.append(ExpressionEvolution.random_tree(features, depth, 'full'))
         
-        # Fill any remaining slots with random trees
-        for _ in range(remaining):
-            population.append(ExpressionEvolution.random_tree(features, max_depth, 'grow'))
+        # 2. Fill Remainder (if population_size didn't divide evenly)
+        while len(population) < population_size:
+            depth = random.choice(depths)
+            method = random.choice(['grow', 'full'])
+            population.append(ExpressionEvolution.random_tree(features, depth, method))
             
         random.shuffle(population)
         return population

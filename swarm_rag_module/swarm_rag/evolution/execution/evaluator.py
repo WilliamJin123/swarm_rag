@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Protocol, runtime_checkable
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
-from ...core.swarm_retriever import SwarmRetriever
 from ..types.genome import Genome
 from .fitness import FitnessCalculator
 from ..types.genome import GenomeCompiler
@@ -31,7 +30,6 @@ class PopulationEvaluator:
         self.queries = queries
         self.ground_truth = ground_truth
         self.compiler = GenomeCompiler()
-        
         self.concurrent_evaluations = concurrent_evaluations
 
     def evaluate(
@@ -55,7 +53,7 @@ class PopulationEvaluator:
         print(f"  > Concurrency: {batch_size} genomes parallel")
         print(f"  > Mode: Sequential Queries per Genome (max_workers=1)")
 
-        # Process in chunks to respect concurrency limits
+        batch_size = self.concurrent_evaluations
         for i in range(0, len(unevaluated), batch_size):
             batch = unevaluated[i : i + batch_size]
             self._evaluate_batch(batch, queries, ground_truth)
@@ -65,22 +63,14 @@ class PopulationEvaluator:
         batch: List[Genome], 
         queries: List[str], 
         ground_truth: List[List[Any]],
-        
     ):
         """
         Runs a batch of evaluations concurrently.
         """
-        # We use a ThreadPool here to run multiple *Genome Evaluations* at once.
-        # Each Genome Evaluation will internally run multiple *Query Retrievals*.
         with ThreadPoolExecutor(max_workers=len(batch)) as executor:
             future_to_genome = {
-                executor.submit(
-                    self._evaluate_single, 
-                    genome, 
-                    queries, 
-                    ground_truth, 
-                ): genome 
-                for genome in batch
+                executor.submit(self._evaluate_single, g, queries, ground_truth): g 
+                for g in batch
             }
             
             for future in as_completed(future_to_genome):
@@ -89,7 +79,8 @@ class PopulationEvaluator:
                     future.result()
                 except Exception as e:
                     print(f"Genome {genome.id} evaluation failed: {e}")
-                    genome.fitness = -1.0
+                    from .fitness import FitnessResult
+                    genome.fitness = FitnessResult(0.0, 0.0, 9999.0)
                     genome.evaluated = True
 
     def _evaluate_single(
@@ -114,29 +105,26 @@ class PopulationEvaluator:
         )
         
         total_latency = time.time() - start_time
-        avg_latency = total_latency / max(1, len(queries))
 
-        # 3. Compute Metrics
-        all_query_metrics = []
+        # Compute Metrics
+        all_metrics = []
         for q_idx, retrieved_items in enumerate(batch_results):
-            q_metrics = self.evaluator.calculate_metrics(
+            m = self.evaluator.calculate_metrics(
                 retrieved_nodes=retrieved_items, 
-                ground_truth_ids=ground_truth[q_idx], 
-                latency_sec=avg_latency 
+                ground_truth_ids=ground_truth[q_idx],
+                latency_sec=0 
             )
-            all_query_metrics.append(q_metrics)
+            all_metrics.append(m)
         
-        averaged_metrics = self._mean_metrics(all_query_metrics)
+        avg_metrics = self._mean_metrics(all_metrics)
+        avg_metrics['latency_ms'] = total_latency / max(1, len(queries))
 
-        # 4. Assign to Genome
-        genome.fitness = self.fitness_calc.calculate(averaged_metrics, genome)
-        genome.metrics = averaged_metrics
+        # Assign to Genome
+        genome.metrics = avg_metrics
+        genome.fitness = self.fitness_calc.calculate(avg_metrics, genome)
         genome.evaluated = True
 
-    def _mean_metrics(self, all_metrics: List[Dict[str, float]]) -> Dict[str, float]:
+    def _mean_metrics(self, all_metrics):
         if not all_metrics: return {}
         keys = all_metrics[0].keys()
-        return {
-            k: float(np.mean([m[k] for m in all_metrics])) 
-            for k in keys if isinstance(all_metrics[0][k], (int, float))
-        }
+        return {k: float(np.mean([m[k] for m in all_metrics])) for k in keys}

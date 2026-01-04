@@ -1,63 +1,74 @@
 from dataclasses import dataclass, field
-from typing import List, Dict 
+from typing import List, Dict, NotRequired, Tuple, TypedDict 
 from .genome import Genome
 
-@dataclass
-class EvolutionConfig:
+class EvolutionConfigDict(TypedDict):
     """
-    Central type-safe configuration for the Evolution Engine.
+    Configuration for the Evolutionary Engine itself.
     """
-    # --- Resource Management ---
-    concurrent_evaluations: int = 4
+    # Resource Management
+    concurrent_evaluations: int
+    global_max_threads: int
 
-    # --- Loop Control ---
-    n_generations: int = 20
-    population_size: int = 30
-    elite_fraction: float = 0.1
+    # Loop Control
+    n_generations: int
+    population_size: int
+    elite_fraction: float
     
-    # --- Genetic Probabilities ---
-    mutation_rate: float = 0.2
-    crossover_rate: float = 0.6
+    # Genetic Probabilities
+    mutation_rate: float
+    crossover_rate: float
     
-    # --- Strategy Names (Must match Registry keys) ---
-    selection_strategy: str = "tournament"
-    crossover_strategy: str = "uniform_parameter_mix"
-    mutation_strategy: str = "expression_tree_mutation"
+    # Strategy Names
+    selection_strategy: str
+    crossover_strategy: str
+    mutation_strategy: str
     
-    # --- Strategy-Specific Hyperparameters ---
-    # We flatten these for transparency (instead of a opaque 'params' dict)
-    # --- Strategy Hyperparameters ---
-    selection_k: int = 3
-    mutation_max_expr_size: int = 25
+    # Strategy-Specific Settings
+    selection_k: int
+    mutation_max_expr_size: int
+    expr_max_depth: int
 
-    # --- Genome Hyperparameter RANGES (FLAT, TYPED) ---
-    n_agents_min: int = 5
-    n_agents_max: int = 30
+    # Ranges for Continuous/Integer SwarmParams
+    # format: 'param_name': (min, max)
+    param_ranges: Dict[str, Tuple[float, float]]
 
-    steps_min: int = 5
-    steps_max: int = 20
+    # Validation & Logging
+    validation_frequency: int
+    log_file: str
+    plot_file: str
+    checkpoint_frequency: int
+    checkpoint_path: str
+    resume_from_checkpoint: bool
 
-    decay_min: float = 0.85
-    decay_max: float = 0.99
-
-    initial_pool_size_min: int = 10
-    initial_pool_size_max: int = 50
-
-    start_subset_min: int = 5
-    start_subset_max: int = 15
-
-    # --- Expression Initialization ---
-    expr_max_depth: int = 5
-    
-    # --- Validation & Tracking ---
-    validation_frequency: int = 5   # Run validation every N generations
-    log_file: str = "evo_log.jsonl"
-    plot_file: str = "evo_plot.png"
-
-    # --- Checkpointing ---
-    checkpoint_frequency: int = 5        
-    checkpoint_path: str = "evo_checkpoint.pkl"
-    resume_from_checkpoint: bool = True   
+DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
+    "concurrent_evaluations": 4,
+    "global_max_threads": 8,
+    "n_generations": 20,
+    "population_size": 30,
+    "elite_fraction": 0.1,
+    "mutation_rate": 0.2,
+    "crossover_rate": 0.6,
+    "selection_strategy": "tournament",
+    "crossover_strategy": "uniform_parameter_mix",
+    "mutation_strategy": "expression_tree_mutation",
+    "selection_k": 3,
+    "mutation_max_expr_size": 25,
+    "expr_max_depth": 5,
+    "param_ranges": {
+        "n_agents": (5, 30),
+        "steps": (4, 12),
+        "decay": (0.85, 0.99),
+        "initial_pool_size": (10, 50),
+        "start_subset": (5, 15),
+    },
+    "validation_frequency": 5,
+    "log_file": "evo_log.jsonl",
+    "plot_file": "evo_plot.png",
+    "checkpoint_frequency": 5,
+    "checkpoint_path": "evo_checkpoint.pkl",
+    "resume_from_checkpoint": True
+}
 
 @dataclass
 class EvolutionContext:
@@ -66,9 +77,11 @@ class EvolutionContext:
     Replaces the messy **kwargs passing.
     """
     # Current State
+    current_mutation_rate: float
     population: List[Genome] = field(default_factory=list)
-    generation: int
-    config: EvolutionConfig = None
+    generation: int = 0
+    config: EvolutionConfigDict = field(default_factory=lambda: DEFAULT_EVO_CONFIG.copy())
+    
     # Registry Data (What features can we mutate into?)
     available_features: List[str] = field(default_factory=list)
     expression_features: Dict[str, List[str]] = field(default_factory=dict)
