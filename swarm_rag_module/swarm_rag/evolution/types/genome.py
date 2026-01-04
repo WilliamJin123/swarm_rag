@@ -1,9 +1,12 @@
-from typing import Dict, List, Callable, Any, NotRequired, Set, TypedDict
+from typing import Dict, Callable, Any, Set, TypedDict
 from dataclasses import dataclass, field
-
+try:
+    from typing import NotRequired
+except ImportError:
+    from typing_extensions import NotRequired
 import numpy as np
 
-from swarm_rag.evolution.execution.fitness import FitnessResult
+from .fitness_results import FitnessResult
 
 from .expressions import ExpressionNode
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
@@ -41,7 +44,7 @@ class Genome:
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
 
-    fitness: FitnessResult
+    fitness: FitnessResult = None
 
     metrics: Dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0

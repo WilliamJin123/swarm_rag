@@ -145,10 +145,10 @@ class EvolutionEngine:
                 }
             
             # LOGGING
-            qualities = [g.fitness.quality_score for g in population]
             train_stats = {
                 "best_quality": current_best.fitness.quality_score,
-                "avg_quality": np.mean(qualities),
+                "avg_quality": np.mean([g.fitness.quality_score for g in population]),
+                "best_stability": current_best.fitness.stability_score,
                 "best_cost": current_best.fitness.cost_score,
                 "best_complexity": current_best.complexity()
             }

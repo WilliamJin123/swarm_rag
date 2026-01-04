@@ -148,7 +148,7 @@ def test_swarm_retriever():
 
     print("\nTesting batch retrieval with automatic strategy selection...")
     start_time = time.time()
-    batch_results = retriever.retrieve_batch(queries=queries, n_agents=10, steps=3, top_k=5, parallel_queries=True)
+    batch_results = retriever.retrieve_batch(queries=queries, n_agents=10, steps=3, top_k=5, max_workers=10)
     latency_per_query = (time.time() - start_time)/len(queries)
     for q, res in zip(queries, batch_results):
         ground_truth_batch = [r['id'] for r in res[:3]]
@@ -159,7 +159,7 @@ def test_swarm_retriever():
     large_queries = [f"Test query {i}" for i in range(10)]
 
     print("\n Testing sequential batch processing...")
-    sequential_results = retriever.retrieve_batch(large_queries, n_agents=5, steps=2, top_k=3, parallel_queries=False)
+    sequential_results = retriever.retrieve_batch(large_queries, n_agents=5, steps=2, top_k=3, max_workers=1)
     latency_seq = (time.time() - start_time)/len(large_queries)
     for q, res in zip(large_queries, sequential_results):
         ground_truth_seq = [r['id'] for r in res[:1]]
@@ -174,7 +174,6 @@ def test_swarm_retriever():
         n_agents=5,
         steps=2,
         top_k=3,
-        parallel_queries=True,
         max_workers=4
     )
     parallel_time = time.time() - start_time

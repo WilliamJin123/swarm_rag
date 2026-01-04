@@ -1,11 +1,10 @@
-import dataclasses
-from typing import Any, Callable
-import random
 
+from typing import Callable
+import random
 import numpy as np
 
 from swarm_rag.evolution.types.config import EvolutionContext
-from swarm_rag.evolution.types.expressions import ExpressionEvolution, ExpressionNode
+from swarm_rag.evolution.types.expressions import ExpressionEvolution
 from ..types.genome import Genome
 
 class GeneticRegistry:

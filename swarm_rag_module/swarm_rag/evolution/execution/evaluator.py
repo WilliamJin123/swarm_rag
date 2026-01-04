@@ -1,13 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import numpy as np
-from typing import List, Dict, Any, Protocol, runtime_checkable
+from typing import List, Any
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
-from ..types.genome import Genome
 from .fitness import FitnessCalculator
-from ..types.genome import GenomeCompiler
+from ..types.genome import GenomeCompiler, Genome
 
 
 # TO CHANGE: PLUGGING IN CUSTOM EVALUATION FUNCTIONS / PROCESSESES

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, NotRequired, Tuple, TypedDict 
+from typing import List, Dict, Tuple, TypedDict 
 from .genome import Genome
+
 
 class EvolutionConfigDict(TypedDict):
     """

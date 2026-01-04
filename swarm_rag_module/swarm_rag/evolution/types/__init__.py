@@ -1,4 +1,4 @@
-from .config import EvolutionConfig, EvolutionContext
+from .config import EvolutionContext
 from .genome import Genome
 from .expressions import ExpressionNode, ExpressionEvolution
 
