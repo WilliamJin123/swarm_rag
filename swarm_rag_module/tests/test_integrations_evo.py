@@ -49,9 +49,9 @@ def test_full_evolution_loop():
     config['n_generations'] = 3
     config['population_size'] = 6
     config['validation_frequency'] = 1
-    config['checkpoint_path'] = "test_ckpt.pkl"
-    config['log_file'] = "test_log.jsonl"
-    config['plot_file'] = "test_plot.png"
+    config['checkpoint_path'] = "test_data/test_ckpt.pkl"
+    config['log_file'] = "test_data/test_log.jsonl"
+    config['plot_file'] = "test_data/test_plot.png"
     
     # 2. Setup Data
     train_q = ["q1", "q2"]

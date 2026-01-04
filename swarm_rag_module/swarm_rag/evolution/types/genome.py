@@ -62,6 +62,26 @@ class Genome:
             return False
         return self.id == other.id
 
+    def __getstate__(self):
+        """
+        Custom pickling logic.
+        EXCLUDES the compiled cache (functions) because they cannot be pickled.
+        We only save the 'strategies' (trees) and 'params' (data).
+        """
+        state = self.__dict__.copy()
+        # Remove the un-picklable cache
+        state['_compiled_cache'] = {} 
+        return state
+
+    def __setstate__(self, state):
+        """
+        Restores state and re-initializes the empty cache.
+        """
+        self.__dict__.update(state)
+        # Ensure cache exists (even if missing from old pickles)
+        if '_compiled_cache' not in self.__dict__:
+            self._compiled_cache = {}
+
     def complexity(self) -> int:
         """Sum of the size of all expression trees."""
         return sum(tree.size() for tree in self.strategies.values())
@@ -136,7 +156,8 @@ class GenomeCompiler:
         Compiles a single expression tree into a lambda.
         """
         # Extract feature dependencies
-        required_features = sorted(list(self._extract_features(expr_tree)))
+        raw_features = self._extract_features(expr_tree)
+        required_features = sorted([str(f.value) if hasattr(f, 'value') else str(f) for f in raw_features])
 
         getters = []
 

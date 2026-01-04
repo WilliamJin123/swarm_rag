@@ -28,14 +28,9 @@ class EvolutionEngine:
         val_queries: List[str],
         val_ground_truth: List[List[Any]],
         config: EvolutionConfigDict = None,
+        overwrite_logs: bool = True
     ):
         self.config = config or DEFAULT_EVO_CONFIG
-        omp_threads = os.environ.get("OMP_NUM_THREADS")
-        if omp_threads != "1":
-            print("\n[WARNING] Engine: Vectorized ops are enabled but OMP_NUM_THREADS is not '1'.")
-            print(f"          Current value: {omp_threads}")
-            print("          This may cause severe performance degradation due to thread contention.")
-            print("          Recommendation: export OMP_NUM_THREADS=1\n")
 
         self.train_queries = train_queries
         self.train_gt = train_ground_truth
@@ -59,10 +54,10 @@ class EvolutionEngine:
             fitness_calc=fitness_calculator, 
             queries=train_queries, 
             ground_truth=train_ground_truth,
-            concurrent_evaluations=self.config.concurrent_evaluations
+            concurrent_evaluations=self.config["concurrent_evaluations"]
         )
         self.loop = EvolutionLoop(self.evo_context)
-        self.tracker = ProgressTracker(log_path=self.config.log_file)
+        self.tracker = ProgressTracker(log_path=self.config["log_file"], overwrite=overwrite_logs)
 
     def create_initial_genomes(self) -> List[Genome]:
         """Boots up the first random population."""
@@ -106,13 +101,25 @@ class EvolutionEngine:
         return population
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
-        population = initial_population or self.create_initial_genomes()
+        if self.evo_context.population:
+            population = self.evo_context.population
+            print(f"Resuming evolution with existing population of {len(population)}")
+        else:
+            population = initial_population or self.create_initial_genomes()
+
         best_genome: Genome = None
-        n_gen = n_gen
+        n_gen = self.config["n_generations"]
 
-        print(f"Starting evolution: {len(population)} agents, {n_gen} gens.")
+        start_gen = self.evo_context.generation
 
-        for gen in range(n_gen):            
+        if self.evo_context.population:
+            start_gen += 1
+        else:
+            start_gen = 0
+
+        print(f"Starting evolution: {len(population)} agents, Gens {start_gen} to {n_gen-1}.")
+
+        for gen in range(start_gen, n_gen):            
             # EVALUATE
             self.population_evaluator.evaluate(population)
             # Should default to training queries and gts
@@ -152,6 +159,10 @@ class EvolutionEngine:
                 "best_cost": current_best.fitness.cost_score,
                 "best_complexity": current_best.complexity()
             }
+
+            for k, v in current_best.metrics.items():
+                train_stats[f"best_metric_{k}"] = v
+
             self.tracker.log(gen, train_stats, val_stats)
             self.tracker.print_summary(gen)
 
@@ -164,7 +175,7 @@ class EvolutionEngine:
                 population = self.loop.step(population)
 
         self.save_checkpoint(population, best_genome, n_gen - 1)
-        self.tracker.plot(save_path=self.config.plot_file)
+        self.tracker.plot(save_path=self.config["plot_file"])
         return best_genome
     
     def save_checkpoint(self, population: List[Genome], best_genome: Genome, generation: int):
@@ -179,32 +190,72 @@ class EvolutionEngine:
         }
         
         # Save to a temporary file first, then rename to avoid corruption if interrupted
-        base, ext = os.path.splitext(self.config.checkpoint_path)
+        ckpt_path = self.config["checkpoint_path"]
+        base, ext = os.path.splitext(ckpt_path)
         numbered_path = f"{base}_gen_{generation}{ext}"
         with open(numbered_path, "wb") as f:
             pickle.dump(state, f)
-        temp_latest = self.config.checkpoint_path + ".tmp"
+
+        temp_latest = ckpt_path + ".tmp"
         with open(temp_latest, "wb") as f:
             pickle.dump(state, f)
-        os.replace(temp_latest, self.config.checkpoint_path)
+
+        if os.path.exists(ckpt_path):
+            os.remove(ckpt_path)
+        os.rename(temp_latest, ckpt_path)
 
         print(f"--> Checkpoint saved: {numbered_path} (Latest updated)")
 
-    def load_checkpoint(self) -> tuple[int, List[Genome], Genome]:
-        """Loads state from pickle if it exists."""
-        if not os.path.exists(self.config.checkpoint_path):
-            return 0, None, None
+    @classmethod
+    def load_checkpoint(
+        cls, 
+        checkpoint_path: str,
+        retriever: Any,
+        fitness_calculator: Any,
+        evaluator: Any,
+        train_queries: List[str],
+        train_ground_truth: List[List[Any]],
+        val_queries: List[str],
+        val_ground_truth: List[List[Any]],
+        config: EvolutionConfigDict
+    ) -> 'EvolutionEngine':
+        """
+        Factory method: Creates a NEW engine instance and restores its state from disk.
+        """
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
 
-        print(f"--> Resuming from checkpoint: {self.config.checkpoint_path}")
-        with open(self.config.checkpoint_path, "rb") as f:
+        print(f"--> Loading checkpoint from: {checkpoint_path}")
+        with open(checkpoint_path, "rb") as f:
             state = pickle.load(f)
 
-        # Restore RNG states
-        random.setstate(state["random_state"])
-        np.random.set_state(state["np_random_state"])
-        
-        # Restore Tracker History (so plots don't start from empty)
-        if "tracker_history" in state:
-            self.tracker.history = state["tracker_history"]
+        # Initialize a fresh Engine with the provided dependencies
+        # This handles the "unpicklable" stuff like DB connections
+        engine = cls(
+            retriever=retriever,
+            fitness_calculator=fitness_calculator,
+            evaluator=evaluator,
+            train_queries=train_queries,
+            train_ground_truth=train_ground_truth,
+            val_queries=val_queries,
+            val_ground_truth=val_ground_truth,
+            config=config,
+            overwrite_logs=False
+        )
 
-        return state["generation"], state["population"], state["best_genome"]
+        # Restore Evolutionary State
+        engine.evo_context.population = state['population']
+        engine.evo_context.generation = state['generation']
+        
+        # Restore RNG (Crucial for reproducibility)
+        if 'random_state' in state:
+            random.setstate(state['random_state'])
+        if 'np_random_state' in state:
+            np.random.set_state(state['np_random_state'])
+
+        # Restore Logs/Tracker
+        if 'tracker_history' in state:
+            engine.tracker.history = state['tracker_history']
+            
+        print(f"  ✓ State restored. Resuming from Generation {state['generation']}")
+        return engine

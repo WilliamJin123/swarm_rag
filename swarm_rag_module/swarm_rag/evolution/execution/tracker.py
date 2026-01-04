@@ -5,12 +5,14 @@ import pandas as pd
 from typing import Dict, List, Any, Optional
 
 class ProgressTracker:
-    def __init__(self, log_path: str = "evolution_log.jsonl"):
+    def __init__(self, log_path: str = "evolution_log.jsonl", overwrite: bool = True):
         self.log_path = log_path
         self.history: List[Dict[str, Any]] = []
-        # Clear previous log
-        with open(self.log_path, "w") as f:
-            pass
+        if overwrite:
+            with open(self.log_path, "w") as f:
+                pass
+        else:
+            print(f"  [Tracker] Appending to existing log: {log_path}")
 
     def log(self, generation: int, train_stats: Dict[str, float], val_stats: Optional[Dict[str, float]] = None):
         """
@@ -40,33 +42,93 @@ class ProgressTracker:
 
         df = pd.DataFrame(self.history)
         
-        plt.figure(figsize=(10, 6))
-        
-        # Plot Fitness
-        plt.plot(df["generation"], df["train_best_fitness"], label="Train Best Fitness", marker="o")
-        plt.plot(df["generation"], df["train_avg_fitness"], label="Train Avg Fitness", linestyle="--", alpha=0.7)
-        
-        if "val_best_fitness" in df.columns and df["val_best_fitness"].notna().any():
-            # Interpolate validation points since they might be sparse
-            val_df = df.dropna(subset=["val_best_fitness"])
-            plt.plot(val_df["generation"], val_df["val_best_fitness"], label="Validation Fitness", marker="x", linewidth=2)
+        # Create a plot with 2 Y-axes (Quality on left, Cost on right)
+        fig, ax1 = plt.subplots(figsize=(10, 6))
 
-        plt.xlabel("Generation")
-        plt.ylabel("Fitness Score")
-        plt.title("Evolutionary Progress: Training vs Validation")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+        # --- Axis 1: Quality (Maximize) ---
+        color = 'tab:blue'
+        ax1.set_xlabel('Generation')
+        ax1.set_ylabel('Quality Score (Higher is Better)', color=color)
         
+        # Safe plotting (looks for 'train_best_quality', fallbacks to 'train_best_fitness' if legacy)
+        y_train_qual = df.get("train_best_quality", df.get("train_best_fitness"))
+        y_train_avg = df.get("train_avg_quality", df.get("train_avg_fitness"))
+        
+        if y_train_qual is not None:
+            ax1.plot(df["generation"], y_train_qual, label="Train Best Quality", color=color, marker="o")
+            ax1.plot(df["generation"], y_train_avg, label="Train Avg Quality", color=color, linestyle="--", alpha=0.5)
+        
+        # Validation Quality
+        if "val_best_quality" in df.columns:
+            val_df = df.dropna(subset=["val_best_quality"])
+            ax1.plot(val_df["generation"], val_df["val_best_quality"], label="Val Quality", color="tab:green", marker="x", linewidth=2)
+            
+        ax1.tick_params(axis='y', labelcolor=color)
+        ax1.grid(True, alpha=0.3)
+
+        # --- Axis 2: Cost (Minimize) ---
+        if "train_best_cost" in df.columns:
+            ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+            color = 'tab:red'
+            ax2.set_ylabel('Cost / Latency (ms) (Lower is Better)', color=color)
+            ax2.plot(df["generation"], df["train_best_cost"], label="Train Cost", color=color, linestyle=":", alpha=0.6)
+            ax2.tick_params(axis='y', labelcolor=color)
+
+        # Combine legends
+        lines_1, labels_1 = ax1.get_legend_handles_labels()
+        lines_2, labels_2 = (ax2.get_legend_handles_labels() if "train_best_cost" in df.columns else ([], []))
+        ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper left")
+
+        plt.title("Evolutionary Progress: Quality vs Cost")
+        plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
         print(f"Progress plot saved to {save_path}")
 
     def print_summary(self, generation: int):
-        """Prints a clean summary to console."""
+        if not self.history:
+            print("No history to summarize.")
+            return
+
         latest = self.history[-1]
         print(f"--- Gen {generation} Summary ---")
-        print(f"  Train Best: {latest.get('train_best_fitness', 0):.4f}")
-        print(f"  Train Avg:  {latest.get('train_avg_fitness', 0):.4f}")
-        if 'val_best_fitness' in latest:
-            print(f"   VAL SCORE: {latest['val_best_fitness']:.4f}")
-        print("----------------------------")
+
+        # Sort keys to ensure Train comes before Val, and metrics are alphabetical
+        sorted_keys = sorted(latest.keys())
+
+        for key in sorted_keys:
+            # Skip metadata keys
+            if key in ["generation", "timestamp"]:
+                continue
+
+            val = latest[key]
+            
+            # 1. Smart Value Formatting
+            if isinstance(val, (int, float)):
+                # If it looks like latency/cost (large number) or integer, use less precision
+                if "cost" in key or "latency" in key or abs(val) > 100:
+                    val_str = f"{val:.1f}"
+                elif isinstance(val, int) or val.is_integer():
+                    val_str = f"{int(val)}"
+                else:
+                    # Standard metric precision
+                    val_str = f"{val:.4f}"
+            else:
+                val_str = str(val)
+
+            # 2. Key Beautification
+            # Convert "train_best_quality" -> "Train Best Quality"
+            if key.startswith("train_"):
+                clean_key = key.replace("train_", "").replace("_", " ").title()
+                prefix = "[TRAIN]"
+            elif key.startswith("val_"):
+                clean_key = key.replace("val_", "").replace("_", " ").title()
+                prefix = "[ VAL ]"
+            else:
+                clean_key = key.replace("_", " ").title()
+                prefix = "[     ]"
+
+            # 3. Print aligned
+            print(f"  {prefix} {clean_key:<25} : {val_str}")
+
+        print("-" * 45)

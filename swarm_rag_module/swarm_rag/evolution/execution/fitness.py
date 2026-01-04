@@ -21,7 +21,7 @@ class FitnessCalculator:
             
         # Penalize complexity lightly in the quality score
         complexity_penalty = 0.0005 * genome.complexity()
-        quality -= complexity_penalty
+        quality_score -= complexity_penalty
 
         # Stability
         stability = 1.0 - metrics.get("variance", 0.0)

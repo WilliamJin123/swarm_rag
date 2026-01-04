@@ -74,13 +74,13 @@ class PopulationEvaluator:
             
             for future in as_completed(future_to_genome):
                 genome = future_to_genome[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Genome {genome.id} evaluation failed: {e}")
-                    from .fitness import FitnessResult
-                    genome.fitness = FitnessResult(0.0, 0.0, 9999.0)
-                    genome.evaluated = True
+                # try:
+                future.result()
+                # except Exception as e:
+                #     print(f"Genome {genome.id} evaluation failed: {e}")
+                #     from .fitness import FitnessResult
+                #     genome.fitness = FitnessResult(0.0, 0.0, 9999.0)
+                #     genome.evaluated = True
 
     def _evaluate_single(
         self, 
@@ -126,4 +126,32 @@ class PopulationEvaluator:
     def _mean_metrics(self, all_metrics):
         if not all_metrics: return {}
         keys = all_metrics[0].keys()
-        return {k: float(np.mean([m[k] for m in all_metrics])) for k in keys}
+        aggregated = {}
+        for k in keys:
+            values = [m[k] for m in all_metrics]
+            aggregated[k] = float(np.mean(values))
+            aggregated[f"var_{k}"] = float(np.var(values))
+
+        # We still pick one main metric to represent the overall "Stability Score"
+        priority_keys = [
+            # Preferred (The standard benchmarks for this project)
+            "Recall@10", "Hit@10",  "MRR",
+            
+            # Stricter Metrics (High Precision)
+            "Recall@5", "Hit@5", 
+            "Recall@1", "Hit@1",
+            
+            # Looser Metrics (Broad Recall)
+            "Recall@20", "Hit@20"
+        ]
+
+        main_key = next((k for k in priority_keys if k in keys), None)
+        
+        if main_key:
+            aggregated["variance"] = aggregated[f"var_{main_key}"]
+        else:
+            # This handles edge cases like "Recall@15" or custom metrics
+            fallback = next((k for k in keys if "Recall" in k or "Hit" in k), None)
+            aggregated["variance"] = aggregated[f"var_{fallback}"] if fallback else 0.0
+            
+        return aggregated
