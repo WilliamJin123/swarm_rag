@@ -125,7 +125,6 @@ class SwarmRetriever:
         movement_strategies: Optional[Dict] = None,
         ranking_strategies: Optional[Dict] = None,
         deposit_strategies: Optional[Dict] = None,
-        parallel_queries: bool = True,
         max_workers: Optional[int] = 4
     ) -> List[List[Dict]]:
         """
@@ -163,16 +162,10 @@ class SwarmRetriever:
         query_vectors = self._get_cached_query_embeddings_batch(queries)
 
         # Decide processing strategy
-        if (
-            parallel_queries
-            and len(queries) > 2
-            and max_workers > 1
-            and self._has_resources_for_parallel()
-        ):
-            max_concurrent = max_workers or self._calculate_optimal_concurrency()
+        if max_workers > 1 and len(queries) > 1:
             return self._retrieve_batch_parallel(
                 query_vectors,
-                max_workers=max_concurrent,
+                max_workers=max_workers,
                 deterministic=current_deterministic,
                 seed=current_seed,
                 **params

@@ -30,6 +30,12 @@ class EvolutionEngine:
         config: EvolutionConfig = None,
     ):
         self.config = config or EvolutionConfig()
+        omp_threads = os.environ.get("OMP_NUM_THREADS")
+        if omp_threads != "1":
+            print("\n[WARNING] Engine: Vectorized ops are enabled but OMP_NUM_THREADS is not '1'.")
+            print(f"          Current value: {omp_threads}")
+            print("          This may cause severe performance degradation due to thread contention.")
+            print("          Recommendation: export OMP_NUM_THREADS=1\n")
 
         # Data
         self.train_queries = train_queries
@@ -54,12 +60,9 @@ class EvolutionEngine:
             fitness_calc=fitness_calculator, 
             queries=train_queries, 
             ground_truth=train_ground_truth,
-            global_max_threads=self.config.global_max_threads,
             concurrent_evaluations=self.config.concurrent_evaluations
         )
         self.loop = EvolutionLoop(self.evo_context)
-
-        # Tracking
         self.tracker = ProgressTracker(log_path=self.config.log_file)
 
     def create_initial_genomes(self) -> List[Genome]:
@@ -177,11 +180,16 @@ class EvolutionEngine:
         }
         
         # Save to a temporary file first, then rename to avoid corruption if interrupted
-        temp_path = self.config.checkpoint_path + ".tmp"
-        with open(temp_path, "wb") as f:
+        base, ext = os.path.splitext(self.config.checkpoint_path)
+        numbered_path = f"{base}_gen_{generation}{ext}"
+        with open(numbered_path, "wb") as f:
             pickle.dump(state, f)
-        os.replace(temp_path, self.config.checkpoint_path)
-        print(f"--> Checkpoint saved to {self.config.checkpoint_path} (Gen {generation})")
+        temp_latest = self.config.checkpoint_path + ".tmp"
+        with open(temp_latest, "wb") as f:
+            pickle.dump(state, f)
+        os.replace(temp_latest, self.config.checkpoint_path)
+
+        print(f"--> Checkpoint saved: {numbered_path} (Latest updated)")
 
     def load_checkpoint(self) -> tuple[int, List[Genome], Genome]:
         """Loads state from pickle if it exists."""

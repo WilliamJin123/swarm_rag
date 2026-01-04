@@ -21,7 +21,6 @@ class PopulationEvaluator:
         retriever: RetrievalBackend, # SwarmRetriever conforms to this protocol
         evaluator: Evaluator,
         fitness_calc: FitnessCalculator,
-        global_max_threads: int = 16,
         concurrent_evaluations: int = 4,
         queries: List[str] = None,
         ground_truth: List[List[Any]] = None
@@ -33,9 +32,7 @@ class PopulationEvaluator:
         self.ground_truth = ground_truth
         self.compiler = GenomeCompiler()
         
-        self.concurrent_evaluations = min(concurrent_evaluations, global_max_threads)
-        self.global_max_threads = global_max_threads
-
+        self.concurrent_evaluations = concurrent_evaluations
 
     def evaluate(
         self, 
@@ -48,31 +45,27 @@ class PopulationEvaluator:
         """
         queries = queries or self.queries
         ground_truth = ground_truth or self.ground_truth
-        if queries is None or ground_truth is None:
-            raise Exception
 
         unevaluated = [g for g in population if not g.evaluated]
         if not unevaluated:
             return
+        batch_size = self.concurrent_evaluations
+        
         print(f"Evaluating {len(unevaluated)} genomes...")
-
-        # Calculate Resource Budget
-        batch_size = min(len(unevaluated), self.concurrent_evaluations)
-        threads_per_retriever = max(1, self.global_max_threads // batch_size)
-        print(f"  > Concurrency: {batch_size} genomes")
-        print(f"  > Thread Budget: {threads_per_retriever} threads per genome")
+        print(f"  > Concurrency: {batch_size} genomes parallel")
+        print(f"  > Mode: Sequential Queries per Genome (max_workers=1)")
 
         # Process in chunks to respect concurrency limits
         for i in range(0, len(unevaluated), batch_size):
             batch = unevaluated[i : i + batch_size]
-            self._evaluate_batch(batch, queries, ground_truth, threads_per_retriever)
+            self._evaluate_batch(batch, queries, ground_truth)
 
     def _evaluate_batch(
         self, 
         batch: List[Genome], 
         queries: List[str], 
         ground_truth: List[List[Any]],
-        max_workers_per_query: int
+        
     ):
         """
         Runs a batch of evaluations concurrently.
@@ -86,7 +79,6 @@ class PopulationEvaluator:
                     genome, 
                     queries, 
                     ground_truth, 
-                    max_workers_per_query
                 ): genome 
                 for genome in batch
             }
@@ -103,7 +95,6 @@ class PopulationEvaluator:
     def _evaluate_single(
         self, 
         genome: Genome, 
-        max_workers: int,
         queries: List[str],
         ground_truth: List[List[Any]]
     ):
@@ -118,7 +109,7 @@ class PopulationEvaluator:
         
         batch_results = self.retriever.retrieve_batch(
             queries=queries,
-            max_workers=max_workers,
+            max_workers=1,
             **retriever_kwargs
         )
         

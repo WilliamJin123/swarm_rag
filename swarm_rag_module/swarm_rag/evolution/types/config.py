@@ -8,7 +8,6 @@ class EvolutionConfig:
     Central type-safe configuration for the Evolution Engine.
     """
     # --- Resource Management ---
-    global_max_threads: int = 16
     concurrent_evaluations: int = 4
 
     # --- Loop Control ---

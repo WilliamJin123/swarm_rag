@@ -23,3 +23,12 @@ Update, have the main scaffolding built out. We are not doing GNN bullshit and G
 What we will be doing though is spamming genetic algorithms to optimize hyperparameters for different memory constraints (probably just unconstrained for now) and heuristic linear combinations (symbolic regression)
 
 Hopefully we cooking with this over the next few days and we can benchmarkmaxx on Stark
+
+# 01-03
+
+Learning about genetic algorithm nuances
+- We are doing (μ + λ): elitist; parents and offspring compete (best case for our proj)
+- Need to decide selection strategies (tournament vs SUS vs Top-k trunc vs Roulette vs Rank-based, etc.) --> Multiple impleemnted in strategies.py
+- Crossover: Subtree Crossover for expressions
+- Mutation: need to figure out
+- Fitness function strategies: need to figure out
