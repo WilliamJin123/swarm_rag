@@ -71,6 +71,7 @@ class ToyStochasticRetriever:
 CKPT_FILE = "test_data/sim_test.pkl"
 LOG_FILE = "test_data/sim_log.jsonl"
 PLOT_FILE = "test_data/sim_plot.png"
+PLOT_TITLE = "Full E2E Evolution Test"
 
 def get_test_config():
     """Returns a consistent config for both tests to avoid default file leakage."""
@@ -85,6 +86,7 @@ def get_test_config():
         "checkpoint_path": CKPT_FILE,
         "log_file": LOG_FILE,
         "plot_file": PLOT_FILE,
+        "plot_title": PLOT_TITLE,
         
         # Toy Problem Search Space
         "param_ranges": {

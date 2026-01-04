@@ -175,7 +175,8 @@ class EvolutionEngine:
                 population = self.loop.step(population)
 
         self.save_checkpoint(population, best_genome, n_gen - 1)
-        self.tracker.plot(save_path=self.config["plot_file"])
+        
+        self.tracker.plot(save_path=self.config["plot_file"], title=self.config["plot_title"])
         return best_genome
     
     def save_checkpoint(self, population: List[Genome], best_genome: Genome, generation: int):

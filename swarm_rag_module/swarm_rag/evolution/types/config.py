@@ -38,6 +38,7 @@ class EvolutionConfigDict(TypedDict):
     validation_frequency: int
     log_file: str
     plot_file: str
+    plot_title: str
     checkpoint_frequency: int
     checkpoint_path: str
     resume_from_checkpoint: bool
@@ -66,6 +67,7 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "validation_frequency": 5,
     "log_file": "evo_log.jsonl",
     "plot_file": "evo_plot.png",
+    "plot_title": "Evolutionary Progress",
     "checkpoint_frequency": 5,
     "checkpoint_path": "evo_checkpoint.pkl",
     "resume_from_checkpoint": True

@@ -33,7 +33,11 @@ class ProgressTracker:
         with open(self.log_path, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
-    def plot(self, save_path: str = "evolution_progress.png"):
+    def plot(
+        self, 
+        save_path: str = "evolution_progress.png", 
+        title: str = "Evolutionary Progress"
+    ):
         """
         Generates a training vs validation graph.
         """
@@ -79,7 +83,7 @@ class ProgressTracker:
         lines_2, labels_2 = (ax2.get_legend_handles_labels() if "train_best_cost" in df.columns else ([], []))
         ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper left")
 
-        plt.title("Evolutionary Progress: Quality vs Cost")
+        plt.title(title)
         plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
