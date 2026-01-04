@@ -3,6 +3,7 @@ import shutil
 import pytest
 import numpy as np
 from typing import List
+import pickle
 
 from swarm_rag.evolution.types.genome import Genome, DEFAULT_PARAMS
 from swarm_rag.evolution.types.config import EvolutionContext, DEFAULT_EVO_CONFIG
@@ -10,21 +11,50 @@ from swarm_rag.evolution.extensions.niching import NichingExtension
 from swarm_rag.evolution.extensions.immigration import RandomImmigrationExtension
 from swarm_rag.evolution.extensions.migration import FileMigrationExtension
 
+class MockStrategy:
+    """A dummy object that acts like a Strategy Tree for testing."""
+    def __init__(self, val=1.0):
+        self.val = val
+        
+    def copy(self):
+        """Genome.copy() needs this method."""
+        return MockStrategy(self.val)
+
+    def evaluate(self, context):
+        """Fallback evaluation if compiled cache is missed."""
+        return self.val
+
 # --- MOCK CONTEXT HELPER ---
 def create_mock_context(pop_size=10) -> EvolutionContext:
     pop = []
     for i in range(pop_size):
-        g = Genome(id=f"g{i}", params=DEFAULT_PARAMS.copy(), strategies={})
-        g.fitness.quality_score = 1.0  # Everyone starts perfect
+        # FIX: We give the genome "Dummy" strategies. 
+        # The Niching extension will verify these exist, avoiding the "missing" log.
+        # We don't need real Trees, because we will inject the Compiled Function directly.
+        dummy_strategies = {
+            "movement": MockStrategy(),
+            "ranking": MockStrategy(),
+            "deposit": MockStrategy()
+        }
+        
+        g = Genome(id=f"g{i}", params=DEFAULT_PARAMS.copy(), strategies=dummy_strategies)
+        g.fitness.quality_score = 1.0 
+        
+        # FIX: Inject Compiled Functions so Niching has something to execute
+        # This simulates a genome that has successfully compiled its strategies
+        g._compiled_cache['movement'] = lambda x: 1.0
+        g._compiled_cache['ranking'] = lambda x: 1.0
+        g._compiled_cache['deposit'] = lambda x: 1.0
+        
         pop.append(g)
     
     ctx = EvolutionContext(
         config=DEFAULT_EVO_CONFIG,
         generation=0,
         available_features=[],
-        expression_features={"movement": [], "ranking": [], "deposit": []}
+        expression_features={"movement": [], "ranking": [], "deposit": []},
+        population=pop
     )
-    ctx.population = pop
     return ctx
 
 # --- 1. TEST NICHING ---
@@ -124,8 +154,8 @@ def test_migration_io():
     super_genome = Genome(id="super_alien", params=DEFAULT_PARAMS, strategies={})
     super_genome.fitness.quality_score = 9999.0
     
-    import pickle
-    with pickle.dump([super_genome], open(neighbor_file, "wb")): pass
+    with open(neighbor_file, "wb") as f:
+        pickle.dump([super_genome], f)
     
     # Run hook again -> Should find neighbor file
     ext.on_generation_end(ctx)
@@ -137,3 +167,11 @@ def test_migration_io():
 
     # Cleanup
     if os.path.exists(test_dir): shutil.rmtree(test_dir)
+
+if __name__ == "__main__":
+    test_niching_penalizes_clones()
+    test_niching_spares_unique()
+    test_immigration_replaces_worst()
+    test_migration_io()
+
+    print("TESTS SUCCEEDED")

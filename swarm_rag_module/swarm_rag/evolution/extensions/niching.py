@@ -20,10 +20,10 @@ class NichingExtension(EvolutionExtension):
         self.sigma_share = sigma_share
         self.alpha = alpha
         self.n_probes = n_probes
+        self.feature_keys = [getattr(k, 'value', k) for k in HeuristicRegistry.all().keys()]
         self.probes = self._generate_probes(n_probes)
 
         # We will profile these 3 keys
-        self.feature_keys = [getattr(k, 'value', k) for k in HeuristicRegistry.all().keys()]
         self.target_strategies = ["movement", "ranking", "deposit"]
 
 

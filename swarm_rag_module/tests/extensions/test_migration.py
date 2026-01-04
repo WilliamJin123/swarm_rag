@@ -65,3 +65,6 @@ def test_migration_exchange(clean_pool):
     
     print(f"\nIsland B Best Agent ID: {best_id_b} (Score: {max_score_b})")
     print("Migration successful: Island A's elite migrated to Island B.")
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-s"])

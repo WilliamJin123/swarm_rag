@@ -58,3 +58,7 @@ def test_immigration_replaces_worst_performers():
     assert "native_8" not in ids
     
     print("\nFinal Population IDs:", ids)
+
+if __name__ == "__main__":
+    test_immigration_replaces_worst_performers()
+    

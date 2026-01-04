@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import functools
 import math
 
@@ -11,9 +11,9 @@ class FitnessResult:
     """
     Multi-objective fitness to support Lexicographic Selection.
     """
-    quality_score: float   # Primary (Recall, MRR)
-    stability_score: float # Secondary (Variance)
-    cost_score: float      # Tertiary (Latency)
+    quality_score: float = field(default=-math.inf, compare=True)   # maximise
+    stability_score: float = field(default=-math.inf, compare=True) # maximise
+    cost_score: float = field(default=math.inf, compare=True)      # minimise
 
     # Magic methods allow sorting to work natively with Python's sort() and max()
     def _get_sort_key(self):

@@ -12,6 +12,15 @@ from .expressions import ExpressionNode
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
 from .expressions import ExpressionNode
 
+class CompiledStrategies(TypedDict, total=False):
+    """
+    Type definition for the compiled function cache.
+    total=False means keys can be missing (e.g. if 'deposit' isn't compiled yet).
+    """
+    movement: Callable
+    ranking: Callable
+    deposit: Callable
+
 class SwarmParams(TypedDict):
     """
     Defines the contract for Swarm Hyperparameters.
@@ -44,13 +53,13 @@ class Genome:
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
 
-    fitness: FitnessResult = None
+    fitness: FitnessResult = FitnessResult()
 
     metrics: Dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0
     evaluated: bool = False
 
-    _compiled_cache: Dict[str, Callable] = field(default_factory=dict, repr=False)
+    _compiled_cache: CompiledStrategies = field(default_factory=dict, repr=False)
 
     def __hash__(self):
         """Allows Genome to be used in sets or as dict keys."""
@@ -115,7 +124,11 @@ class Genome:
             id=f"{self.id}_copy",
             params=new_params,
             strategies=new_strategies,
-            fitness=self.fitness,
+            fitness=FitnessResult(
+                self.fitness.quality_score, 
+                self.fitness.stability_score, 
+                self.fitness.cost_score
+            ),
             metrics=self.metrics.copy(),
             latency_ms=self.latency_ms,
             evaluated=self.evaluated,
