@@ -3,6 +3,7 @@ from .fitness import FitnessCalculator
 from .loop import EvolutionLoop
 from .strategies import GeneticStrategies, GeneticRegistry
 from .tracker import ProgressTracker
+from .factory import GenomeFactory
 
 __all__ = [
     "PopulationEvaluator",
@@ -10,5 +11,6 @@ __all__ = [
     "EvolutionLoop",
     "GeneticStrategies",
     "GeneticRegistry",
-    "ProgressTracker"
+    "ProgressTracker",
+    "GenomeFactory",
 ]

@@ -6,6 +6,7 @@ from typing import List, Any
 from tqdm.auto import tqdm
 import logging
 
+
 from ..core.swarm_retriever import SwarmRetriever
 from ..core.heuristics import HeuristicRegistry
 from ..eval.metrics import Evaluator
@@ -18,6 +19,7 @@ from .execution.evaluator import PopulationEvaluator
 from .execution.loop import EvolutionLoop
 from .execution.fitness import FitnessCalculator
 from .execution.tracker import ProgressTracker
+from .execution.factory import GenomeFactory
 from .extensions.base import EvolutionExtension
 
 from ..utils import TqdmLoggingHandler
@@ -33,27 +35,34 @@ class EvolutionEngine:
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
         config: EvolutionConfigDict = None,
+        genome_factory: 'GenomeFactory' = None,
         extensions: List['EvolutionExtension'] = None,
         overwrite_logs: bool = True
     ):
         config = config or DEFAULT_EVO_CONFIG
-
+        
         self.train_query_ids = train_query_ids
         self.train_gt = train_ground_truth
         self.val_query_ids = val_query_ids
         self.val_gt = val_ground_truth
 
-        self.evo_context = EvolutionContext(
-            config=config,
-            generation=0,
-            available_features=list(HeuristicRegistry.all().keys()),
-            # Maps "movement" -> ["semantic", "degree", ...]
-            expression_features={
-                "movement": list(HeuristicRegistry.all_movement().keys()),
-                "ranking": list(HeuristicRegistry.all_ranking().keys()),
-                "deposit": list(HeuristicRegistry.all_deposit().keys()),
-            }
-        )
+        if genome_factory is None:
+            self.evo_context = EvolutionContext(
+                config=self.config,
+                generation=0,
+                available_features=list(HeuristicRegistry.all().keys()),
+                expression_features={
+                    "movement": list(HeuristicRegistry.all_movement().keys()),
+                    "ranking": list(HeuristicRegistry.all_ranking().keys()),
+                    "deposit": list(HeuristicRegistry.all_deposit().keys()),
+                }
+            )
+            from .execution.factory import GenomeFactory
+            self.genome_factory = GenomeFactory(self.config, self.evo_context)
+        else:
+            self.genome_factory = genome_factory
+            self.evo_context = genome_factory.context
+
         self.config = self.evo_context.config
 
         self.population_evaluator = PopulationEvaluator(
@@ -74,76 +83,10 @@ class EvolutionEngine:
 
         self.extensions = extensions or []
         for ext in self.extensions:
+            # Automatically link the factory to the extension if it needs it
+            if hasattr(ext, 'genome_factory') and ext.genome_factory is None:
+                ext.genome_factory = self.genome_factory.create_population
             ext.on_init(self.evo_context)
-
-    def create_initial_genomes(self) -> List[Genome]:
-        """Boots up the first random population."""
-        count = self.config['population_size']
-        ranges = self.config['param_ranges']
-        max_d = self.config['expr_max_depth']
-        n_groups = self.config["n_agent_groups"]
-        
-        strat_trees = {}
-        for strat_type in ["movement", "deposit"]:
-            features = self.evo_context.expression_features[strat_type]
-            total_trees = count * n_groups
-            
-            flat_list = ExpressionEvolution.generate_ramped_half_and_half(
-                features=features,
-                population_size=total_trees,
-                max_depth=max_d
-            )
-            strat_trees[strat_type] = flat_list
-
-        ranking_features = self.evo_context.expression_features["ranking"]
-        ranking_trees = ExpressionEvolution.generate_ramped_half_and_half(
-            features=ranking_features,
-            population_size=count,
-            max_depth=max_d
-        )
-
-        base_rate = self.config['base_mutation_rate']
-
-        population = []
-        for i in range(count):
-            # Randomize Global Params
-            params = DEFAULT_PARAMS.copy()
-            for key in params.keys():
-                if key in ranges:
-                    min_v, max_v = ranges[key]
-                    if isinstance(min_v, int):
-                        params[key] = random.randint(min_v, max_v)
-                    else:
-                        params[key] = random.uniform(min_v, max_v)
-
-            # Randomize Group Ratios & Assign Trees
-            strategies = {}
-            group_ratios = {}
-
-            strategies["ranking"] = ranking_trees[i]
-            
-            for g_idx in range(n_groups):
-                # Ratio
-                min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
-                group_ratios[f"g{g_idx}"] = random.uniform(min_r, max_r)
-                
-                # Strategies (Pop from pre-generated list)
-                strategies[f"g{g_idx}_movement"] = strat_trees["movement"].pop()
-                strategies[f"g{g_idx}_deposit"] = strat_trees["deposit"].pop()
-            
-            # Jitter the initial rate so the population starts diverse
-            start_rate = max(0.01, min(0.5, random.gauss(base_rate, 0.05)))
-
-            genome = Genome(
-                id=f"gen0_{i}",
-                params=params,
-                group_ratios=group_ratios,
-                strategies=strategies,
-                mutation_rate=start_rate
-            )
-            population.append(genome)
-            
-        return population
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
 
@@ -167,7 +110,9 @@ class EvolutionEngine:
             population = self.evo_context.population
             print(f"Resuming evolution with existing population of {len(population)}")
         else:
-            population = initial_population or self.create_initial_genomes()
+            population = initial_population or self.genome_factory.create_population(
+                self.config['population_size']
+            )
 
         best_genome: Genome = None
         n_gen = self.config["n_generations"]

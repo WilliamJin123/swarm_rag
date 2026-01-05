@@ -1,11 +1,18 @@
 import random
+from typing import Callable, List
+
+from ..types.genome import Genome
 from .base import EvolutionExtension
 
 
 class RandomImmigrationExtension(EvolutionExtension):
-    def __init__(self, rate: float = 0.05, engine_ref=None):
+    def __init__(
+        self, 
+        rate: float = 0.05, 
+        genome_factory: Callable[..., List[Genome]] = None):
+        
         self.rate = rate
-        self.engine = engine_ref
+        self.genome_factory = genome_factory
 
     def on_before_breeding(self, ctx):
         """
@@ -19,12 +26,7 @@ class RandomImmigrationExtension(EvolutionExtension):
         # Sort: Best -> Worst
         ctx.population.sort(key=lambda g: g.fitness, reverse=True)
         
-        # Generate fresh randoms (using the engine's helper if available, or manual)
-        # Assuming you expose a helper in engine or context to create randoms
-        new_blood = self.engine.create_initial_genomes()[:n_immigrants] 
-        
-        # Replace the worst
-        # (The loop.step() uses the whole population, so we modify it in-place)
+        new_blood = self.genome_factory(n_immigrants) 
         ctx.population[-n_immigrants:] = new_blood
         
         print(f"  [Extension] Immigrated {n_immigrants} new random genomes.")
