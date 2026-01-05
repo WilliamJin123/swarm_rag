@@ -42,9 +42,10 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
         data = random.shuffle(subset)
     
     queries = [item[0] for item in data]
+    query_ids = [item[1] for item in data]
     answer_ids = [item[2] for item in data]
     
-    return queries, answer_ids
+    return queries, query_ids, answer_ids
 
 def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
     # Load
@@ -68,8 +69,8 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
     
     # Prepare Data Subsets
     # We use a smaller subset for Training (Speed) and Validation (Reliability)
-    train_q, train_gt = prepare_stark_data(dataset_name, 'train', sample_size=100)
-    val_q, val_gt = prepare_stark_data(dataset_name, 'val', sample_size=50)
+    train_q, train_q_ids, train_gt = prepare_stark_data(dataset_name, 'train', sample_size=100)
+    val_q, val_q_ids, val_gt = prepare_stark_data(dataset_name, 'val', sample_size=50)
     
     print(f"Evolution Corpus: {len(train_q)} training queries, {len(val_q)} validation queries.")
 
@@ -130,9 +131,9 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
         retriever=retriever,
         fitness_calculator=fitness_calc,
         evaluator=evaluator,
-        train_queries=train_q,
+        train_queries=train_q_ids,
         train_ground_truth=train_gt,
-        val_queries=val_q,
+        val_queries=val_q_ids,
         val_ground_truth=val_gt,
         config=evo_config,
         extensions=extensions

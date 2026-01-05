@@ -28,9 +28,9 @@ class EvolutionEngine:
         retriever: SwarmRetriever,
         fitness_calculator: FitnessCalculator,
         evaluator: Evaluator,
-        train_queries: List[str],
+        train_query_ids: List[Any],
         train_ground_truth: List[List[Any]],
-        val_queries: List[str],
+        val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
         config: EvolutionConfigDict = None,
         extensions: List['EvolutionExtension'] = None,
@@ -38,9 +38,9 @@ class EvolutionEngine:
     ):
         config = config or DEFAULT_EVO_CONFIG
 
-        self.train_queries = train_queries
+        self.train_query_ids = train_query_ids
         self.train_gt = train_ground_truth
-        self.val_queries = val_queries
+        self.val_query_ids = val_query_ids
         self.val_gt = val_ground_truth
 
         self.evo_context = EvolutionContext(
@@ -60,7 +60,7 @@ class EvolutionEngine:
             retriever=retriever, 
             evaluator=evaluator, 
             fitness_calc=fitness_calculator, 
-            queries=train_queries, 
+            queries=train_query_ids, 
             ground_truth=train_ground_truth,
             concurrent_evaluations=self.config["concurrent_evaluations"]
         )
@@ -218,7 +218,7 @@ class EvolutionEngine:
                 # Evaluate on VALIDATION set
                 self.population_evaluator.evaluate(
                     [val_candidate], 
-                    queries=self.val_queries, 
+                    queries=self.val_query_ids, 
                     ground_truth=self.val_gt
                 )
                 
@@ -299,9 +299,9 @@ class EvolutionEngine:
         retriever: Any,
         fitness_calculator: Any,
         evaluator: Any,
-        train_queries: List[str],
+        train_query_ids: List[Any],
         train_ground_truth: List[List[Any]],
-        val_queries: List[str],
+        val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
         config: EvolutionConfigDict
     ) -> 'EvolutionEngine':
@@ -321,9 +321,9 @@ class EvolutionEngine:
             retriever=retriever,
             fitness_calculator=fitness_calculator,
             evaluator=evaluator,
-            train_queries=train_queries,
+            train_query_ids=train_query_ids,
             train_ground_truth=train_ground_truth,
-            val_queries=val_queries,
+            val_query_ids=val_query_ids,
             val_ground_truth=val_ground_truth,
             config=config,
             overwrite_logs=False
