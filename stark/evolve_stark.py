@@ -96,7 +96,7 @@ def run_evolution(
             "Recall@5": 0.07, 
             "Hit@20": 0.05,     
             "Recall@10": 0.06,
-            "complexity": -0.01,
+            "complexity": -0.001,
             # "variance": -0.1, 
             # "latency_ms": -0.00005, 
             # Don't penalize these because we are using lexicographic fitness (these are accounted for in the secondary / tertiary scores) 

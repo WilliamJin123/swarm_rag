@@ -117,17 +117,54 @@ class PopulationEvaluator:
         # Compile
         retriever_kwargs = self.compiler.compile(genome)
 
-        # Run Retrieval
+
+        # --- STOCHASTIC FILTERING (PROBE PHASE) ---
+        probe_size = 20  # Evaluate on first 20 queries
+        probe_queries = queries[:probe_size]
+        probe_gt = ground_truth[:probe_size]
+
         start_time = time.time()
+
+        probe_results = self.retriever.retrieve_batch(
+            queries=probe_queries,
+            max_workers=self.max_workers_per_retrieval,
+            genome_id=f"{genome.id}_probe",
+            **retriever_kwargs
+        )
+
+        # Check if we should continue
+        probe_metrics = []
+        for i, res in enumerate(probe_results):
+            m = self.evaluator.calculate_metrics(res, probe_gt[i], latency_sec=0)
+            probe_metrics.append(m)
         
-        batch_results = self.retriever.retrieve_batch(
-            queries=queries,
+        avg_probe_metrics = self._mean_metrics(probe_metrics)
+        avg_probe_metrics['latency_ms'] = (time.time() - start_time) / probe_size
+
+        probe_fitness = self.fitness_calc.calculate(avg_probe_metrics, genome)
+
+        if probe_fitness.quality_score < 0.1:
+            logger.info(
+                f"  > [Short-Circuit] {genome.id} aborted. "
+                f"Probe Quality: {probe_fitness.quality_score:.4f}"
+            )
+            genome.metrics = avg_probe_metrics
+            genome.fitness = probe_fitness
+            genome.evaluated = True
+            return
+
+        remaining_queries = queries[probe_size:]
+
+        remaining_results = self.retriever.retrieve_batch(
+            queries=remaining_queries,
             max_workers=self.max_workers_per_retrieval,
             genome_id=genome.id,
             **retriever_kwargs
         )
         
         total_latency = time.time() - start_time
+
+        batch_results = probe_results + remaining_results
 
         # Compute Metrics
         all_metrics = []

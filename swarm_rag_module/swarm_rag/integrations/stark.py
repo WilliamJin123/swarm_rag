@@ -1,5 +1,5 @@
 import math
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 from ..interfaces.enums import HeuristicKey
@@ -187,18 +187,17 @@ class StarkInMemoryVectorStore(VectorStore):
 # --- 3. Embedding Adapter (Pre-computed Lookup) ---
 class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     def __init__(self, query_embs: dict[int, torch.Tensor]):
-        self.query_embs = query_embs
+        self.query_embs = {}
+        for qid, emb in query_embs.items():
+            if hasattr(emb, 'numpy'):
+                # Handle torch tensors (move to CPU if needed)
+                self.query_embs[qid] = emb.cpu().detach().numpy() if hasattr(emb, 'is_cuda') and emb.is_cuda else emb.numpy()
+            else:
+                self.query_embs[qid] = np.array(emb)
 
     def embed_query(self, query_id: int) -> np.ndarray:
-        # Note: We expect the input to be the Query ID, not the string text,
-        # because we are looking up pre-computed values.
-        if query_id not in self.query_embs:
-            raise ValueError(f"Query ID {query_id} not found in pre-computed embeddings.")
-        tensor = self.query_embs[query_id]
-        # Handle CUDA tensors by moving to CPU first
-        return tensor.cpu().numpy() if tensor.is_cuda else tensor.numpy()
-    
-
-    def embed_query_batch(self, query_ids: list[int]) -> np.ndarray:
-        return np.stack([self.embed_query(qid) for qid in query_ids])
+        return self.query_embs[query_id]
+        
+    def embed_query_batch(self, query_ids: list[int]) -> List[np.ndarray]:
+        return [self.embed_query(qid) for qid in query_ids]
     
