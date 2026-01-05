@@ -1,3 +1,4 @@
+import random
 import time
 import argparse
 from typing import List, Optional
@@ -9,7 +10,12 @@ from swarm_rag.integrations.stark import StarkInMemoryVectorStore, StarkPreCompu
 from swarm_rag.eval import Evaluator, EvalReporter
 from load_stark import load_and_download_embeddings, load_and_download_skb, load_and_download_qa, precompute_stark_adjacency
 
-def test_stark_questions(dataset_names: List[str], num_questions: int = 10) -> None:
+def test_stark_questions(
+    dataset_names: List[str], 
+    num_questions: int = 10, 
+    seed: Optional[int] = None,
+    human_gen: bool = False
+) -> None:
     """
     Test the first n questions of each QA dataset and generate evaluation metrics and plots.
     
@@ -17,6 +23,9 @@ def test_stark_questions(dataset_names: List[str], num_questions: int = 10) -> N
         dataset_names: List of dataset names to test (e.g., ["prime", "amazon"])
         num_questions: Number of questions to process from the start of the dataset.
     """
+    if seed is not None:
+        random.seed(seed)
+
     reporter = EvalReporter()
 
     for dataset_name in dataset_names:
@@ -26,7 +35,7 @@ def test_stark_questions(dataset_names: List[str], num_questions: int = 10) -> N
 
         # Load Data
         print("Loading QA data...")
-        qa_data = load_and_download_qa(dataset_name)
+        qa_data = load_and_download_qa(dataset_name, human_gen=human_gen)
         
         print("Loading SKB...")
         skb = load_and_download_skb(dataset_name)
@@ -52,17 +61,22 @@ def test_stark_questions(dataset_names: List[str], num_questions: int = 10) -> N
         # Initialize Evaluator
         evaluator = Evaluator(k_values=[1, 5, 10, 20], index_name=dataset_name)
 
-        actual_num_questions = min(num_questions, len(qa_data))
-        print(f"Starting evaluation on first {actual_num_questions} questions...")
-        
-        print(f"Starting evaluation on first {actual_num_questions} questions...")
+        total_questions = len(qa_data)
 
+        if num_questions >= total_questions:
+            print(f"Requested {num_questions} questions, but dataset only has {total_questions}. Evaluating all questions.")
+            sampled_indices = list(range(total_questions))
+        else:
+            sampled_indices = random.sample(range(total_questions), num_questions)
+            print(f"Randomly sampling {len(sampled_indices)} questions out of {total_questions} total.")
+
+        print(f"Starting evaluation on {len(sampled_indices)} questions...")
         query_results = []
 
-        for i in range(actual_num_questions):
-            query, query_id, answer_ids, _ = qa_data[i]
+        for i, idx in enumerate(sampled_indices):
+            query, query_id, answer_ids, _ = qa_data[idx]
             
-            if i % 5 == 0: print(f"Processing {i + 1}/{actual_num_questions}...")
+            if i % 5 == 0: print(f"Processing {i + 1}/{len(sampled_indices)}...")
 
             start_time = time.time()
             retrieved_nodes = retriever.retrieve(
@@ -124,7 +138,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Swarm RAG tests on Stark datasets.")
     parser.add_argument("--datasets", nargs="+", default=["prime"], help="List of datasets to test")
     parser.add_argument("--n", type=int, default=10, help="Number of questions to test")
-    
+    parser.add_argument("--seed", type=int, default=None, help="Seed for random sampling for reproducibility")
+    parser.add_argument("--he", "--human-eval", action='store_true', help="Use human-generated QA data")
+
     args = parser.parse_args()
     
-    test_stark_questions(args.datasets, args.n)
+    test_stark_questions(args.datasets, args.n, seed=args.seed, human_gen=args.he)

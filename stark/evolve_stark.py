@@ -2,6 +2,7 @@ import argparse
 import os
 import random
 import numpy as np
+from swarm_rag.evolution.execution.factory import GenomeFactory
 import torch
 from typing import List
 
@@ -123,12 +124,13 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
         "validation_frequency": 5
     })
 
+
     # Initialize Extensions
     extensions = [
         # Prevent population from converging to a single local optimum
         NichingExtension(sigma_share=2.5, n_probes=8),
         # Inject fresh random genomes to maintain diversity
-        RandomImmigrationExtension(rate=0.1)
+        RandomImmigrationExtension(rate=0.1) #factory is filled by engine
     ]
 
     # Launch Engine
