@@ -1,0 +1,66 @@
+2026-01-05 14:53:20,849 - INFO - Evaluating 30 genomes...
+2026-01-05 14:53:20,849 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-05 14:53:20,849 - INFO -   > Mode: Sequential Queries per Genome (max_workers=1)
+2026-01-05 14:53:20,850 - INFO -   > Starting batch of 4 genomes...
+2026-01-05 14:53:27,130 - INFO -     [Retriever] [gen0_3] Sequential Progress: 10/100 queries
+2026-01-05 14:53:29,984 - INFO -     [Retriever] [gen0_3] Sequential Progress: 20/100 queries
+2026-01-05 14:53:31,872 - INFO -     [Retriever] [gen0_0] Sequential Progress: 10/100 queries
+2026-01-05 14:53:33,739 - INFO -     [Retriever] [gen0_3] Sequential Progress: 30/100 queries
+2026-01-05 14:53:33,853 - INFO -     [Retriever] [gen0_0] Sequential Progress: 20/100 queries
+2026-01-05 14:53:37,974 - INFO -     [Retriever] [gen0_3] Sequential Progress: 40/100 queries
+2026-01-05 14:53:41,570 - INFO -     [Retriever] [gen0_0] Sequential Progress: 30/100 queries
+2026-01-05 14:53:41,683 - INFO -     [Retriever] [gen0_3] Sequential Progress: 50/100 queries
+2026-01-05 14:53:46,580 - INFO -     [Retriever] [gen0_0] Sequential Progress: 40/100 queries
+2026-01-05 14:53:47,246 - INFO -     [Retriever] [gen0_3] Sequential Progress: 60/100 queries
+2026-01-05 14:53:51,184 - INFO -     [Retriever] [gen0_3] Sequential Progress: 70/100 queries
+2026-01-05 14:53:51,446 - INFO -     [Retriever] [gen0_2] Sequential Progress: 10/100 queries
+2026-01-05 14:53:51,833 - INFO -     [Retriever] [gen0_0] Sequential Progress: 50/100 queries
+2026-01-05 14:53:55,831 - INFO -     [Retriever] [gen0_3] Sequential Progress: 80/100 queries
+2026-01-05 14:53:59,399 - INFO -     [Retriever] [gen0_3] Sequential Progress: 90/100 queries
+2026-01-05 14:54:00,772 - INFO -     [Retriever] [gen0_0] Sequential Progress: 60/100 queries
+2026-01-05 14:54:04,462 - INFO -     [Retriever] [gen0_3] Sequential Progress: 100/100 queries
+2026-01-05 14:54:04,484 - INFO -     [Retriever] [gen0_1] Sequential Progress: 10/100 queries
+2026-01-05 14:54:04,757 - INFO -   > Finished 'gen0_3' (1/4) | Qual: -0.4618 | Cost: 0.4 | R@20: 0.2400 | H@1: 0.0500 | H@5: 0.1800 | MRR: 0.1053
+2026-01-05 14:54:06,378 - INFO -     [Retriever] [gen0_2] Sequential Progress: 20/100 queries
+2026-01-05 14:54:08,319 - INFO -     [Retriever] [gen0_0] Sequential Progress: 70/100 queries
+2026-01-05 14:54:14,773 - INFO -     [Retriever] [gen0_0] Sequential Progress: 80/100 queries
+2026-01-05 14:54:18,448 - INFO -     [Retriever] [gen0_1] Sequential Progress: 20/100 queries
+2026-01-05 14:54:19,706 - INFO -     [Retriever] [gen0_0] Sequential Progress: 90/100 queries
+2026-01-05 14:54:21,709 - INFO -     [Retriever] [gen0_0] Sequential Progress: 100/100 queries
+2026-01-05 14:54:21,947 - INFO -   > Finished 'gen0_0' (2/4) | Qual: -0.9004 | Cost: 0.6 | R@20: 0.3212 | H@1: 0.0900 | H@5: 0.2400 | MRR: 0.1518
+2026-01-05 14:54:23,718 - INFO -     [Retriever] [gen0_2] Sequential Progress: 30/100 queries
+2026-01-05 14:54:33,043 - INFO -     [Retriever] [gen0_2] Sequential Progress: 40/100 queries
+2026-01-05 14:54:35,629 - INFO -     [Retriever] [gen0_1] Sequential Progress: 30/100 queries
+2026-01-05 14:54:43,365 - INFO -     [Retriever] [gen0_2] Sequential Progress: 50/100 queries
+2026-01-05 14:54:50,268 - INFO -     [Retriever] [gen0_1] Sequential Progress: 40/100 queries
+2026-01-05 14:54:54,750 - INFO -     [Retriever] [gen0_2] Sequential Progress: 60/100 queries
+2026-01-05 14:55:04,431 - INFO -     [Retriever] [gen0_1] Sequential Progress: 50/100 queries
+2026-01-05 14:55:08,860 - INFO -     [Retriever] [gen0_2] Sequential Progress: 70/100 queries
+2026-01-05 14:55:27,549 - INFO -     [Retriever] [gen0_1] Sequential Progress: 60/100 queries
+2026-01-05 14:55:29,031 - INFO -     [Retriever] [gen0_2] Sequential Progress: 80/100 queries
+2026-01-05 14:55:41,837 - INFO -     [Retriever] [gen0_2] Sequential Progress: 90/100 queries
+2026-01-05 14:55:49,388 - INFO -     [Retriever] [gen0_1] Sequential Progress: 70/100 queries
+2026-01-05 14:55:50,116 - INFO -     [Retriever] [gen0_2] Sequential Progress: 100/100 queries
+2026-01-05 14:55:50,690 - INFO -   > Finished 'gen0_2' (3/4) | Qual: -0.4815 | Cost: 1.5 | R@20: 0.4055 | H@1: 0.1400 | H@5: 0.3000 | MRR: 0.2069
+2026-01-05 14:56:00,597 - INFO -     [Retriever] [gen0_1] Sequential Progress: 80/100 queries
+2026-01-05 14:56:11,016 - INFO -     [Retriever] [gen0_1] Sequential Progress: 90/100 queries
+2026-01-05 14:56:19,869 - INFO -     [Retriever] [gen0_1] Sequential Progress: 100/100 queries
+2026-01-05 14:56:20,579 - INFO -   > Finished 'gen0_1' (4/4) | Qual: -1.1713 | Cost: 1.8 | R@20: 0.3417 | H@1: 0.0900 | H@5: 0.2200 | MRR: 0.1585
+2026-01-05 14:56:20,580 - INFO -   > Starting batch of 4 genomes...
+2026-01-05 14:56:28,070 - INFO -     [Retriever] [gen0_5] Sequential Progress: 10/100 queries
+2026-01-05 14:56:30,651 - INFO -     [Retriever] [gen0_5] Sequential Progress: 20/100 queries
+2026-01-05 14:56:32,765 - INFO -     [Retriever] [gen0_4] Sequential Progress: 10/100 queries
+2026-01-05 14:56:34,565 - INFO -     [Retriever] [gen0_5] Sequential Progress: 30/100 queries
+2026-01-05 14:56:34,819 - INFO -     [Retriever] [gen0_4] Sequential Progress: 20/100 queries
+2026-01-05 14:56:38,689 - INFO -     [Retriever] [gen0_5] Sequential Progress: 40/100 queries
+2026-01-05 14:56:43,301 - INFO -     [Retriever] [gen0_4] Sequential Progress: 30/100 queries
+2026-01-05 14:56:43,654 - INFO -     [Retriever] [gen0_5] Sequential Progress: 50/100 queries
+2026-01-05 14:56:48,729 - INFO -     [Retriever] [gen0_5] Sequential Progress: 60/100 queries
+2026-01-05 14:56:49,400 - INFO -     [Retriever] [gen0_4] Sequential Progress: 40/100 queries
+2026-01-05 14:56:53,449 - INFO -     [Retriever] [gen0_5] Sequential Progress: 70/100 queries
+2026-01-05 14:56:55,295 - INFO -     [Retriever] [gen0_4] Sequential Progress: 50/100 queries
+2026-01-05 14:57:00,394 - INFO -     [Retriever] [gen0_5] Sequential Progress: 80/100 queries
+2026-01-05 14:57:02,639 - INFO -     [Retriever] [gen0_6] Sequential Progress: 10/100 queries
+2026-01-05 14:57:02,915 - INFO -     [Retriever] [gen0_4] Sequential Progress: 60/100 queries
+2026-01-05 14:57:04,053 - INFO -     [Retriever] [gen0_7] Sequential Progress: 10/100 queries
+2026-01-05 14:57:05,440 - INFO -     [Retriever] [gen0_5] Sequential Progress: 90/100 queries
