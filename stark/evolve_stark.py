@@ -41,7 +41,8 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     if sample_size is not None and sample_size < len(subset):
         data = random.sample(subset, sample_size)
     else:
-        data = random.shuffle(subset)
+        random.shuffle(subset)
+        data = subset
     
     queries = [item[0] for item in data]
     query_ids = [item[1] for item in data]
@@ -49,7 +50,13 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     
     return queries, query_ids, answer_ids
 
-def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
+def run_evolution(
+    dataset_name="prime", 
+    n_gens=20, 
+    pop_size=30, 
+    train_sample_size=100,
+    val_sample_size=50
+):
     # Load
     skb = load_and_download_skb(dataset_name)
     adj_dict = precompute_stark_adjacency(skb, dataset_name)
@@ -71,8 +78,8 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
     
     # Prepare Data Subsets
     # We use a smaller subset for Training (Speed) and Validation (Reliability)
-    train_q, train_q_ids, train_gt = prepare_stark_data(dataset_name, 'train', sample_size=100)
-    val_q, val_q_ids, val_gt = prepare_stark_data(dataset_name, 'val', sample_size=50)
+    train_q, train_q_ids, train_gt = prepare_stark_data(dataset_name, 'train', sample_size=train_sample_size)
+    val_q, val_q_ids, val_gt = prepare_stark_data(dataset_name, 'val', sample_size=val_sample_size)
     
     print(f"Evolution Corpus: {len(train_q)} training queries, {len(val_q)} validation queries.")
 
@@ -134,17 +141,32 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
     ]
 
     # Launch Engine
-    engine = EvolutionEngine(
-        retriever=retriever,
-        fitness_calculator=fitness_calc,
-        evaluator=evaluator,
-        train_query_ids=train_q_ids,
-        train_ground_truth=train_gt,
-        val_query_ids=val_q_ids,
-        val_ground_truth=val_gt,
-        config=evo_config,
-        extensions=extensions
-    )
+    if os.path.exists(evo_config["checkpoint_path"]):
+        print(f"Resuming from checkpoint: {evo_config['checkpoint_path']}")
+        engine = EvolutionEngine.load_checkpoint(
+            checkpoint_path=evo_config["checkpoint_path"],
+            retriever=retriever,
+            fitness_calculator=fitness_calc,
+            evaluator=evaluator,
+            train_query_ids=train_q_ids,
+            train_ground_truth=train_gt,
+            val_query_ids=val_q_ids,
+            val_ground_truth=val_gt,
+            config=evo_config,
+            extensions=extensions
+        )
+    else:
+        engine = EvolutionEngine(
+            retriever=retriever,
+            fitness_calculator=fitness_calc,
+            evaluator=evaluator,
+            train_query_ids=train_q_ids,
+            train_ground_truth=train_gt,
+            val_query_ids=val_q_ids,
+            val_ground_truth=val_gt,
+            config=evo_config,
+            extensions=extensions
+        )
 
     print("Starting Evolution Loop...")
     best_genome = engine.optimize()
@@ -165,6 +187,14 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="prime")
     parser.add_argument("--gens", type=int, default=20)
     parser.add_argument("--pop", type=int, default=30)
+    parser.add_argument("--train_ss", type=int, default=100, help="Number of training samples to use for evolution.")
+    parser.add_argument("--val_ss", type=int, default=50, help="Number of validation samples to use for evolution.")
     args = parser.parse_args()
     
-    run_evolution(args.dataset, args.gens, args.pop)
+    run_evolution(
+        args.dataset, 
+        args.gens, 
+        args.pop, 
+        args.train_sample_size, 
+        args.val_sample_size
+    )
