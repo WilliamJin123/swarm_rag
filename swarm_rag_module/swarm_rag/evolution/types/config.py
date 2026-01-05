@@ -69,11 +69,11 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
         "drop_zone_inc": (0.05, 0.2)
     },
     "validation_frequency": 5,
-    "log_path": "evolution_log.jsonl",
-    "plot_path": "evolution_progress.png",
+    "log_path": "evolution_run/evolution_log.jsonl",
+    "plot_path": "evolution_run/evolution_progress.png",
     "plot_title": "Evolutionary Progress",
     "checkpoint_frequency": 5,
-    "checkpoint_path": "evo_checkpoint.pkl",
+    "checkpoint_path": "evolution_run/evo_checkpoint.pkl",
     "resume_from_checkpoint": True
 }
 

@@ -7,9 +7,9 @@ from ..types.config import EvolutionConfigDict, EvolutionContext
 
 
 class GenomeFactory:
-    def __init__(self, config: EvolutionConfigDict, context: EvolutionContext):
-        self.config = config
+    def __init__(self, context: EvolutionContext):
         self.context = context
+        self.config = context.config
 
     def create_population(self, count: int) -> List[Genome]:
         """Default batch creation logic."""
@@ -20,7 +20,7 @@ class GenomeFactory:
 
         strat_trees = {}
         for strat_type in ["movement", "deposit"]:
-            features = self.evo_context.expression_features[strat_type]
+            features = self.context.expression_features[strat_type]
             total_trees = count * n_groups
             
             flat_list = ExpressionEvolution.generate_ramped_half_and_half(
@@ -30,7 +30,7 @@ class GenomeFactory:
             )
             strat_trees[strat_type] = flat_list
 
-        ranking_features = self.evo_context.expression_features["ranking"]
+        ranking_features = self.context.expression_features["ranking"]
         ranking_trees = ExpressionEvolution.generate_ramped_half_and_half(
             features=ranking_features,
             population_size=count,

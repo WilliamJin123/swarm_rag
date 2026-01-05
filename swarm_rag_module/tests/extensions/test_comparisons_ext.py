@@ -61,17 +61,17 @@ def run_evolution(extensions=[], seed=42, run_name="default", island_id=None):
     
     # Inject unique paths
     config.update({
-        "log_file": f"evo_log_{run_name}.jsonl",
-        "checkpoint_file": f"evo_ckpt_{run_name}.pkl",
-        "plot_file": f"evo_plot_{run_name}.png"
+        "log_file": f"evo_run/evo_log_{run_name}.jsonl",
+        "checkpoint_file": f"evo_run/evo_ckpt_{run_name}.pkl",
+        "plot_file": f"evo_run/evo_plot_{run_name}.png"
     })
     
     engine = EvolutionEngine(
         retriever=ToyStochasticRetriever(),
         fitness_calculator=FitnessCalculator(weights={"Recall@10": 1.0}),
         evaluator=BaseEvaluator(index_name="toy"),
-        train_queries=["100"], train_ground_truth=[[100]],
-        val_queries=["100"], val_ground_truth=[[100]],
+        train_query_ids=["100"], train_ground_truth=[[100]],
+        val_query_ids=["100"], val_ground_truth=[[100]],
         config=config,
         extensions=extensions
     )
@@ -141,9 +141,9 @@ def test_island_migration_synergy():
         # --- ISLAND B (Teacher) ---
         config_b = config_common.copy()
         config_b.update({
-            "log_file": "evo_log_island_B.jsonl",
-            "checkpoint_file": "evo_ckpt_island_B.pkl",
-            "plot_file": "evo_plot_island_B.png"
+            "log_file": f"{migration_dir}/evo_log_island_B.jsonl",
+            "checkpoint_file": f"{migration_dir}/evo_ckpt_island_B.pkl",
+            "plot_file": f"{migration_dir}/evo_plot_island_B.png"
         })
         
         exts_b = [
@@ -154,8 +154,8 @@ def test_island_migration_synergy():
             retriever=ToyStochasticRetriever(),
             fitness_calculator=FitnessCalculator(weights={"Recall@10": 1.0}),
             evaluator=BaseEvaluator(index_name="toy"),
-            train_queries=["100"], train_ground_truth=[[100]],
-            val_queries=["100"], val_ground_truth=[[100]],
+            train_query_ids=["100"], train_ground_truth=[[100]],
+            val_query_ids=["100"], val_ground_truth=[[100]],
             config=config_b,
             extensions=exts_b
         )
@@ -168,9 +168,9 @@ def test_island_migration_synergy():
         # --- ISLAND A (Learner) ---
         config_a = config_common.copy()
         config_a.update({
-            "log_file": "evo_log_island_A.jsonl",
-            "checkpoint_file": "evo_ckpt_island_A.pkl",
-            "plot_file": "evo_plot_island_A.png"
+            "log_file": f"{migration_dir}/evo_log_island_A.jsonl",
+            "checkpoint_file": f"{migration_dir}/evo_ckpt_island_A.pkl",
+            "plot_file": f"{migration_dir}/evo_plot_island_A.png"
         })
         
         exts_a = [
@@ -181,8 +181,8 @@ def test_island_migration_synergy():
             retriever=ToyStochasticRetriever(),
             fitness_calculator=FitnessCalculator(weights={"Recall@10": 1.0}),
             evaluator=BaseEvaluator(index_name="toy"),
-            train_queries=["100"], train_ground_truth=[[100]],
-            val_queries=["100"], val_ground_truth=[[100]],
+            train_query_ids=["100"], train_ground_truth=[[100]],
+            val_query_ids=["100"], val_ground_truth=[[100]],
             config=config_a,
             extensions=exts_a
         )
@@ -206,7 +206,7 @@ def test_island_migration_synergy():
                   "evo_plot_island_A.png", "evo_plot_island_B.png",
                   "evo_log_baseline.jsonl", "evo_ckpt_baseline.pkl", "evo_plot_baseline.png",
                   "evo_log_extended.jsonl", "evo_ckpt_extended.pkl", "evo_plot_extended.png"]:
-            if os.path.exists(f):
+            if os.path.exists(os.path.join(migration_dir, f)):
                 os.remove(f)
 
 if __name__ == "__main__":

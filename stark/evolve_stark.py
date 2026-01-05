@@ -1,10 +1,6 @@
 import argparse
 import os
 import random
-import numpy as np
-from swarm_rag.evolution.execution.factory import GenomeFactory
-import torch
-from typing import List
 
 # Import your existing engine components
 from swarm_rag.core import SwarmRetriever

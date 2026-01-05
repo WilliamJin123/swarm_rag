@@ -39,7 +39,7 @@ class EvolutionEngine:
         extensions: List['EvolutionExtension'] = None,
         overwrite_logs: bool = True
     ):
-        config = config or DEFAULT_EVO_CONFIG
+        config = config or DEFAULT_EVO_CONFIG.copy()
         
         self.train_query_ids = train_query_ids
         self.train_gt = train_ground_truth
@@ -48,7 +48,7 @@ class EvolutionEngine:
 
         if genome_factory is None:
             self.evo_context = EvolutionContext(
-                config=self.config,
+                config=config,
                 generation=0,
                 available_features=list(HeuristicRegistry.all().keys()),
                 expression_features={
@@ -58,9 +58,10 @@ class EvolutionEngine:
                 }
             )
             from .execution.factory import GenomeFactory
-            self.genome_factory = GenomeFactory(self.config, self.evo_context)
+            self.genome_factory = GenomeFactory(self.evo_context)
         else:
             self.genome_factory = genome_factory
+            # override init level config
             self.evo_context = genome_factory.context
 
         self.config = self.evo_context.config
