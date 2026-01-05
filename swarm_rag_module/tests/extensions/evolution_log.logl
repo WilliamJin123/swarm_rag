@@ -1,0 +1,12 @@
+2026-01-05 12:01:49,062 - INFO - Gen 0: New Best Found! Score: 1.0000
+2026-01-05 12:01:49,065 - INFO - --> Validation Gen 0: Recall 0.0000
+2026-01-05 12:01:49,141 - INFO - --> Validation Gen 5: Recall 0.0000
+2026-01-05 12:01:49,454 - INFO - Gen 0: New Best Found! Score: 1.0000
+2026-01-05 12:01:49,457 - INFO - --> Validation Gen 0: Recall 0.0000
+2026-01-05 12:01:49,509 - INFO - --> Validation Gen 5: Recall 0.0000
+2026-01-05 12:01:49,739 - INFO - Gen 0: New Best Found! Score: 1.0000
+2026-01-05 12:01:49,741 - INFO - --> Validation Gen 0: Recall 0.0000
+2026-01-05 12:01:49,771 - INFO - --> Validation Gen 2: Recall 1.0000
+2026-01-05 12:01:50,005 - INFO - Gen 0: New Best Found! Score: 1.0000
+2026-01-05 12:01:50,007 - INFO - --> Validation Gen 0: Recall 0.0000
+2026-01-05 12:01:50,039 - INFO - --> Validation Gen 2: Recall 0.0000

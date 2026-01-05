@@ -26,7 +26,7 @@ class SwarmRetriever:
         steps=4,
         n_agents=20,
         decay=0.5,
-        drop_inc=0.05,
+        drop_zone_inc=0.05,
         initial_pool_size=30,
         start_subset=10,
         top_k=20,
@@ -92,7 +92,7 @@ class SwarmRetriever:
             n_agents: Optional[int] = None, 
             steps: Optional[int] = None,
             decay: Optional[float] = None,
-            drop_inc: Optional[float] = None,
+            drop_zone_inc: Optional[float] = None,
             initial_pool_size: Optional[int] = None,
             start_subset: Optional[int] = None,
             top_k: Optional[int] = None,
@@ -108,10 +108,13 @@ class SwarmRetriever:
                 n_agents=n_agents,
                 steps=steps,
                 decay=decay,
+                drop_zone_inc=drop_zone_inc,
                 initial_pool_size=initial_pool_size,
                 start_subset=start_subset,
                 top_k=top_k,
                 ranking_strategies=ranking_strategies,
+                movement_strategies=movement_strategies,
+                deposit_strategies=deposit_strategies,
             )
 
             resolved_groups = self._prepare_groups(
@@ -139,6 +142,7 @@ class SwarmRetriever:
         n_agents: Optional[int] = None,
         steps: Optional[int] = None,
         decay: Optional[float] = None,
+        drop_zone_inc: Optional[float] = None,
         initial_pool_size: Optional[int] = None,
         start_subset: Optional[int] = None,
         top_k: Optional[int] = None,
@@ -169,10 +173,13 @@ class SwarmRetriever:
             n_agents=n_agents,
             steps=steps,
             decay=decay,
+            drop_zone_inc=drop_zone_inc,
             initial_pool_size=initial_pool_size,
             start_subset=start_subset,
             top_k=top_k,
             ranking_strategies=ranking_strategies,
+            movement_strategies=movement_strategies,
+            deposit_strategies=deposit_strategies,
         )
 
         resolved_groups = self._prepare_groups(
@@ -275,7 +282,7 @@ class SwarmRetriever:
         seed: int,
         steps: int,
         decay: float,      
-        drop_inc: float,   
+        drop_zone_inc: float,   
         initial_pool_size: int,
         start_subset: int,
         top_k: int,
@@ -315,7 +322,7 @@ class SwarmRetriever:
                 list(ex.map(self._get_cached_neighbors, drop_zone))
 
         # Spawn Agents (Weigh "better" nodes higher)
-        weights = [1.0 + drop_inc * (dz_len - i - 1)  for i in range(dz_len)]
+        weights = [1.0 + drop_zone_inc * (dz_len - i - 1)  for i in range(dz_len)]
         agent_locations = np.array(py_rng.choices(drop_zone, weights=weights, k=n_agents))
         agent_trajectories = [[loc] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()

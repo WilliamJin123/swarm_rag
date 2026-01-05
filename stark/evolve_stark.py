@@ -33,13 +33,14 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     """
     print(f"Loading {dataset_name} ({split})...")
     raw_data = load_and_download_qa(dataset_name) 
-    subset = raw_data.get_subset(split)
+    subset = list(raw_data.get_subset(split))
     random.seed(42)
-    random.shuffle(subset)
+    
     if sample_size is not None and sample_size < len(subset):
         data = random.sample(subset, sample_size)
     else:
-        data = subset
+        data = random.shuffle(subset)
+    
     queries = [item[0] for item in data]
     answer_ids = [item[2] for item in data]
     
@@ -153,9 +154,9 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="amazon")
-    parser.add_argument("--gens", type=int, default=15)
-    parser.add_argument("--pop", type=int, default=20)
+    parser.add_argument("--dataset", type=str, default="prime")
+    parser.add_argument("--gens", type=int, default=20)
+    parser.add_argument("--pop", type=int, default=30)
     args = parser.parse_args()
     
     run_evolution(args.dataset, args.gens, args.pop)
