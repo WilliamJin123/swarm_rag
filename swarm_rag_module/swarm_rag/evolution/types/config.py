@@ -66,6 +66,7 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
         "decay": (0.85, 0.99),
         "initial_pool_size": (10, 50),
         "start_subset": (5, 15),
+        "drop_zone_inc": (0.05, 0.2)
     },
     "validation_frequency": 5,
     "log_path": "evolution_log.jsonl",

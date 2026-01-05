@@ -28,7 +28,7 @@ class SwarmParams(TypedDict):
     """
     n_agents: int
     steps: int
-    drop_inc: float
+    drop_zone_inc: float
     decay: float
     initial_pool_size: int
     start_subset: int
@@ -38,7 +38,7 @@ DEFAULT_PARAMS: SwarmParams = {
     "n_agents": 20,
     "steps": 4,
     "decay": 0.5,
-    "drop_inc": 0.05,
+    "drop_zone_inc": 0.05,
     "initial_pool_size": 30,
     "start_subset": 10,
 }

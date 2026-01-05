@@ -108,7 +108,7 @@ class EvolutionEngine:
         for i in range(count):
             # Randomize Global Params
             params = DEFAULT_PARAMS.copy()
-            for key in ["n_agents", "steps", "decay", "initial_pool_size", "start_subset", "drop_inc"]:
+            for key in params.keys():
                 if key in ranges:
                     min_v, max_v = ranges[key]
                     if isinstance(min_v, int):
