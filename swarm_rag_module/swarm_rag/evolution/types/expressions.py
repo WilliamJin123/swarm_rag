@@ -135,7 +135,8 @@ class ExpressionNode:
         
         elif self.type == 'feature':
             # e.g., "node.degree" -> "node_degree"
-            return str(self.value).replace(".", "_").replace(" ", "_").replace("-", "_")
+            val = self.value.value if hasattr(self.value, 'value') else str(self.value)
+            return val.replace(".", "_").replace(" ", "_").replace("-", "_")
         
         elif self.type == 'func':
             if not self.children:
