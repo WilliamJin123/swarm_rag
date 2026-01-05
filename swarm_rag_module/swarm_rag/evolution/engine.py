@@ -147,19 +147,21 @@ class EvolutionEngine:
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
 
-        logger = logging.getLogger("evolution")
-        logger.setLevel(logging.INFO)
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
 
-        if logger.hasHandlers(): logger.handlers.clear()
+        if root_logger.hasHandlers(): root_logger.handlers.clear()
 
         fh = logging.FileHandler(self.config["log_path"].replace(".json", ".log"))
         fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(fh)
+        root_logger.addHandler(fh)
 
         # Console Handler
         th = TqdmLoggingHandler()
         th.setFormatter(logging.Formatter('%(message)s'))
-        logger.addHandler(th)
+        root_logger.addHandler(th)
+
+        logger = logging.getLogger("evolution")
 
         if self.evo_context.population:
             population = self.evo_context.population

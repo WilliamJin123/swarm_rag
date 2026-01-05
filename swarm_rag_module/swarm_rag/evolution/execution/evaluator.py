@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import logging
 import numpy as np
 from typing import List, Any
 
@@ -9,7 +10,7 @@ from .fitness import FitnessCalculator
 from ..types.genome import GenomeCompiler, Genome
 
 
-# TO CHANGE: PLUGGING IN CUSTOM EVALUATION FUNCTIONS / PROCESSESES
+logger = logging.getLogger(__name__)
 class PopulationEvaluator:
     """
     Isolates the heavy lifting: Running the retriever and computing metrics.
@@ -48,9 +49,9 @@ class PopulationEvaluator:
             return
         batch_size = self.concurrent_evaluations
         
-        print(f"Evaluating {len(unevaluated)} genomes...")
-        print(f"  > Concurrency: {batch_size} genomes parallel")
-        print(f"  > Mode: Sequential Queries per Genome (max_workers=1)")
+        logger.info(f"Evaluating {len(unevaluated)} genomes...")
+        logger.info(f"  > Concurrency: {batch_size} genomes parallel")
+        logger.info(f"  > Mode: Sequential Queries per Genome (max_workers=1)")
 
         batch_size = self.concurrent_evaluations
         for i in range(0, len(unevaluated), batch_size):
@@ -66,6 +67,11 @@ class PopulationEvaluator:
         """
         Runs a batch of evaluations concurrently.
         """
+        logger.info(f"  > Starting batch of {len(batch)} genomes...")
+
+        total_genomes = len(batch)
+        completed_count = 0
+
         with ThreadPoolExecutor(max_workers=len(batch)) as executor:
             future_to_genome = {
                 executor.submit(self._evaluate_single, g, queries, ground_truth): g 
@@ -74,8 +80,23 @@ class PopulationEvaluator:
             
             for future in as_completed(future_to_genome):
                 genome = future_to_genome[future]
+                completed_count += 1
                 # try:
                 future.result()
+
+                qual = genome.fitness.quality_score
+                cost = genome.fitness.cost_score
+                
+                r20 = genome.metrics.get("Recall@20", 0.0)
+                h1  = genome.metrics.get("Hit@1", 0.0)
+                h5  = genome.metrics.get("Hit@5", 0.0)
+                mrr = genome.metrics.get("MRR", 0.0)
+
+                logger.info(
+                    f"  > Finished '{genome.id}' ({completed_count}/{total_genomes}) | "
+                    f"Qual: {qual:.4f} | Cost: {cost:.1f} | "
+                    f"R@20: {r20:.4f} | H@1: {h1:.4f} | H@5: {h5:.4f} | MRR: {mrr:.4f}"
+                )
                 # except Exception as e:
                 #     print(f"Genome {genome.id} evaluation failed: {e}")
                 #     from .fitness import FitnessResult
@@ -100,6 +121,7 @@ class PopulationEvaluator:
         batch_results = self.retriever.retrieve_batch(
             queries=queries,
             max_workers=1,
+            genome_id=genome.id,
             **retriever_kwargs
         )
         

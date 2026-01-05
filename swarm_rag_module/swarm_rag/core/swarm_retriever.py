@@ -149,7 +149,8 @@ class SwarmRetriever:
         movement_strategies: Optional[Dict] = None,
         ranking_strategies: Optional[Dict] = None,
         deposit_strategies: Optional[Dict] = None,
-        max_workers: Optional[int] = 4
+        max_workers: Optional[int] = 4,
+        **kwargs
     ) -> List[List[Dict]]:
         """
         Hybrid batch retrieval that intelligently chooses between sequential and parallel processing.
@@ -180,6 +181,7 @@ class SwarmRetriever:
             ranking_strategies=ranking_strategies,
             movement_strategies=movement_strategies,
             deposit_strategies=deposit_strategies,
+            **kwargs
         )
 
         resolved_groups = self._prepare_groups(
@@ -221,7 +223,13 @@ class SwarmRetriever:
     ) -> List[List[Dict]]:
         """Process queries sequentially."""
         results = []
-        for vec in query_vectors:
+        total = len(query_vectors)
+        gid = kwargs.get('genome_id', '')
+        if gid != '': gid = f"[{gid}]"
+
+        for i, vec in enumerate(query_vectors):
+            if (i + 1) % 10 == 0 or (i + 1) == total:
+                logger.info(f"    [Retriever] {gid} Sequential Progress: {i+1}/{total} queries")
             result = self._retrieve(
                 query_vec=vec, 
                 resolved_groups=resolved_groups,
@@ -253,7 +261,11 @@ class SwarmRetriever:
                 )
             return idx, result
         
-        # Process queries in parallel
+        total = len(query_vectors) 
+        completed = 0
+        gid = kwargs.get('genome_id', '')
+        if gid != '': gid = f"[{gid}]"
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks with their indices
             futures_to_index = {
@@ -264,6 +276,10 @@ class SwarmRetriever:
             # Collect results maintaining order
             results = [None] * len(query_vectors)
             for future in as_completed(futures_to_index):
+                completed += 1
+                if completed % 10 == 0 or completed == total:
+                     logger.info(f"    [Retriever] {gid} Parallel Progress: {completed}/{total} queries")
+
                 try:
                     idx, result = future.result()
                     results[idx] = result

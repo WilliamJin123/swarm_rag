@@ -58,6 +58,7 @@ class Genome:
 
     fitness: FitnessResult = field(default_factory=lambda: FitnessResult())
 
+    # Recall@20, Hit@1, Hit@5, MRR, etc.
     metrics: Dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0
     evaluated: bool = False
