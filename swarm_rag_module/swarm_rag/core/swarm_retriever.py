@@ -4,8 +4,7 @@ from typing import Any, List, Dict, Optional, Tuple, TypedDict
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-import os
-import psutil
+import logging
 from ..utils import LRUCache
 
 from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
@@ -18,6 +17,8 @@ class AgentGroupConfig(TypedDict):
     count: int  # How many agents of this type?
     movement_strategies: Dict[str, Any]
     deposit_strategies: Dict[str, Any]
+
+logger = logging.getLogger(__name__)
 
 class SwarmRetriever:
     _DEFAULT_PARAMS = dict(
@@ -261,7 +262,7 @@ class SwarmRetriever:
                     results[idx] = result
                 except Exception as e:
                     idx = futures_to_index[future]
-                    print(f"Query {idx} failed: {e}")
+                    logger.error(f"Query {idx} failed: {e}")
                     results[idx] = []
             
             return results
@@ -457,7 +458,7 @@ class SwarmRetriever:
         if not neighbors:
             return None
         if step % 2 == 0:
-            pass # print(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
+            logger.debug(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
         
         # Fetch Matrix & IDs
         candidate_matrix, valid_ids = self._fetch_vectors_batch(neighbors)

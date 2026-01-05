@@ -3,6 +3,8 @@ import random
 import pickle
 import numpy as np
 from typing import List, Any
+from tqdm.auto import tqdm
+import logging
 
 from ..core.swarm_retriever import SwarmRetriever
 from ..core.heuristics import HeuristicRegistry
@@ -16,8 +18,9 @@ from .execution.evaluator import PopulationEvaluator
 from .execution.loop import EvolutionLoop
 from .execution.fitness import FitnessCalculator
 from .execution.tracker import ProgressTracker
-
 from .extensions.base import EvolutionExtension
+
+from ..utils import TqdmLoggingHandler
 
 class EvolutionEngine:
     def __init__(
@@ -143,6 +146,21 @@ class EvolutionEngine:
         return population
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
+
+        logger = logging.getLogger("evolution")
+        logger.setLevel(logging.INFO)
+
+        if logger.hasHandlers(): logger.handlers.clear()
+
+        fh = logging.FileHandler(self.config["log_path"].replace(".json", ".log"))
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(fh)
+
+        # Console Handler
+        th = TqdmLoggingHandler()
+        th.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(th)
+
         if self.evo_context.population:
             population = self.evo_context.population
             print(f"Resuming evolution with existing population of {len(population)}")
@@ -161,7 +179,8 @@ class EvolutionEngine:
 
         print(f"Starting evolution: {len(population)} agents, Gens {start_gen} to {n_gen-1}.")
 
-        for gen in range(start_gen, n_gen): 
+        pbar = tqdm(range(start_gen, n_gen), desc="Evolution", unit="gen", position=0)
+        for gen in pbar: 
             self.evo_context.generation = gen      
 
             # Prehook
@@ -177,9 +196,16 @@ class EvolutionEngine:
             # ELITISM
             population.sort(key=lambda g: g.fitness, reverse=True)
             current_best = population[0]
-            
+            avg_qual = np.mean([g.fitness.quality_score for g in population])
             if best_genome is None or current_best.fitness > best_genome.fitness:
-                best_genome = current_best.copy() # Important: Copy so it doesn't get mutated later
+                logger.info(f"Gen {gen}: New Best Found! Score: {current_best.fitness.quality_score:.4f}")
+                best_genome = current_best.copy()
+
+            pbar.set_postfix({
+                "Best": f"{current_best.fitness.quality_score:.4f}",
+                "Avg": f"{avg_qual:.4f}",
+                "Cost": f"{current_best.fitness.cost_score:.2f}"
+            })
 
             # VALIDATION
             val_stats = None
@@ -200,11 +226,13 @@ class EvolutionEngine:
                     "best_quality": val_candidate.fitness.quality_score,
                     "recall": val_candidate.metrics.get("Recall@20", 0.0)
                 }
+
+                logger.info(f"--> Validation Gen {gen}: Recall {val_stats.get('recall', 0):.4f}")
             
             # LOGGING
             train_stats = {
                 "best_quality": current_best.fitness.quality_score,
-                "avg_quality": np.mean([g.fitness.quality_score for g in population]),
+                "avg_quality": avg_qual,
                 "best_stability": current_best.fitness.stability_score,
                 "best_cost": current_best.fitness.cost_score,
                 "best_complexity": current_best.complexity()
@@ -214,7 +242,7 @@ class EvolutionEngine:
                 train_stats[f"best_metric_{k}"] = v
 
             self.tracker.log(gen, train_stats, val_stats)
-            self.tracker.print_summary(gen)
+            self.tracker.print_summary(gen, printer=tqdm.write)
 
             # CHECKPOINTING
             if (gen % self.config["checkpoint_frequency"] == 0):
@@ -230,6 +258,7 @@ class EvolutionEngine:
             # Posthook
             for ext in self.extensions: ext.on_generation_end(self.evo_context)
 
+        pbar.close()
         self.save_checkpoint(population, best_genome, n_gen - 1)
         self.tracker.plot(save_path=self.config["plot_path"], title=self.config["plot_title"])
         

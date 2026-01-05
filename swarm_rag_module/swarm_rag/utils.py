@@ -1,6 +1,8 @@
 import importlib.util
 from threading import Lock
 from collections import OrderedDict
+import logging
+from tqdm.auto import tqdm
 
 def fail_on_missing_imports(modules: list[str], extra_name: str = None):
     """
@@ -53,3 +55,13 @@ class LRUCache:
             self.data.move_to_end(key)
             if len(self.data) > self.maxsize:
                 self.data.popitem(last=False)
+
+class TqdmLoggingHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)

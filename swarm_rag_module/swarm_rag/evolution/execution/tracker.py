@@ -106,12 +106,20 @@ class ProgressTracker:
         plt.close()
         print(f"Progress plot saved to {save_path}")
 
-    def print_summary(self, generation: int):
+    def print_summary(self, generation: int, printer=print):
+        """
+        Prints stats. 
+        Args:
+            printer: function to use for printing. 
+                     Pass 'tqdm.write' if inside a progress bar loop,
+                     or 'logger.info' if using the logging system.
+        """
         if not self.history:
             return
 
         latest = self.history[-1]
-        print(f"--- Gen {generation} Summary ---")
+        
+        printer(f"--- Gen {generation} Summary ---")
 
         sorted_keys = sorted(latest.keys())
 
@@ -121,6 +129,7 @@ class ProgressTracker:
 
             val = latest[key]
             
+            # Formatting logic (Same as before)
             if isinstance(val, (int, float)):
                 if "cost" in key or "latency" in key or abs(val) > 100:
                     val_str = f"{val:.1f}"
@@ -141,6 +150,6 @@ class ProgressTracker:
                 clean_key = key.replace("_", " ").title()
                 prefix = "[     ]"
 
-            print(f"  {prefix} {clean_key:<25} : {val_str}")
+            printer(f"  {prefix} {clean_key:<25} : {val_str}")
 
-        print("-" * 45)
+        printer("-" * 45)
