@@ -60,7 +60,12 @@ class EvolutionEngine:
             concurrent_evaluations=self.config["concurrent_evaluations"]
         )
         self.loop = EvolutionLoop(self.evo_context)
-        self.tracker = ProgressTracker(log_path=self.config["log_file"], overwrite=overwrite_logs)
+        self.tracker = ProgressTracker(
+            log_path=self.config["log_path"], 
+            plot_path=self.config["plot_path"],
+            plot_title=self.config["plot_title"],
+            overwrite=overwrite_logs
+        )
 
         self.extensions = extensions or []
         for ext in self.extensions:
@@ -196,7 +201,7 @@ class EvolutionEngine:
             for ext in self.extensions: ext.on_generation_end(self.evo_context)
 
         self.save_checkpoint(population, best_genome, n_gen - 1)
-        self.tracker.plot(save_path=self.config["plot_file"], title=self.config["plot_title"])
+        self.tracker.plot(save_path=self.config["plot_path"], title=self.config["plot_title"])
         
         return best_genome
     

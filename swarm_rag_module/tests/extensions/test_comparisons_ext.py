@@ -46,7 +46,8 @@ def get_standard_config(seed=42):
             "n_agents": (1, 5),
             "alpha": (0.01, 0.99),    # Critical param
             "decay": (0.1, 0.99)
-        }
+        },
+        "output_dir": "comparisons"
     })
     return config
 

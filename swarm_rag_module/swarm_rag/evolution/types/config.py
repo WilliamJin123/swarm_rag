@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import os
 from typing import List, Dict, Tuple, TypedDict 
 from .genome import Genome
 
@@ -34,10 +35,12 @@ class EvolutionConfigDict(TypedDict):
     # format: 'param_name': (min, max)
     param_ranges: Dict[str, Tuple[float, float]]
 
+    output_dir: str
+
     # Validation & Logging
     validation_frequency: int
-    log_file: str
-    plot_file: str
+    log_path: str
+    plot_path: str
     plot_title: str
     checkpoint_frequency: int
     checkpoint_path: str
@@ -64,9 +67,10 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
         "initial_pool_size": (10, 50),
         "start_subset": (5, 15),
     },
+    "output_dir": "evo_results",
     "validation_frequency": 5,
-    "log_file": "evo_log.jsonl",
-    "plot_file": "evo_plot.png",
+    "log_path": "evolution_log.jsonl",
+    "plot_path": "evolution_progress.png",
     "plot_title": "Evolutionary Progress",
     "checkpoint_frequency": 5,
     "checkpoint_path": "evo_checkpoint.pkl",
@@ -88,3 +92,28 @@ class EvolutionContext:
     # Registry Data (What features can we mutate into?)
     available_features: List[str] = field(default_factory=list)
     expression_features: Dict[str, List[str]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """
+        Auto-magic: Immediately normalize configuration paths upon creation.
+        """
+        self._resolve_paths()
+
+    def _resolve_paths(self):
+        """
+        If 'output_dir' is set, ensures it exists and resolves all relative
+        file paths (logs, plots, checkpoints) to be inside it.
+        """
+        output_dir = self.config.get("output_dir")
+        if not output_dir:
+            return
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Normalize Paths
+        path_keys = ["log_path", "plot_path", "checkpoint_path"]
+        
+        for key in path_keys:
+            filename = self.config.get(key)
+            if filename and not os.path.isabs(filename):
+                self.config[key] = os.path.join(output_dir, filename)

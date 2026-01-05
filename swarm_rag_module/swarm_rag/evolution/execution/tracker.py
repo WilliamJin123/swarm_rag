@@ -5,8 +5,16 @@ import pandas as pd
 from typing import Dict, List, Any, Optional
 
 class ProgressTracker:
-    def __init__(self, log_path: str = "evolution_log.jsonl", overwrite: bool = True):
+    def __init__(
+        self, 
+        log_path: str = "evolution_log.jsonl", 
+        plot_path: str = "evolution_progress.png",
+        plot_title: str = "Evolution Progress",
+        overwrite: bool = True
+    ):
         self.log_path = log_path
+        self.plot_path = plot_path
+        self.plot_title = plot_title
         self.history: List[Dict[str, Any]] = []
         if overwrite:
             with open(self.log_path, "w") as f:
@@ -14,10 +22,12 @@ class ProgressTracker:
         else:
             print(f"  [Tracker] Appending to existing log: {log_path}")
 
-    def log(self, generation: int, train_stats: Dict[str, float], val_stats: Optional[Dict[str, float]] = None):
+    def log(self, generation: int, train_stats: Dict[str, float], val_stats: Optional[Dict[str, float]] = None, save_path: str = None):
         """
         Logs a single step of evolution.
         """
+        if save_path is None:
+            save_path = self.log_path
         entry = {
             "generation": generation,
             "timestamp": time.time(),
@@ -30,19 +40,26 @@ class ProgressTracker:
         self.history.append(entry)
         
         # Write to JSONL
-        with open(self.log_path, "a") as f:
+        with open(save_path, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
     def plot(
         self, 
-        save_path: str = "evolution_progress.png", 
-        title: str = "Evolutionary Progress"
+        save_path: str = None, 
+        title: str = None
     ):
         """
         Generates a training vs validation graph.
         """
         if not self.history:
+            print("No history to plot.")
             return
+
+        if save_path is None:
+            save_path = self.plot_path
+        if title is None:
+            title = self.plot_title
+
 
         df = pd.DataFrame(self.history)
         

@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 import numpy as np
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 from ..interfaces.enums import HeuristicKey
@@ -8,7 +8,7 @@ from ..core import HeuristicContext, HeuristicRegistry
 try:
     import torch
     import faiss
-    from stark_qa.skb import SKB
+    from stark_qa.load_skb import SKB
 except ImportError:
     fail_on_missing_imports(
                 modules=["torch", "stark_qa", "faiss"], 
@@ -27,10 +27,9 @@ AVG_LOG_DEGREE_BY_DATASET = {
 
 # --- 1. Graph Adapter for STaRK SKB ---
 class StarkSKBAdapter(GraphStore):
-    
     def __init__(
         self, 
-        skb_data: SKB, 
+        skb_data: 'SKB', 
         dataset: str, 
         cache_size: int = 10000,
         adjacency_dict: Optional[Dict[int, List[int]]] = None):
