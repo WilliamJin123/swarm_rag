@@ -1,5 +1,3 @@
-
-# test_swarm.py
 import numpy as np
 import random
 import time
@@ -87,7 +85,9 @@ class DummyGraphStore(GraphStore):
         return self.get_neighbors(node_id)
     
     def get_avg_degree(self):
-        return super().get_avg_degree()
+        # Basic implementation if base class doesn't handle it
+        total_degrees = sum(len(n) for n in self.graph.values())
+        return total_degrees / max(1, len(self.graph))
 
 class DummyEmbeddingProvider(EmbeddingProvider):
     def __init__(self, embedding_dim=128):
@@ -130,6 +130,8 @@ def test_swarm_retriever():
         vector_store=vector_store,
         graph_store=graph_store,
         embedding_provider=embedder,
+        cache_neighbors=True, # Enable caching to test locks
+        cache_vectors=True
     )
 
     reporter = EvalReporter()
@@ -162,6 +164,8 @@ def test_swarm_retriever():
     large_queries = [f"Test query {i}" for i in range(10)]
 
     print("\n Testing sequential batch processing...")
+    # FIX: Reset timer
+    start_time = time.time() 
     sequential_results = retriever.retrieve_batch(large_queries, n_agents=5, steps=2, top_k=3, max_workers=1)
     latency_seq = (time.time() - start_time)/len(large_queries)
     for q, res in zip(large_queries, sequential_results):
@@ -190,17 +194,84 @@ def test_swarm_retriever():
       
     aggregated = reporter.aggregate(evaluator)
     print("\nAGGREGATED RESULTS")
+    
+    # Store first df to safely access columns later
+    first_df = None
+    
     for group, df in aggregated.items():
+        if first_df is None: first_df = df
         print(f"\n{group}:")
         print(df.to_string(index=False))
+        # Pass explicit metrics to avoid scope errors
         reporter.plot_metrics(df=df, title=group, metrics=list(df.columns))
     
-    if len(aggregated) > 1:
-        reporter.plot_comparison(aggregated_results=aggregated, metrics=list(df.columns))
+    if len(aggregated) > 1 and first_df is not None:
+        # FIX: Use first_df columns instead of loop variable
+        reporter.plot_comparison(aggregated_results=aggregated, metrics=list(first_df.columns))
 
     print("\n" + "=" * 60)
     print("TEST SUITE COMPLETED")
     print("=" * 60)
 
+
+def test_swarm_retriever_groups():
+    print("=" * 60)
+    print("SWARM RETRIEVER: HETEROGENEOUS GROUPS TEST")
+    print("=" * 60)
+    
+    # 1. Init
+    vector_store = DummyVectorStore()
+    graph_store = DummyGraphStore()
+    embedder = DummyEmbeddingProvider()
+    
+    retriever = SwarmRetriever(vector_store, graph_store, embedder)
+    
+    # 2. Define Groups
+    # Group A: 5 Agents, Semantic
+    # Group B: 15 Agents, Random (Diversity)
+    groups = [
+        {
+            'count': 5,
+            'movement_strategies': {'semantic': ('semantic_similarity', 1.0)},
+            'deposit_strategies': {'flat': ('flat', 1.0)}
+        },
+        {
+            'count': 15,
+            'movement_strategies': {'random': ('pheromone_repulsion', 1.0)},
+            'deposit_strategies': {'flat': ('flat', 1.0)}
+        }
+    ]
+    
+    query = "test_query"
+    
+    # 3. Retrieve
+    print("  Running retrieve with agent_groups...")
+    start = time.time()
+    
+    results = retriever.retrieve(
+        query=query,
+        agent_groups=groups,
+        steps=3,
+        drop_inc=0.1 # Test new param
+    )
+    
+    duration = time.time() - start
+    print(f"  ✓ Retrieval complete in {duration:.3f}s")
+    print(f"  ✓ Returned {len(results)} results")
+    
+    # 4. Verification
+    assert len(results) > 0
+    
+    print("\n  Testing Batch Retrieval with Groups...")
+    batch_results = retriever.retrieve_batch(
+        queries=["q1", "q2"],
+        agent_groups=groups,
+        steps=2
+    )
+    assert len(batch_results) == 2
+    print("  ✓ Batch retrieval passed")
+
 if __name__ == "__main__":
-    test_swarm_retriever()
+    # test_swarm_retriever()
+    test_swarm_retriever_groups()
+    print("SWARM TESTS PASSED")

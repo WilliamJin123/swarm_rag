@@ -18,10 +18,11 @@ class MockRetriever:
     def retrieve_batch(self, queries, **kwargs):
         # Return deterministic "fake" results
         results = []
+        n_agents = kwargs.get('n_agents', 0)
+        
         for q in queries:
             # Fake nodes [0, 1, 2, 3]
-            # Verify that params are passed correctly
-            if kwargs.get('n_agents', 0) > 20:
+            if n_agents > 20:
                 # If genetics evolved "high agents", give better results
                 res = [{'id': 0, 'score': 0.9}, {'id': 1, 'score': 0.8}]
             else:
@@ -52,6 +53,7 @@ def test_full_evolution_loop():
     config['checkpoint_path'] = "test_data/test_ckpt.pkl"
     config['log_file'] = "test_data/test_log.jsonl"
     config['plot_file'] = "test_data/test_plot.png"
+    config['n_agent_groups'] = 2
     
     # 2. Setup Data
     train_q = ["q1", "q2"]

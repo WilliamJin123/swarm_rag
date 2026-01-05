@@ -68,9 +68,9 @@ class ToyStochasticRetriever:
 
 # --- 2. THE TEST ---
 
-CKPT_FILE = "test_data/sim_test.pkl"
-LOG_FILE = "test_data/sim_log.jsonl"
-PLOT_FILE = "test_data/sim_plot.png"
+CKPT_FILE = "sim_test.pkl"
+LOG_FILE = "sim_log.jsonl"
+PLOT_FILE = "sim_plot.png"
 PLOT_TITLE = "Full E2E Evolution Test"
 
 def get_test_config():
@@ -84,8 +84,8 @@ def get_test_config():
         
         # KEY FIX: Always enforce these paths!
         "checkpoint_path": CKPT_FILE,
-        "log_file": LOG_FILE,
-        "plot_file": PLOT_FILE,
+        "log_path": LOG_FILE,
+        "plot_path": PLOT_FILE,
         "plot_title": PLOT_TITLE,
         
         # Toy Problem Search Space
@@ -184,11 +184,6 @@ def test_evolution_solves_toy_problem():
     best_genome = engine.optimize()
 
     # 6. VERIFICATION
-    
-    # A. Check if it actually learned
-    # To reach Node 20, we need reasonable alpha and decay.
-    # If alpha is 0.1, avg distance is 0.1 * 50 = 5 steps. Fails.
-    # We expect the best genome to have high alpha.
     print(f"\n  > Best Genome Params: {best_genome.params}")
     print(f"  > Best Genome Fitness: {best_genome.fitness.quality_score}")
     

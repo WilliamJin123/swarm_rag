@@ -171,13 +171,20 @@ class GenomeCompiler:
         
         if sorted_groups:
             ratios = [genome.group_ratios[g] for g in sorted_groups]
-            total_ratio = sum(ratios) + 1e-6
+            total_ratio = sum(ratios) 
+            if total_ratio <= 1e-9:
+                total_ratio = 1.0
             
-            counts = [int(total_agents * (r / total_ratio)) for r in ratios]
+            counts = [int(round(total_agents * (r / total_ratio))) for r in ratios]
             
             # Fix rounding remainder (dump into first group)
-            if sum(counts) < total_agents:
-                counts[0] += (total_agents - sum(counts))
+            current_sum = sum(counts)
+            if current_sum < total_agents:
+                # Add deficit to first group
+                counts[0] += (total_agents - current_sum)
+            elif current_sum > total_agents:
+                # Remove surplus from first group (rare with round, but possible)
+                counts[0] -= (current_sum - total_agents)
             
             for i, group_key in enumerate(sorted_groups):
                 if counts[i] <= 0: continue

@@ -37,8 +37,8 @@ class MockBaseEvaluator(BaseEvaluator):
 
 # --- TESTS ---
 
-CKPT_FILE = "test_data/complex_test.pkl"
-LOG_FILE = "test_data/complex_log.jsonl"
+CKPT_FILE = "complex_test.pkl"
+LOG_FILE = "complex_log.jsonl"
 
 def test_variance_calculation_flow():
     print("\n--- Testing Variance/Stability Flow ---")
@@ -56,11 +56,16 @@ def test_variance_calculation_flow():
     class MockStrategy:
         def size(self): return 10  # Return a fake complexity size
         def copy(self): return self
-    
-    g.strategies = {'mock': MockStrategy()}
-    
+    g.group_ratios = {'g0': 1.0}
+    g.strategies = {
+        'g0_movement': MockStrategy(),
+        'g0_deposit': MockStrategy()
+    }
     # Manually compile empty cache to pass checks
-    g._compiled_cache = {'mock': lambda x: 0}
+    g._compiled_cache = {
+        'g0_movement': lambda x: 0, 
+        'g0_deposit': lambda x: 0
+    }
     
     # 3. Evaluate on 2 queries (One Good, One Bad)
     queries = ["q1", "q2"]
@@ -86,9 +91,9 @@ def test_checkpoint_resume():
     config = DEFAULT_EVO_CONFIG.copy()
     config['n_generations'] = 4
     config['checkpoint_path'] = CKPT_FILE
-    config['log_file'] = LOG_FILE
+    config['log_path'] = LOG_FILE
     config['population_size'] = 4
-    config['plot_file'] = "test_data/evo_plot_complex.png"
+    config['plot_path'] = "evo_plot_complex.png"
     
     # 2. Run Initial Engine (Gens 0-1)
     print("  Running initial batch (Gen 0-1)...")
@@ -101,9 +106,6 @@ def test_checkpoint_resume():
         config=config
     )
     
-    # Force stop after 2 gens by hacking config temporarily? 
-    # Or just run optimize and let it finish, then load it back.
-    # Let's run 2 gens.
     config['n_generations'] = 2
     engine.optimize()
     

@@ -84,9 +84,15 @@ class GeneticStrategies:
         """
         tourn_size = ctx.config["selection_k"]
         pop_size = len(ctx.population)
-        contestant_indices = np.random.randint(0, pop_size, size=(k, tourn_size))
-        winner_indices = np.min(contestant_indices, axis=1)
-        return [ctx.population[i] for i in winner_indices]
+        winners = []
+        for _ in range(k):
+            indices = np.random.randint(0, pop_size, size=tourn_size)
+            contestants = [ctx.population[i] for i in indices]
+            # Select winner by FITNESS, not index
+            winner = max(contestants, key=lambda g: g.fitness)
+            winners.append(winner)
+            
+        return winners
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.ROULETTE)

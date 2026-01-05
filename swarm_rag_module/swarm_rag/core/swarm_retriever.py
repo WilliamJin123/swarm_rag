@@ -23,6 +23,7 @@ class SwarmRetriever:
     _DEFAULT_PARAMS = dict(
         # Global Defaults
         steps=4,
+        n_agents=20,
         decay=0.5,
         drop_inc=0.05,
         initial_pool_size=30,
@@ -61,6 +62,8 @@ class SwarmRetriever:
         
         self.deterministic = deterministic
         self.seed = seed
+
+        self._cache_lock = Lock()
 
         # Performance optimizations
         self.cache_neighbors = cache_neighbors
@@ -112,9 +115,9 @@ class SwarmRetriever:
 
             resolved_groups = self._prepare_groups(
                 agent_groups=agent_groups,
-                n_agents=n_agents,
-                movement_strategies=movement_strategies,
-                deposit_strategies=deposit_strategies,
+                n_agents=params['n_agents'], 
+                movement_strategies=params['movement_strategies'],
+                deposit_strategies=params['deposit_strategies'],
             )
 
             query_vec = self._get_cached_query_vector(query)
@@ -173,9 +176,9 @@ class SwarmRetriever:
 
         resolved_groups = self._prepare_groups(
             agent_groups=agent_groups,
-            n_agents=n_agents,
-            movement_strategies=movement_strategies,
-            deposit_strategies=deposit_strategies,
+            n_agents=params['n_agents'], 
+            movement_strategies=params['movement_strategies'],
+            deposit_strategies=params['deposit_strategies'],
         )
 
         # Batch embed all queries
@@ -312,10 +315,7 @@ class SwarmRetriever:
 
         # Spawn Agents (Weigh "better" nodes higher)
         weights = [1.0 + drop_inc * (dz_len - i - 1)  for i in range(dz_len)]
-        agent_locations = np.array(
-            py_rng.choices(drop_zone, weights=weights, k=n_agents), 
-            dtype=np.int64
-        )
+        agent_locations = np.array(py_rng.choices(drop_zone, weights=weights, k=n_agents))
         agent_trajectories = [[loc] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
 
@@ -354,7 +354,7 @@ class SwarmRetriever:
                         
                         deposit = result['deposit']
                         if deposit > 0.001:
-                            pheromone_updates[next_node] += deposit
+                            pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
 
                 current_agent_idx = end_agent_idx
 
@@ -380,9 +380,9 @@ class SwarmRetriever:
     def _prepare_groups(
         self,
         agent_groups: Optional[List[AgentGroupConfig]],
-        legacy_n_agents: int,
-        legacy_movement: Dict,
-        legacy_deposit: Dict
+        n_agents: int,
+        movement_strategies: Dict,
+        deposit_strategies: Dict
     ) -> List[Dict]:
         """
         Resolves strategies for groups ONCE.
@@ -402,9 +402,9 @@ class SwarmRetriever:
         else:
             # Homogeneous fallback
             resolved_groups.append({
-                'count': legacy_n_agents,
-                'movement_funcs': self._resolve_strategy_funcs(legacy_movement, "movement"),
-                'deposit_funcs': self._resolve_strategy_funcs(legacy_deposit, "deposit")
+                'count': n_agents,
+                'movement_funcs': self._resolve_strategy_funcs(movement_strategies, "movement"),
+                'deposit_funcs': self._resolve_strategy_funcs(deposit_strategies, "deposit")
             })
             
         return resolved_groups
@@ -420,6 +420,7 @@ class SwarmRetriever:
         - Function references (old way)
         - Names registered in HeuristicRegistry (new way)
         """
+        
         resolved = []
         for key, (fn_or_name, weight) in strategy_dict.items():
             if callable(fn_or_name):
@@ -583,13 +584,14 @@ class SwarmRetriever:
         """Gets or computes and caches the neighbor list, if enabled."""
         if not self.cache_neighbors:
             return self.graph_store.get_neighbors(node_id)
-
-        cached = self.neighbor_cache.get(node_id)
+        with self._cache_lock:
+            cached = self.neighbor_cache.get(node_id)
         if cached is not None:
             return cached
 
         neighbors = self.graph_store.get_neighbors(node_id)
-        self.neighbor_cache.set(node_id, neighbors)
+        with self._cache_lock:
+            self.neighbor_cache.set(node_id, neighbors)
         return neighbors
     
     def _fetch_vectors_batch(self, node_ids: List[int]) -> Tuple[np.ndarray, List[int]]:
@@ -607,20 +609,22 @@ class SwarmRetriever:
             missing_indices = []
             missing_ids = []
 
-            for i, node_id in enumerate(node_ids):
-                cached_vec = self.doc_cache.get(node_id)
-                if cached_vec is not None:
-                    raw_vecs[i] = cached_vec
-                else:
-                    missing_indices.append(i)
-                    missing_ids.append(node_id)
+            with self._cache_lock:
+                for i, node_id in enumerate(node_ids):   
+                    cached_vec = self.doc_cache.get(node_id)
+                    if cached_vec is not None:
+                        raw_vecs[i] = cached_vec
+                    else:
+                        missing_indices.append(i)
+                        missing_ids.append(node_id)
             
             if missing_ids:
                 fetched_vecs = self.vector_store.fetch_batch(missing_ids)
-                for i, vec in zip(missing_indices, fetched_vecs):
-                    if vec is not None:
-                        self.doc_cache.set(node_ids[i], vec)
-                    raw_vecs[i] = vec
+                with self._cache_lock:
+                    for i, vec in zip(missing_indices, fetched_vecs):
+                        if vec is not None:
+                            self.doc_cache.set(node_ids[i], vec)
+                        raw_vecs[i] = vec
             
         valid_data = [(nid, v) for nid, v in zip(node_ids, raw_vecs) if v is not None]
         
@@ -637,13 +641,14 @@ class SwarmRetriever:
         """Gets or computes and caches the query embedding, if enabled."""
         if not self.cache_vectors:
             return self.embed_fn.embed_query(query)
-
-        cached = self.query_cache.get(query)
+        with self._cache_lock:
+            cached = self.query_cache.get(query)
         if cached is not None:
             return cached
 
         emb = self.embed_fn.embed_query(query)
-        self.query_cache.set(query, emb)
+        with self._cache_lock:
+            self.query_cache.set(query, emb)
         return emb
         
     def _get_cached_query_embeddings_batch(self, queries: list) -> List[np.ndarray]:
@@ -657,21 +662,21 @@ class SwarmRetriever:
         results_by_index = {}
         missing_indices = []
         missing_queries = []
-
-        for i, q in enumerate(queries):
-            cached_vec = self.query_cache.get(q)
-            if cached_vec is not None:
-                results_by_index[i] = cached_vec
-            else:
-                missing_indices.append(i)
-                missing_queries.append(q)
+        with self._cache_lock:
+            for i, q in enumerate(queries):
+                cached_vec = self.query_cache.get(q)
+                if cached_vec is not None:
+                    results_by_index[i] = cached_vec
+                else:
+                    missing_indices.append(i)
+                    missing_queries.append(q)
 
         if missing_queries:
             batch_embeddings = self.embed_fn.embed_query_batch(missing_queries)
-            for i, emb in zip(missing_indices, batch_embeddings):
-                q = queries[i]
-                self.query_cache.set(q, emb)
-                results_by_index[i] = emb
-
+            with self._cache_lock:
+                for i, emb in zip(missing_indices, batch_embeddings):
+                    q = queries[i]
+                    self.query_cache.set(q, emb)
+                    results_by_index[i] = emb
 
         return [results_by_index[i] for i in range(len(queries))]
