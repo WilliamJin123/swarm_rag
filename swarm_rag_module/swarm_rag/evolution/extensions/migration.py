@@ -5,6 +5,7 @@ import glob
 import random
 from typing import List
 from .base import EvolutionExtension
+from ..types.config import EvolutionContext
 from ..types.genome import Genome
 
 class FileMigrationExtension(EvolutionExtension):
@@ -106,12 +107,12 @@ class FileMigrationExtension(EvolutionExtension):
         if new_blood:
             self._inject_migrants(ctx, new_blood)
 
-    def _inject_migrants(self, ctx, migrants: List[Genome]):
+    def _inject_migrants(self, ctx: EvolutionContext, migrants: List[Genome]):
         """Replaces the worst members of the population with immigrants."""
         pop = ctx.population
 
         # Sort current population: Best -> Worst
-        pop.sort(key=lambda g: g.fitness.quality_score, reverse=True)
+        pop.sort(key=lambda g: g.fitness, reverse=True)
         
         num_replace = len(migrants)
         total_pop = len(pop)

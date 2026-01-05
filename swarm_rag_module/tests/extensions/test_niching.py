@@ -76,3 +76,8 @@ def test_niching_handles_missing_strategies():
     # So they should all be penalized equally
     scores = [g.fitness.quality_score for g in ctx.population]
     assert all(s < 100.0 for s in scores), "Empty genomes should be treated as clones and penalized"
+
+if __name__ == "__main__":
+    import sys
+    exit_code = pytest.main([__file__])
+    sys.exit(exit_code)

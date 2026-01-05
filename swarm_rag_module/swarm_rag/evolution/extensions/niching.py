@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Set
 import numpy as np
 import random
 from scipy.spatial.distance import pdist, squareform
@@ -23,10 +23,6 @@ class NichingExtension(EvolutionExtension):
         self.feature_keys = [getattr(k, 'value', k) for k in HeuristicRegistry.all().keys()]
         self.probes = self._generate_probes(n_probes)
 
-        # We will profile these 3 keys
-        self.target_strategies = ["movement", "ranking", "deposit"]
-
-
     def _generate_probes(self, n: int) -> List[Dict[str, float]]:
         """Creates N random scenarios using feature names."""
         probes = []
@@ -48,11 +44,24 @@ class NichingExtension(EvolutionExtension):
         n_pop = len(pop)
         if n_pop < 2: return
 
+        discovered_keys: Set[str] = set()
+        for g in pop:
+            # Check compiled cache (preferred) and raw strategies
+            discovered_keys.update(g._compiled_cache.keys())
+            discovered_keys.update(g.strategies.keys())
+
+        target_keys = sorted(list(discovered_keys))
+
         signatures = []
         for g in pop:
             genome_signature = []
             
-            for strat_key in self.target_strategies:
+            for p_key in sorted(g.params.keys()):
+                val = g.params[p_key]
+                if isinstance(val, (int, float)):
+                    genome_signature.append(float(val))
+
+            for strat_key in target_keys:
                 func = g._compiled_cache.get(strat_key)
                 
                 if func is None:
@@ -76,9 +85,14 @@ class NichingExtension(EvolutionExtension):
 
         signatures = np.array(signatures)
 
+        # Safety: If signature is empty (no params, no strategies), do nothing
+        if signatures.shape[1] == 0:
+            return
+
         # Normalize
-        if signatures.std() > 1e-6:
-            signatures = (signatures - signatures.mean(axis=0)) / signatures.std(axis=0)
+        std_dev = signatures.std(axis=0)
+        std_dev[std_dev == 0] = 1.0 
+        signatures = (signatures - signatures.mean(axis=0)) / std_dev
 
         dists = squareform(pdist(signatures, metric='euclidean'))
 
