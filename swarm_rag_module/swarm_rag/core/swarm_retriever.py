@@ -233,25 +233,6 @@ class SwarmRetriever:
             
             return results
 
-    def _calculate_optimal_concurrency(self) -> int:
-        """Calculate optimal number of concurrent queries based on system resources."""
-        cpu_count = os.cpu_count() or 4
-        # Reserve half the cores for agent processing
-        optimal = max(1, min(4, cpu_count // 2))
-        return optimal
-
-    def _has_resources_for_parallel(self) -> bool:
-        """Check if system has enough resources for parallel processing."""
-        # Check available memory (need at least 2GB free)
-        if psutil.virtual_memory().available < 2 * 1024**3:
-            return False
-        
-        # Check CPU load (avoid parallelizing if CPU is busy)
-        if psutil.cpu_percent(interval=0.1) > 80:
-            return False
-        
-        return True
-
     def _retrieve(
         self,
         query_vec: np.ndarray,
@@ -292,14 +273,15 @@ class SwarmRetriever:
             return []
 
         drop_zone = valid_pool[:start_subset]
-        
+        dz_len = len(drop_zone)
+
         if self.cache_neighbors:
             # Use a thread pool to warm up the neighbor cache for the initial drop zone
-            with ThreadPoolExecutor(max_workers=min(4, len(drop_zone))) as ex:
+            with ThreadPoolExecutor(max_workers=min(4, dz_len)) as ex:
                 list(ex.map(self._get_cached_neighbors, drop_zone))
 
         # Spawn Agents
-        weights = [1.0 + 0.05 * (start_subset - i - 1)  for i in range(start_subset)]
+        weights = [1.0 + 0.05 * (dz_len - i - 1)  for i in range(dz_len)]
         # Slightly higher weight on the most relevant for drops (0.05 inc)
         agent_locations = py_rng.choices(drop_zone, weights=weights, k=n_agents)
         agent_trajectories = [[loc] for loc in agent_locations]
@@ -402,7 +384,7 @@ class SwarmRetriever:
         if not neighbors:
             return None
         if step % 2 == 0:
-            print(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
+            pass # print(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
         
         # Fetch Matrix & IDs
         candidate_matrix, valid_ids = self._fetch_vectors_batch(neighbors)
@@ -412,8 +394,7 @@ class SwarmRetriever:
         p_vals = np.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
         degrees = np.array([len(self._get_cached_neighbors(nid)) for nid in valid_ids])
         
-        # NOTE: avg_degree is a placeholder. A more accurate value could be calculated from the graph statistics once and stored.
-        avg_degree_placeholder = 10.0
+        avg_degree = self.graph_store.get_avg_degree()
 
         ctx = HeuristicContext(
             query_vec=query_vec,
@@ -422,7 +403,7 @@ class SwarmRetriever:
             pheromone_values=p_vals,
             node_degrees=degrees,
             max_pheromone=max_pheromone,
-            avg_degree=avg_degree_placeholder,
+            avg_degree=avg_degree,
             step_index=step,
             agent_index=agent_id,
             graph=self.graph_store

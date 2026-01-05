@@ -85,6 +85,9 @@ class DummyGraphStore(GraphStore):
     def neighbors(self, node_id: Any) -> List[Any]:
         """Alias for get_neighbors"""
         return self.get_neighbors(node_id)
+    
+    def get_avg_degree(self):
+        return super().get_avg_degree()
 
 class DummyEmbeddingProvider(EmbeddingProvider):
     def __init__(self, embedding_dim=128):

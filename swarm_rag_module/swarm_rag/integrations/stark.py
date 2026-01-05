@@ -95,6 +95,12 @@ class StarkSKBAdapter(GraphStore):
         if self.use_precomputed:
             return node_id in self.adjacency_dict
         return self.skb.node_info.get(node_id, "") != ""
+
+    def get_avg_degree(self) -> float:
+        """Returns the average degree of the graph"""
+        if self.dataset in AVG_DEGREE_BY_DATASET:
+            return AVG_DEGREE_BY_DATASET[self.dataset]
+        return 10.0 # Default fallback
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.STARK_CENTRALITY)

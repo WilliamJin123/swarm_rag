@@ -33,6 +33,11 @@ class GraphStore(ABC):
         """Checks if a node exists in the graph"""
         pass
 
+    @abstractmethod
+    def get_avg_degree(self) -> float:
+        """Returns the average degree of the graph"""
+        return self.avg_degree
+
 
 class EmbeddingProvider(ABC):
     """Abstract contract for Embedding Models (Cohere, OpenAI, Pre-computed Lookups)"""
