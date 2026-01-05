@@ -47,13 +47,16 @@ def test_full_evolution_loop():
 
     # 1. Setup Config
     config = DEFAULT_EVO_CONFIG.copy()
-    config['n_generations'] = 3
-    config['population_size'] = 6
-    config['validation_frequency'] = 1
-    config['checkpoint_path'] = "test_data/test_ckpt.pkl"
-    config['log_file'] = "test_data/test_log.jsonl"
-    config['plot_file'] = "test_data/test_plot.png"
-    config['n_agent_groups'] = 2
+    config.update({
+        "n_generations": 3,
+        "population_size": 6,
+        "validation_frequency": 1,
+        "n_agent_groups": 2,      # Explicitly set groups
+        "output_dir": None,       # FIX: Disable auto-prefixing so paths match below
+        "checkpoint_path": "test_ckpt.pkl",
+        "log_path": "test_log.jsonl", # Matches config definition
+        "plot_path": "test_plot.png"  # Matches config definition
+    })
     
     # 2. Setup Data
     train_q = ["q1", "q2"]

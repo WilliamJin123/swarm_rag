@@ -212,7 +212,7 @@ class GeneticStrategies:
                         new_val = max(0.01, min(0.999, new_val))
                     genome.params[key] = new_val
 
-        # Group Ratio Mutation (Heterogeneous Logic)
+        # Group Ratio Mutation
         for key, val in genome.group_ratios.items():
             if random.random() < rate:
                 # Jitter ratio
@@ -221,10 +221,16 @@ class GeneticStrategies:
         # Strategy Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
-                # Find available features for this specific strategy type (e.g. 'movement')
-                # Assumes config maps 'movement' -> ['degree', 'cosine']
-                feature_list = ctx.expression_features.get(key, [])
+                feature_list = ctx.expression_features.get(key)
                 
+                if not feature_list:
+                    if key.endswith("_movement"):
+                        feature_list = ctx.expression_features.get("movement")
+                    elif key.endswith("_deposit"):
+                        feature_list = ctx.expression_features.get("deposit")
+                    elif key == "ranking":
+                        feature_list = ctx.expression_features.get("ranking")
+
                 mutated_tree = ExpressionEvolution.mutate_tree(
                     tree,
                     features=feature_list,

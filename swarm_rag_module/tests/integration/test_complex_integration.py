@@ -109,7 +109,8 @@ def test_checkpoint_resume():
     config['n_generations'] = 2
     engine.optimize()
     
-    assert os.path.exists(CKPT_FILE), "Checkpoint not created"
+    checkpoint_to_load = os.path.join(config["output_dir"], CKPT_FILE)
+    assert os.path.exists(checkpoint_to_load), "Checkpoint not created"
     
     # 3. Load Checkpoint
     print("  Loading checkpoint...")

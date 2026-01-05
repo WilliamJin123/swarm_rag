@@ -184,17 +184,20 @@ def test_evolution_solves_toy_problem():
     best_genome = engine.optimize()
 
     # 6. VERIFICATION
+    
+
     print(f"\n  > Best Genome Params: {best_genome.params}")
     print(f"  > Best Genome Fitness: {best_genome.fitness.quality_score}")
     
     assert best_genome.fitness.quality_score > 0.0, "Evolution failed to find ANY solution (random walk failed)"
     
     # B. Check Checkpoints
-    assert os.path.exists(CKPT_FILE), "Final checkpoint missing"
+    assert os.path.exists(os.path.join("evo_results", CKPT_FILE)), "Final checkpoint missing"
     
     # C. Check Logs
-    assert os.path.exists(LOG_FILE), "Log file missing"
-    with open(LOG_FILE, 'r') as f:
+    log_f = os.path.join("evo_results", LOG_FILE)
+    assert os.path.exists(log_f), "Log file missing"
+    with open(log_f, 'r', encoding="utf-8") as f:
         lines = f.readlines()
         assert len(lines) >= 3, "Log should have at least 3 entries (Gen 0, 1, 2)"
         
@@ -206,7 +209,7 @@ def test_resume_simulation():
     """
     print("\n=== TESTING RESUME CAPABILITY ===")
     
-    if not os.path.exists(CKPT_FILE):
+    if not os.path.exists(os.path.join("evo_results",CKPT_FILE)):
         pytest.skip("Run test_evolution_solves_toy_problem first")
 
     # 1. Config for RESUME

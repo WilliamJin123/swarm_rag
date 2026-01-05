@@ -33,7 +33,7 @@ class EvolutionEngine:
         extensions: List['EvolutionExtension'] = None,
         overwrite_logs: bool = True
     ):
-        self.config = config or DEFAULT_EVO_CONFIG
+        config = config or DEFAULT_EVO_CONFIG
 
         self.train_queries = train_queries
         self.train_gt = train_ground_truth
@@ -41,7 +41,7 @@ class EvolutionEngine:
         self.val_gt = val_ground_truth
 
         self.evo_context = EvolutionContext(
-            config=self.config,
+            config=config,
             generation=0,
             available_features=list(HeuristicRegistry.all().keys()),
             # Maps "movement" -> ["semantic", "degree", ...]
@@ -51,6 +51,8 @@ class EvolutionEngine:
                 "deposit": list(HeuristicRegistry.all_deposit().keys()),
             }
         )
+        self.config = self.evo_context.config
+
         self.population_evaluator = PopulationEvaluator(
             retriever=retriever, 
             evaluator=evaluator, 
