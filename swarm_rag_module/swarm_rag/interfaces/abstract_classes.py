@@ -43,7 +43,7 @@ class EmbeddingProvider(ABC):
     """Abstract contract for Embedding Models (Cohere, OpenAI, Pre-computed Lookups)"""
     
     @abstractmethod
-    def embed_query(self, query: Union[str, Any]) -> np.ndarray:
+    def embed_query(self, query: Any) -> np.ndarray:
         """Embeds a query string OR looks it up if using pre-computed"""
         pass
 

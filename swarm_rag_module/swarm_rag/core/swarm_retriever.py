@@ -155,7 +155,7 @@ class SwarmRetriever:
         Hybrid batch retrieval that intelligently chooses between sequential and parallel processing.
         
         Args:
-            queries: List of queries to process
+            queries: List of queries to process (id or string)
             parallel_queries: Whether to enable parallel query processing
             max_workers: Max concurrent queries (auto-calculated if None)
             Other args: Same as retrieve()

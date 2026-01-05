@@ -131,9 +131,9 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
         retriever=retriever,
         fitness_calculator=fitness_calc,
         evaluator=evaluator,
-        train_queries=train_q_ids,
+        train_query_ids=train_q_ids,
         train_ground_truth=train_gt,
-        val_queries=val_q_ids,
+        val_query_ids=val_q_ids,
         val_ground_truth=val_gt,
         config=evo_config,
         extensions=extensions
