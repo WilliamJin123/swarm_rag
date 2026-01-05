@@ -233,8 +233,6 @@ class GenomeCompiler:
             **genome.params, 
             "agent_groups": agent_groups,
             "ranking_strategies": ranking_strategies,
-            # Pass empty resolved_groups so retrieve() resolves the agent_groups we just made
-            "resolved_groups": [] 
         }
 
 
