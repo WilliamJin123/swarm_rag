@@ -40,7 +40,7 @@ DEFAULT_PARAMS: SwarmParams = {
     "decay": 0.5,
     "drop_inc": 0.05,
     "initial_pool_size": 30,
-    "start_subset": 10
+    "start_subset": 10,
 }
 
 @dataclass 
@@ -50,6 +50,8 @@ class Genome:
     and expression trees in one genome.
     """
     id: str
+    mutation_rate: float = 0.1
+
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
     group_ratios: Dict[str, float] = field(default_factory=dict)
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
@@ -117,6 +119,7 @@ class Genome:
         """
         return Genome(
             id=f"{self.id}_copy",
+            mutation_rate=self.mutation_rate,
             params=self.params.copy(),
             group_ratios=self.group_ratios.copy(),
             strategies={k: v.copy() for k, v in self.strategies.items()},

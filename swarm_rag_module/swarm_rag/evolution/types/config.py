@@ -18,7 +18,7 @@ class EvolutionConfigDict(TypedDict):
     elite_fraction: float
     
     # Genetic Probabilities
-    mutation_rate: float
+    base_mutation_rate: float
     crossover_rate: float
     
     # Strategy Names
@@ -51,7 +51,7 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "n_generations": 20,
     "population_size": 30,
     "elite_fraction": 0.1,
-    "mutation_rate": 0.2,
+    "base_mutation_rate": 0.2,
     "crossover_rate": 0.6,
     "selection_strategy": "tournament",
     "crossover_strategy": "uniform_parameter_mix",
@@ -83,7 +83,7 @@ class EvolutionContext:
     Replaces the messy **kwargs passing.
     """
     # Current State
-    current_mutation_rate: float = None
+    global_mutation_multiplier: float = 1.0
     population: List[Genome] = field(default_factory=list)
     generation: int = 0
     config: EvolutionConfigDict = field(default_factory=lambda: DEFAULT_EVO_CONFIG.copy())

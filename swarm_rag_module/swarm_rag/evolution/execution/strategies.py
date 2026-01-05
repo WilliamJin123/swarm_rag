@@ -174,6 +174,8 @@ class GeneticStrategies:
     def uniform_parameter_mix(parent1: Genome, parent2: Genome, ctx: EvolutionContext) -> Genome:
         """Mixes traits 50/50. """
         child = parent1.copy()
+        child.mutation_rate = (parent1.mutation_rate + parent2.mutation_rate) / 2.0
+
         for key in child.params:
             if random.random() > 0.5:
                 child.params[key] = parent2.params[key]
@@ -194,8 +196,11 @@ class GeneticStrategies:
     @staticmethod
     @GeneticRegistry.register_mutation(GeneticKey.EXPRESSION_TREE_MUTATION)
     def expression_tree_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
-        rate = ctx.config['mutation_rate']
-        
+        tau = 0.2
+        genome.mutation_rate = genome.mutation_rate * np.exp(tau * np.random.normal(0, 1))
+        genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
+        rate = genome.mutation_rate * ctx.global_mutation_multiplier
+
         # Parameter Mutation (Numeric Jitter)
         for key, val in genome.params.items():
             if random.random() < rate:

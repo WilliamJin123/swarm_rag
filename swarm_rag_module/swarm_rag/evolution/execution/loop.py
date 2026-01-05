@@ -18,32 +18,37 @@ class EvolutionLoop:
         self.mutation_fn = GeneticRegistry.get_mutation(context.config["mutation_strategy"])
 
         self.schedule_type = context.config.get('mutation_schedule', 'constant') # constant, decay, adaptive
-        self.base_rate = context.config['mutation_rate']
 
-    def get_mutation_rate(self, population: List[Genome]) -> float:
-        """Calculates the effective mutation rate for this generation."""
+    def get_global_multiplier(self, population: List[Genome]) -> float:
+        """
+        Calculates a SCALING FACTOR for mutation rates.
+        1.0 = Use genome's native rate.
+        < 1.0 = Dampen mutation (late stage cooling).
+        > 1.0 = Boost mutation (break stagnation).
+        """
         gen = self.context.generation
         total_gens = self.context.config['n_generations']
         
         if self.schedule_type == 'constant':
-            return self.base_rate
+            return 1.0
             
         elif self.schedule_type == 'decay':
-            # Linear decay: Start at base_rate, end at 0.05
+            # Linear decay: Start at 1.0, end at 0.1 (10% of native rate)
             progress = gen / max(1, total_gens)
-            return max(0.05, self.base_rate * (1.0 - progress))
+            return max(0.1, 1.0 - (0.9 * progress))
             
         elif self.schedule_type == 'adaptive':
             # Calculate fitness diversity (variance of quality score)
             scores = [g.fitness.quality_score for g in population]
             variance = np.var(scores) if scores else 0.0
             
-            # If variance is low (< 0.001), boosting mutation to escape stagnation
+            # If variance is dangerously low, DOUBLE the effective mutation
+            # to kick the population out of the local optimum.
             if variance < 0.001:
-                return min(0.5, self.base_rate * 2.0)
-            return self.base_rate
+                return 2.0
+            return 1.0
             
-        return self.base_rate
+        return 1.0
 
     def step(self, population: List[Genome]) -> List[Genome]:
         """
@@ -55,11 +60,10 @@ class EvolutionLoop:
         current_gen_idx = self.context.generation
 
         # Calculate dynamic rate
-        effective_rate = self.get_mutation_rate(population)
-        # Inject into context so strategies can see it
-        self.context.current_mutation_rate = effective_rate
+        global_multiplier = self.get_global_multiplier(population)
+        self.context.global_mutation_multiplier = global_multiplier
 
-        print(f"  > Gen {self.context.generation} Mutation Rate: {effective_rate:.4f} ({self.schedule_type})")
+        print(f"  > Gen {self.context.generation} Global Multiplier: {global_multiplier:.2f}x ({self.schedule_type})")
 
         # Elitism 
         population.sort(key=lambda g: g.fitness, reverse=True)
@@ -68,7 +72,7 @@ class EvolutionLoop:
         
         needed = self.context.config['population_size'] - len(offspring)
 
-        parents = self.selection_fn(self.context, k=needed * 2)
+        parents: List[Genome] = self.selection_fn(self.context, k=needed * 2)
 
         for i in range(0, len(parents), 2):
             if i + 1 >= len(parents): break

@@ -99,6 +99,8 @@ class EvolutionEngine:
             max_depth=max_d
         )
 
+        base_rate = self.config['base_mutation_rate']
+
         population = []
         for i in range(count):
             # Randomize Global Params
@@ -125,12 +127,16 @@ class EvolutionEngine:
                 # Strategies (Pop from pre-generated list)
                 strategies[f"g{g_idx}_movement"] = strat_trees["movement"].pop()
                 strategies[f"g{g_idx}_deposit"] = strat_trees["deposit"].pop()
+            
+            # Jitter the initial rate so the population starts diverse
+            start_rate = max(0.01, min(0.5, random.gauss(base_rate, 0.05)))
 
             genome = Genome(
                 id=f"gen0_{i}",
                 params=params,
                 group_ratios=group_ratios,
-                strategies=strategies
+                strategies=strategies,
+                mutation_rate=start_rate
             )
             population.append(genome)
             
