@@ -1,4 +1,5 @@
 import argparse
+import os
 import random
 import numpy as np
 import torch
@@ -96,23 +97,27 @@ def run_evolution(dataset_name="prime", n_gens=20, pop_size=30):
     
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
 
+    os.makedirs("./logs", exist_ok=True)
+    os.makedirs("./checkpoints", exist_ok=True)
+
     # Configure Engine
-    evo_config: EvolutionConfigDict = DEFAULT_EVO_CONFIG.copy().update({
+    evo_config = DEFAULT_EVO_CONFIG.copy() # Create copy first
+    evo_config.update({                    # Then update
         "n_generations": n_gens,
         "population_size": pop_size,
-        "concurrent_evaluations": 4, # Parallelize evaluations
+        "concurrent_evaluations": 4,
         
-        # Evolution constraints
-        "expr_max_depth": 5,  # Don't let trees get too crazy
+        # Constraints
+        "expr_max_depth": 5,
         "param_ranges": {
             "n_agents": (5, 30),
-            "steps": (2, 6),     # STaRK usually needs 2-4 hops
+            "steps": (2, 6),
             "decay": (0.1, 0.9),
             "initial_pool_size": (10, 50),
         },
         
-        # Logging
-        "log_path": f"./logs/evo_{dataset_name}.json",
+        # PATHS
+        "log_path": f"./logs/evo_{dataset_name}.jsonl",
         "plot_path": f"./logs/plot_{dataset_name}.png",
         "checkpoint_path": f"./checkpoints/ckpt_{dataset_name}.pkl",
         "validation_frequency": 5

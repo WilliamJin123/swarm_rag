@@ -305,7 +305,8 @@ class EvolutionEngine:
         train_ground_truth: List[List[Any]],
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
-        config: EvolutionConfigDict
+        config: EvolutionConfigDict,
+        extensions: List['EvolutionExtension'] = None,
     ) -> 'EvolutionEngine':
         """
         Factory method: Creates a NEW engine instance and restores its state from disk.
@@ -328,6 +329,7 @@ class EvolutionEngine:
             val_query_ids=val_query_ids,
             val_ground_truth=val_ground_truth,
             config=config,
+            extensions=extensions,
             overwrite_logs=False
         )
 
