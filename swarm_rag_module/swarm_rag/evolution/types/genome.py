@@ -130,6 +130,30 @@ class Genome:
             _compiled_cache={} 
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serializes the Genome into a plain Python dictionary.
+        
+        This is essential for saving genomes to JSON, logging, or other
+        forms of data interchange. It intelligently handles nested objects
+        and excludes non-serializable components like the compiled cache.
+
+        Returns:
+            A dictionary representation of the genome, ready for JSON serialization.
+        """
+        d = self.__dict__.copy()
+        # Exclude the non-serializable compiled cache
+        d.pop('_compiled_cache', None)
+
+        # Serialize nested, complex objects.
+        if 'strategies' in d and d['strategies']:
+            d['strategies'] = {key: node.to_dict() for key, node in d['strategies'].items()}
+        
+        if 'fitness' in d and hasattr(d['fitness'], 'to_dict'):
+            d['fitness'] = d['fitness'].to_dict()
+        
+        return d
+
 class GenomeCompiler:
     """
     Dynamically compiles a Genome's symbolic trees into executable logic.

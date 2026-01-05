@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 import functools
 import math
+from typing import Dict
 
 QUALITY_TOLERANCE = 0.005
 STABILITY_TOLERANCE = 0.05
@@ -15,7 +16,6 @@ class FitnessResult:
     stability_score: float = field(default=-math.inf, compare=True) # maximise
     cost_score: float = field(default=math.inf, compare=True)      # minimise
 
-    # Magic methods allow sorting to work natively with Python's sort() and max()
     def _get_sort_key(self):
         """
         Creates a key for comparison that incorporates tolerance.
@@ -45,6 +45,19 @@ class FitnessResult:
         """Allows legacy code expecting a float to still run (returns quality)."""
         return self.quality_score
     
+    def to_dict(self) -> Dict[str, float]:
+        """
+        Serializes the FitnessResult into a plain Python dictionary.
+
+        Returns:
+            A dictionary of the fitness scores.
+        """
+        return {
+            "quality_score": self.quality_score,
+            "stability_score": self.stability_score,
+            "cost_score": self.cost_score,
+        }
+
     @staticmethod
     def _precision_from_tolerance(tol: float) -> int:
         """

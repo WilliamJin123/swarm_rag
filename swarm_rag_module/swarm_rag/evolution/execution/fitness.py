@@ -15,14 +15,23 @@ class FitnessCalculator:
         """
         self.weights = weights
 
-    def calculate(self, metrics: Dict[str, float], genome: Genome) -> float:
-        # Quality (Weighted Sum of Retrieval Metrics)
-        quality_score = sum(metrics.get(name, 0.0) * w for name, w in self.weights.items())
+    def calculate(self, metrics: Dict[str, float], genome: Genome) -> FitnessResult:
+        quality_score = 0.0
+        for metric_name, weight in self.weights.items():
+            if metric_name == 'complexity':
+                 metric_value = genome.complexity()
+            else:
+                metric_value = metrics.get(metric_name, 0.0)
             
-        # Penalize complexity lightly in the quality score
-        complexity_penalty = 0.0005 * genome.complexity()
-        quality_score -= complexity_penalty
+            quality_score += metric_value * weight
 
+        # Normalize
+        total_abs_weight = sum(abs(w) for w in self.weights.values())
+        if total_abs_weight > 0:
+            quality_score = quality_score / total_abs_weight
+        else:
+            quality_score = 0.0
+            
         # Stability
         stability = 1.0 - metrics.get("variance", 0.0)
 

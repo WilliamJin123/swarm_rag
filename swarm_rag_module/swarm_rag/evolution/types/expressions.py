@@ -1,4 +1,4 @@
-from typing import Callable, Union, List, Dict, Tuple
+from typing import Any, Callable, Union, List, Dict, Tuple
 from dataclasses import dataclass, field
 import math
 import numpy as np
@@ -111,6 +111,19 @@ class ExpressionNode:
             value=self.value,
             children=[child.copy() for child in self.children]
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serializes the ExpressionNode into a plain Python dictionary.
+        
+        Returns:
+            A dictionary representation of the node and its children.
+        """
+        return {
+            "type": self.type,
+            "value": self.value,
+            "children": [child.to_dict() for child in self.children]
+        }
 
     def to_code_string(self) -> str:
         """
