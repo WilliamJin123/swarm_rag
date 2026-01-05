@@ -108,37 +108,29 @@ class ProgressTracker:
 
     def print_summary(self, generation: int):
         if not self.history:
-            print("No history to summarize.")
             return
 
         latest = self.history[-1]
         print(f"--- Gen {generation} Summary ---")
 
-        # Sort keys to ensure Train comes before Val, and metrics are alphabetical
         sorted_keys = sorted(latest.keys())
 
         for key in sorted_keys:
-            # Skip metadata keys
             if key in ["generation", "timestamp"]:
                 continue
 
             val = latest[key]
             
-            # 1. Smart Value Formatting
             if isinstance(val, (int, float)):
-                # If it looks like latency/cost (large number) or integer, use less precision
                 if "cost" in key or "latency" in key or abs(val) > 100:
                     val_str = f"{val:.1f}"
                 elif isinstance(val, int) or val.is_integer():
                     val_str = f"{int(val)}"
                 else:
-                    # Standard metric precision
                     val_str = f"{val:.4f}"
             else:
                 val_str = str(val)
 
-            # 2. Key Beautification
-            # Convert "train_best_quality" -> "Train Best Quality"
             if key.startswith("train_"):
                 clean_key = key.replace("train_", "").replace("_", " ").title()
                 prefix = "[TRAIN]"
@@ -149,7 +141,6 @@ class ProgressTracker:
                 clean_key = key.replace("_", " ").title()
                 prefix = "[     ]"
 
-            # 3. Print aligned
             print(f"  {prefix} {clean_key:<25} : {val_str}")
 
         print("-" * 45)

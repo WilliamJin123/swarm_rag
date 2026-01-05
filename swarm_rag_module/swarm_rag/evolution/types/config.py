@@ -30,6 +30,7 @@ class EvolutionConfigDict(TypedDict):
     selection_k: int
     mutation_max_expr_size: int
     expr_max_depth: int
+    n_agent_groups: int
 
     # Ranges for Continuous/Integer SwarmParams
     # format: 'param_name': (min, max)
@@ -60,6 +61,7 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "selection_k": 3,
     "mutation_max_expr_size": 25,
     "expr_max_depth": 5,
+    "n_agent_groups": 2,
     "param_ranges": {
         "n_agents": (5, 30),
         "steps": (4, 12),
@@ -95,7 +97,7 @@ class EvolutionContext:
 
     def __post_init__(self):
         """
-        Auto-magic: Immediately normalize configuration paths upon creation.
+        Immediately normalize configuration paths upon creation.
         """
         self._resolve_paths()
 
@@ -111,7 +113,7 @@ class EvolutionContext:
         os.makedirs(output_dir, exist_ok=True)
 
         # Normalize Paths
-        path_keys = ["log_path", "plot_path", "checkpoint_path"]
+        path_keys = [k for k in self.config.keys() if k.endswith("_path")]
         
         for key in path_keys:
             filename = self.config.get(key)

@@ -43,24 +43,12 @@ class GeneticRegistry:
         """
         Search **all** genetic registries for name
         """
-        try:
-            return cls.selection.get(name)
-        except KeyError:
-            pass
-
-        try:
-            return cls.crossover.get(name)
-        except KeyError:
-            pass
-
-        try:
-            return cls.mutation.get(name)
-        except KeyError:
-            raise KeyError(
-                f"Genetic heuristic '{name}' is not registered in "
-                "selection, crossover, or mutation registries."
-            ) from None
-
+        try: return cls.selection.get(name)
+        except KeyError: pass
+        try: return cls.crossover.get(name)
+        except KeyError: pass
+        try: return cls.mutation.get(name)
+        except KeyError: raise KeyError(f"Genetic heuristic '{name}' is not registered.") from None
 
     @classmethod
     def all_selection(cls):
@@ -107,13 +95,9 @@ class GeneticStrategies:
         Vectorized Roulette Selection (O(N) setup + O(k) sampling).
         Much faster than calling single roulette k times.
         """
-        # 1. Setup Probabilities (ONCE)
         scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
         total = np.sum(scores)
         probs = scores / total
-        
-        # 2. Sample k times (Vectorized)
-        # return list of k genomes
         return list(np.random.choice(ctx.population, size=k, p=probs))
 
     @staticmethod
@@ -136,9 +120,7 @@ class GeneticStrategies:
         points = start + np.arange(k) * step
         
         indices = np.searchsorted(cum_scores, points)
-
         indices = np.clip(indices, 0, len(ctx.population) - 1)
-        
         return [ctx.population[i] for i in indices]
 
     @staticmethod
@@ -190,6 +172,10 @@ class GeneticStrategies:
             if random.random() > 0.5:
                 child.params[key] = parent2.params[key]
        
+        for key in child.group_ratios:
+            if key in parent2.group_ratios and random.random() > 0.5:
+                child.group_ratios[key] = parent2.group_ratios[key]
+
         for key in child.strategies:
             if random.random() > 0.5:
                 child.strategies[key] = parent2.strategies[key].copy()
@@ -219,6 +205,12 @@ class GeneticStrategies:
                     if 0.0 < val < 1.0: 
                         new_val = max(0.01, min(0.999, new_val))
                     genome.params[key] = new_val
+
+        # Group Ratio Mutation (Heterogeneous Logic)
+        for key, val in genome.group_ratios.items():
+            if random.random() < rate:
+                # Jitter ratio
+                genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.8, 1.2)))
 
         # Strategy Tree Mutation
         for key, tree in genome.strategies.items():

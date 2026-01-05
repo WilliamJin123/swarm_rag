@@ -76,36 +76,58 @@ class EvolutionEngine:
         count = self.config['population_size']
         ranges = self.config['param_ranges']
         max_d = self.config['expr_max_depth']
+        n_groups = self.config["n_agent_groups"]
         
         strat_trees = {}
-        for strat_type in ["movement", "ranking", "deposit"]:
+        for strat_type in ["movement", "deposit"]:
             features = self.evo_context.expression_features[strat_type]
-            strat_trees[strat_type] = ExpressionEvolution.generate_ramped_half_and_half(
+            total_trees = count * n_groups
+            
+            flat_list = ExpressionEvolution.generate_ramped_half_and_half(
                 features=features,
-                population_size=count,
+                population_size=total_trees,
                 max_depth=max_d
             )
+            strat_trees[strat_type] = flat_list
+
+        ranking_features = self.evo_context.expression_features["ranking"]
+        ranking_trees = ExpressionEvolution.generate_ramped_half_and_half(
+            features=ranking_features,
+            population_size=count,
+            max_depth=max_d
+        )
 
         population = []
         for i in range(count):
-            # Randomize Params
+            # Randomize Global Params
             params = DEFAULT_PARAMS.copy()
-            for key, (min_v, max_v) in ranges.items():
-                if isinstance(min_v, int):
-                    params[key] = random.randint(min_v, max_v)
-                else:
-                    params[key] = random.uniform(min_v, max_v)
+            for key in ["n_agents", "steps", "decay", "initial_pool_size", "start_subset", "drop_inc"]:
+                if key in ranges:
+                    min_v, max_v = ranges[key]
+                    if isinstance(min_v, int):
+                        params[key] = random.randint(min_v, max_v)
+                    else:
+                        params[key] = random.uniform(min_v, max_v)
 
-            # Assign Trees (Pop from the generated lists)
-            strategies = {
-                "movement": strat_trees["movement"][i],
-                "ranking": strat_trees["ranking"][i],
-                "deposit": strat_trees["deposit"][i]
-            }
+            # Randomize Group Ratios & Assign Trees
+            strategies = {}
+            group_ratios = {}
+
+            strategies["ranking"] = ranking_trees[i]
+            
+            for g_idx in range(n_groups):
+                # Ratio
+                min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
+                group_ratios[f"g{g_idx}"] = random.uniform(min_r, max_r)
+                
+                # Strategies (Pop from pre-generated list)
+                strategies[f"g{g_idx}_movement"] = strat_trees["movement"].pop()
+                strategies[f"g{g_idx}_deposit"] = strat_trees["deposit"].pop()
 
             genome = Genome(
                 id=f"gen0_{i}",
                 params=params,
+                group_ratios=group_ratios,
                 strategies=strategies
             )
             population.append(genome)
@@ -122,7 +144,7 @@ class EvolutionEngine:
         best_genome: Genome = None
         n_gen = self.config["n_generations"]
 
-        start_gen = self.evo_context.generation
+        start_gen = self.evo_context.generation if self.evo_context.population else 0
 
         if self.evo_context.population:
             start_gen += 1
@@ -134,17 +156,17 @@ class EvolutionEngine:
         for gen in range(start_gen, n_gen): 
             self.evo_context.generation = gen      
 
-            # HOOK: Gen Start
+            # Prehook
             for ext in self.extensions: ext.on_generation_start(self.evo_context)
 
             # EVALUATE
             self.population_evaluator.evaluate(population)
             # Should default to training queries and gts
             
-            # HOOK: Post-Eval (Niching happens here)
+            # Posthook
             for ext in self.extensions: ext.on_after_evaluation(self.evo_context)
 
-            # STATS & ELITISM
+            # ELITISM
             population.sort(key=lambda g: g.fitness, reverse=True)
             current_best = population[0]
             
@@ -190,14 +212,14 @@ class EvolutionEngine:
             if (gen % self.config["checkpoint_frequency"] == 0):
                 self.save_checkpoint(population, best_genome, gen)
 
-            # HOOK: Pre-Breed (Random Immigration happens here)
+            # Prehook
             for ext in self.extensions: ext.on_before_breeding(self.evo_context)
 
             # BREED (Skip on last gen)
             if gen < n_gen - 1:
                 population = self.loop.step(population)
 
-            # HOOK: Gen End
+            # Posthook
             for ext in self.extensions: ext.on_generation_end(self.evo_context)
 
         self.save_checkpoint(population, best_genome, n_gen - 1)

@@ -1,4 +1,4 @@
-from typing import Dict, Callable, Any, Set, TypedDict
+from typing import Dict, Callable, Any, List, Set, TypedDict
 from dataclasses import dataclass, field
 try:
     from typing import NotRequired
@@ -28,17 +28,17 @@ class SwarmParams(TypedDict):
     """
     n_agents: int
     steps: int
+    drop_inc: float
     decay: float
     initial_pool_size: int
     start_subset: int
     
-    # Future-proofing: You can add optional fields without breaking old code
-    exploration_jitter: NotRequired[float]
 
 DEFAULT_PARAMS: SwarmParams = {
     "n_agents": 20,
     "steps": 4,
     "decay": 0.5,
+    "drop_inc": 0.05,
     "initial_pool_size": 30,
     "start_subset": 10
 }
@@ -51,6 +51,7 @@ class Genome:
     """
     id: str
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
+    group_ratios: Dict[str, float] = field(default_factory=dict)
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
 
     fitness: FitnessResult = field(default_factory=lambda: FitnessResult())
@@ -87,7 +88,7 @@ class Genome:
         Restores state and re-initializes the empty cache.
         """
         self.__dict__.update(state)
-        # Ensure cache exists (even if missing from old pickles)
+        # Ensure cache exists
         if '_compiled_cache' not in self.__dict__:
             self._compiled_cache = {}
 
@@ -114,21 +115,12 @@ class Genome:
         """
         Deep copy ensures mutations don't bleed into parents/elites.
         """
-        # Deep copy the strategies (ExpressionNodes are mutable)
-        new_strategies = {k: v.copy() for k, v in self.strategies.items()}
-        
-        # Params are simple types (int/float), shallow copy of dict is fine
-        new_params = self.params.copy()
-
         return Genome(
             id=f"{self.id}_copy",
-            params=new_params,
-            strategies=new_strategies,
-            fitness=FitnessResult(
-                self.fitness.quality_score, 
-                self.fitness.stability_score, 
-                self.fitness.cost_score
-            ),
+            params=self.params.copy(),
+            group_ratios=self.group_ratios.copy(),
+            strategies={k: v.copy() for k, v in self.strategies.items()},
+            fitness=self.fitness, 
             metrics=self.metrics.copy(),
             latency_ms=self.latency_ms,
             evaluated=self.evaluated,
@@ -145,35 +137,82 @@ class GenomeCompiler:
         """
         Converts a Genome into the specific kwargs required by SwarmRetriever.
         """
-        compiled_kwargs = {}
+        valid_suffixes = {'movement', 'deposit', 'ranking'}
+        for key in genome.strategies:
+            if key == 'ranking': 
+                continue
+            
+            # Split 'g0_movement' -> prefix='g0', suffix='movement'
+            if "_" in key:
+                prefix, suffix = key.rsplit('_', 1)
+                if suffix not in valid_suffixes:
+                    raise ValueError(f"Genome contains illegal strategy key: '{key}'. Suffix '{suffix}' not in {valid_suffixes}")
+            else:
+                raise ValueError(f"Genome contains malformed strategy key: '{key}' (expected format 'gN_type')")
+
+        compiled_funcs = {}
         for name, expr_tree in genome.strategies.items():
             if name in genome._compiled_cache:
                 compiled_func = genome._compiled_cache[name]
             else:
                 compiled_func = self._compile_tree(expr_tree)
                 genome._compiled_cache[name] = compiled_func
-            
-            # Convention: strategy 'movement' -> kwarg 'movement_strategies'
-            kwarg_key = f"{name}_strategies"
+            compiled_funcs[name] = compiled_func
 
-            # SwarmRetriever expects: {'strategy_name': (function, weight)}
-            compiled_kwargs[kwarg_key] = {
-                f"evolved_{name}": (compiled_func, 1.0)
-            }
-        # Merge with hyperparameters
-        # Result: {'n_agents': 10, 'movement_strategies': {...}, ...}
-        return {**genome.params, **compiled_kwargs}
+        ranking_strategies = {}
+        if "ranking" in compiled_funcs:
+             ranking_strategies["evolved_ranking"] = (compiled_funcs["ranking"], 1.0)    
+        
+        agent_groups = []
+        total_agents = genome.params['n_agents']
+
+        # Use the explicit group_ratios dict, sorted by key
+        sorted_groups = sorted(genome.group_ratios.keys()) # ['g0', 'g1', ...]
+        
+        if sorted_groups:
+            ratios = [genome.group_ratios[g] for g in sorted_groups]
+            total_ratio = sum(ratios) + 1e-6
+            
+            counts = [int(total_agents * (r / total_ratio)) for r in ratios]
+            
+            # Fix rounding remainder (dump into first group)
+            if sum(counts) < total_agents:
+                counts[0] += (total_agents - sum(counts))
+            
+            for i, group_key in enumerate(sorted_groups):
+                if counts[i] <= 0: continue
+                
+                # Extract index from "g0", "g1"
+                idx_suffix = group_key[1:] 
+                mov_key = f"{group_key}_movement"
+                dep_key = f"{group_key}_deposit"
+                
+                group_config = {
+                    "count": counts[i],
+                    "movement_strategies": { f"evolved_mov_{idx_suffix}": (compiled_funcs.get(mov_key), 1.0) },
+                    "deposit_strategies": { f"evolved_dep_{idx_suffix}": (compiled_funcs.get(dep_key), 1.0) },
+                }
+                agent_groups.append(group_config)
+
+        # Return keyword arguments for retrieve()
+        return {
+            **genome.params, 
+            "agent_groups": agent_groups,
+            "ranking_strategies": ranking_strategies,
+            # Pass empty resolved_groups so retrieve() resolves the agent_groups we just made
+            "resolved_groups": [] 
+        }
+
+
 
     def _compile_tree(self, expr_tree: ExpressionNode) -> Callable[[HeuristicContext], float]:
         """
         Compiles a single expression tree into a lambda.
         """
-        # Extract feature dependencies
         raw_features = self._extract_features(expr_tree)
         required_features = sorted([str(f.value) if hasattr(f, 'value') else str(f) for f in raw_features])
 
-        getters = []
-
+        getters: List[Callable[[HeuristicContext], Any]] = []
         for name in required_features:
             # Handle Context Attributes (Fast Path)
             if name == 'degree':
