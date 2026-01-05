@@ -1,3 +1,4 @@
+import logging
 import pytest
 import numpy as np
 import random
@@ -38,9 +39,12 @@ class ToyStochasticRetriever:
         return results
 
 # --- HELPER: CONFIG FACTORY ---
-def get_standard_config(seed=42):
+def get_standard_config(seed=42, run_name="test"):
     random.seed(seed)
     np.random.seed(seed)
+    
+    # Ensure the directory exists before the tracker tries to open the file
+    os.makedirs("test_synergy_pool", exist_ok=True)
     
     config = DEFAULT_EVO_CONFIG.copy()
     config.update({
@@ -52,19 +56,21 @@ def get_standard_config(seed=42):
             "decay": (0.85, 0.99)
         },
         "elite_fraction": 0.2, 
+        # CRITICAL: Use 'log_path', 'checkpoint_path', etc. to match engine expectation
+        "log_path": f"test_synergy_pool/evo_log_{run_name}.jsonl",
+        "checkpoint_path": f"test_synergy_pool/evo_ckpt_{run_name}.pkl",
+        "plot_path": f"test_synergy_pool/evo_plot_{run_name}.png"
     })
     return config
 
 # --- HELPER: RUNNER ---
-def run_evolution(extensions=[], seed=42, run_name="default", island_id=None):
-    config = get_standard_config(seed)
-    
-    # Inject unique paths
-    config.update({
-        "log_file": f"evo_run/evo_log_{run_name}.jsonl",
-        "checkpoint_file": f"evo_run/evo_ckpt_{run_name}.pkl",
-        "plot_file": f"evo_run/evo_plot_{run_name}.png"
-    })
+def run_evolution(extensions=[], seed=42, run_name="default"):
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        handler.close()
+        root_logger.removeHandler(handler)
+        
+    config = get_standard_config(seed, run_name)
     
     engine = EvolutionEngine(
         retriever=ToyStochasticRetriever(),
@@ -76,11 +82,7 @@ def run_evolution(extensions=[], seed=42, run_name="default", island_id=None):
         extensions=extensions
     )
     
-    # Manual Injection
-    for ext in extensions:
-        if isinstance(ext, RandomImmigrationExtension):
-            ext.engine = engine
-            
+    # Auto-wiring handles RandomImmigrationExtension now, no manual injection needed!
     best = engine.optimize()
     return best
 

@@ -132,7 +132,6 @@ class PopulationEvaluator:
             **retriever_kwargs
         )
 
-        # Check if we should continue
         probe_metrics = []
         for i, res in enumerate(probe_results):
             m = self.evaluator.calculate_metrics(res, probe_gt[i], latency_sec=0)
@@ -153,6 +152,7 @@ class PopulationEvaluator:
             genome.evaluated = True
             return
 
+        # Passed fitness probe on first 20 or queries
         remaining_queries = queries[probe_size:]
 
         remaining_results = self.retriever.retrieve_batch(

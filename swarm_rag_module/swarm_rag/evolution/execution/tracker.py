@@ -7,9 +7,9 @@ from typing import Dict, List, Any, Optional
 class ProgressTracker:
     def __init__(
         self, 
-        log_path: str = "evolution_log.jsonl", 
-        plot_path: str = "evolution_progress.png",
-        plot_title: str = "Evolution Progress",
+        log_path: str, 
+        plot_path: str,
+        plot_title: str,
         overwrite: bool = True
     ):
         self.log_path = log_path

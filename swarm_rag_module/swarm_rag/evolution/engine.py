@@ -207,7 +207,14 @@ class EvolutionEngine:
             # Posthook
             for ext in self.extensions: ext.on_generation_end(self.evo_context)
 
+        # Cleanup
         pbar.close()
+        logger = logging.getLogger()
+        for handler in list(logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+                logger.removeHandler(handler)
+
         self.save_checkpoint(population, best_genome, n_gen - 1)
         self.tracker.plot(save_path=self.config["plot_path"], title=self.config["plot_title"])
         
