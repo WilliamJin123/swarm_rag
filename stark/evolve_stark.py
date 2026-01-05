@@ -128,7 +128,8 @@ def run_evolution(
         "log_path": f"./logs/evo_{dataset_name}.jsonl",
         "plot_path": f"./logs/plot_{dataset_name}.png",
         "checkpoint_path": f"./checkpoints/ckpt_{dataset_name}.pkl",
-        "validation_frequency": 5
+        "validation_frequency": 5,
+        "max_workers_per_retrieval": 4
     })
 
 

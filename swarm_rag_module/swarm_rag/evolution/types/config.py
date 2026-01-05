@@ -10,7 +10,7 @@ class EvolutionConfigDict(TypedDict):
     """
     # Resource Management
     concurrent_evaluations: int
-    global_max_threads: int
+    max_workers_per_retrieval: int
 
     # Loop Control
     n_generations: int
@@ -47,7 +47,7 @@ class EvolutionConfigDict(TypedDict):
 
 DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "concurrent_evaluations": 4,
-    "global_max_threads": 8,
+    "max_workers_per_retrieval": 1,
     "n_generations": 20,
     "population_size": 30,
     "elite_fraction": 0.1,

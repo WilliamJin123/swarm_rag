@@ -71,7 +71,8 @@ class EvolutionEngine:
             fitness_calc=fitness_calculator, 
             queries=train_query_ids, 
             ground_truth=train_ground_truth,
-            concurrent_evaluations=self.config["concurrent_evaluations"]
+            concurrent_evaluations=self.config["concurrent_evaluations"],
+            max_workers_per_retrieval=self.config["max_workers_per_retrieval"]
         )
         self.loop = EvolutionLoop(self.evo_context)
         self.tracker = ProgressTracker(

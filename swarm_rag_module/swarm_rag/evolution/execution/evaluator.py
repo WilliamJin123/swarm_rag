@@ -21,6 +21,7 @@ class PopulationEvaluator:
         evaluator: Evaluator,
         fitness_calc: FitnessCalculator,
         concurrent_evaluations: int = 4,
+        max_workers_per_retrieval: int = 1,
         queries: List[str] = None,
         ground_truth: List[List[Any]] = None
     ):
@@ -31,6 +32,7 @@ class PopulationEvaluator:
         self.ground_truth = ground_truth
         self.compiler = GenomeCompiler()
         self.concurrent_evaluations = concurrent_evaluations
+        self.max_workers_per_retrieval = max_workers_per_retrieval
 
     def evaluate(
         self, 
@@ -51,7 +53,7 @@ class PopulationEvaluator:
         
         logger.info(f"Evaluating {len(unevaluated)} genomes...")
         logger.info(f"  > Concurrency: {batch_size} genomes parallel")
-        logger.info(f"  > Mode: Sequential Queries per Genome (max_workers=1)")
+        logger.info(f"  > max_workers: {self.max_workers_per_retrieval} workers")
 
         batch_size = self.concurrent_evaluations
         for i in range(0, len(unevaluated), batch_size):
@@ -120,7 +122,7 @@ class PopulationEvaluator:
         
         batch_results = self.retriever.retrieve_batch(
             queries=queries,
-            max_workers=1,
+            max_workers=self.max_workers_per_retrieval,
             genome_id=genome.id,
             **retriever_kwargs
         )
