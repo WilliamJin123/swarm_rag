@@ -1,4 +1,3 @@
-from typing import List, Optional
 from ..types.config import EvolutionContext
 
 class EvolutionExtension():

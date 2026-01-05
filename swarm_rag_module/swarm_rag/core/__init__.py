@@ -1,8 +1,9 @@
 from .heuristics import Heuristics, HeuristicContext, HeuristicRegistry
-from .swarm_retriever import SwarmRetriever
+from .swarm_retriever import SwarmRetriever, AgentGroupConfig
 
 __all__ = ["SwarmRetriever", 
            "Heuristics", 
            "HeuristicContext",
-           "HeuristicRegistry"
+           "HeuristicRegistry",
+           "AgentGroupConfig",
            ]
