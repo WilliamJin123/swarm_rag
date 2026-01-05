@@ -1,3 +1,4 @@
+
 # test_integration_complex.py
 import os
 import shutil
@@ -37,8 +38,12 @@ class MockBaseEvaluator(BaseEvaluator):
 
 # --- TESTS ---
 
-CKPT_FILE = "complex_test.pkl"
-LOG_FILE = "complex_log.jsonl"
+# Create results directory if it doesn't exist
+RESULTS_DIR = "evo_results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+CKPT_FILE = os.path.join(RESULTS_DIR, "complex_test.pkl")
+LOG_FILE = os.path.join(RESULTS_DIR, "complex_log.jsonl")
 
 def test_variance_calculation_flow():
     print("\n--- Testing Variance/Stability Flow ---")
@@ -93,7 +98,7 @@ def test_checkpoint_resume():
     config['checkpoint_path'] = CKPT_FILE
     config['log_path'] = LOG_FILE
     config['population_size'] = 4
-    config['plot_path'] = "evo_plot_complex.png"
+    config['plot_path'] = os.path.join(RESULTS_DIR, "evo_plot_complex.png")
     
     # 2. Run Initial Engine (Gens 0-1)
     print("  Running initial batch (Gen 0-1)...")
@@ -109,8 +114,7 @@ def test_checkpoint_resume():
     config['n_generations'] = 2
     engine.optimize()
     
-    checkpoint_to_load = os.path.join(config["output_dir"], CKPT_FILE)
-    assert os.path.exists(checkpoint_to_load), "Checkpoint not created"
+    assert os.path.exists(CKPT_FILE), "Checkpoint not created"
     
     # 3. Load Checkpoint
     print("  Loading checkpoint...")
@@ -143,10 +147,15 @@ def test_checkpoint_resume():
         
     print("  ✓ Checkpoint resume successful")
 
-# def cleanup():
-#     for f in [CKPT_FILE, LOG_FILE, "evolution_progress.png"]:
-#         if os.path.exists(f):
-#             os.remove(f)
+def cleanup():
+    for f in [CKPT_FILE, LOG_FILE, os.path.join(RESULTS_DIR, "evo_plot_complex.png")]:
+        if os.path.exists(f):
+            os.remove(f)
+    # Clean intermediate checkpoints
+    base, ext = os.path.splitext(CKPT_FILE)
+    for f in os.listdir(RESULTS_DIR):
+        if f.startswith(os.path.basename(base)) and f.endswith(ext):
+            os.remove(os.path.join(RESULTS_DIR, f))
 
 if __name__ == "__main__":
     try:

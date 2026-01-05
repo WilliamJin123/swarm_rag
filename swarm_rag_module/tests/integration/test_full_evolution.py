@@ -1,3 +1,4 @@
+
 import os
 import shutil
 import random
@@ -68,9 +69,13 @@ class ToyStochasticRetriever:
 
 # --- 2. THE TEST ---
 
-CKPT_FILE = "sim_test.pkl"
-LOG_FILE = "sim_log.jsonl"
-PLOT_FILE = "sim_plot.png"
+# Create results directory if it doesn't exist
+RESULTS_DIR = "evo_results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+CKPT_FILE = os.path.join(RESULTS_DIR, "sim_test.pkl")
+LOG_FILE = os.path.join(RESULTS_DIR, "sim_log.jsonl")
+PLOT_FILE = os.path.join(RESULTS_DIR, "sim_plot.png")
 PLOT_TITLE = "Full E2E Evolution Test"
 
 def get_test_config():
@@ -101,18 +106,22 @@ def setup_module():
     # Clean artifacts
     for f in [CKPT_FILE, LOG_FILE, PLOT_FILE]:
         if os.path.exists(f): os.remove(f)
+    # Clean intermediate checkpoints
+    base, ext = os.path.splitext(CKPT_FILE)
+    for f in os.listdir(RESULTS_DIR):
+        if f.startswith(os.path.basename(base)) and f.endswith(ext):
+            os.remove(os.path.join(RESULTS_DIR, f))
 
 def teardown_module():
     # Clean artifacts
     for f in [CKPT_FILE, LOG_FILE, PLOT_FILE]:
         if os.path.exists(f): os.remove(f)
-        
     # Clean intermediate checkpoints
     base, ext = os.path.splitext(CKPT_FILE)
-    for f in os.listdir("."):
-        if f.startswith(base) and f.endswith(ext):
-            os.remove(f)
-
+    for f in os.listdir(RESULTS_DIR):
+        if f.startswith(os.path.basename(base)) and f.endswith(ext):
+            os.remove(os.path.join(RESULTS_DIR, f))
+        
 def test_evolution_solves_toy_problem():
     print("\n\n=== STARTING FULL SYSTEM SIMULATION ===")
     
@@ -184,20 +193,17 @@ def test_evolution_solves_toy_problem():
     best_genome = engine.optimize()
 
     # 6. VERIFICATION
-    
-
     print(f"\n  > Best Genome Params: {best_genome.params}")
     print(f"  > Best Genome Fitness: {best_genome.fitness.quality_score}")
     
     assert best_genome.fitness.quality_score > 0.0, "Evolution failed to find ANY solution (random walk failed)"
     
     # B. Check Checkpoints
-    assert os.path.exists(os.path.join("evo_results", CKPT_FILE)), "Final checkpoint missing"
+    assert os.path.exists(CKPT_FILE), "Final checkpoint missing"
     
     # C. Check Logs
-    log_f = os.path.join("evo_results", LOG_FILE)
-    assert os.path.exists(log_f), "Log file missing"
-    with open(log_f, 'r', encoding="utf-8") as f:
+    assert os.path.exists(LOG_FILE), "Log file missing"
+    with open(LOG_FILE, 'r', encoding="utf-8") as f:
         lines = f.readlines()
         assert len(lines) >= 3, "Log should have at least 3 entries (Gen 0, 1, 2)"
         
@@ -209,7 +215,7 @@ def test_resume_simulation():
     """
     print("\n=== TESTING RESUME CAPABILITY ===")
     
-    if not os.path.exists(os.path.join("evo_results",CKPT_FILE)):
+    if not os.path.exists(CKPT_FILE):
         pytest.skip("Run test_evolution_solves_toy_problem first")
 
     # 1. Config for RESUME
@@ -256,4 +262,4 @@ if __name__ == "__main__":
         test_evolution_solves_toy_problem()
         test_resume_simulation()
     finally:
-        pass
+        teardown_module()
