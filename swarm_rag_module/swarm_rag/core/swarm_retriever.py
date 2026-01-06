@@ -1,6 +1,6 @@
 import random
 import numpy as np
-from typing import Any, List, Dict, Optional, Tuple, TypedDict
+from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -8,7 +8,7 @@ import logging
 from ..utils import LRUCache
 
 from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
-from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
+from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
 
 class AgentGroupConfig(TypedDict):
     """
@@ -192,12 +192,12 @@ class SwarmRetriever:
         )
 
         # Batch embed all queries
-        query_vectors = self._get_cached_query_embeddings_batch(queries)
+        query_matrix = self._get_cached_query_embeddings_batch(queries)
 
         # Decide processing strategy
         if max_workers > 1 and len(queries) > 1:
             return self._retrieve_batch_parallel(
-                query_vectors,
+                query_matrix,
                 resolved_groups,
                 max_workers=max_workers,
                 deterministic=current_deterministic,
@@ -206,7 +206,7 @@ class SwarmRetriever:
             )
         else:
             return self._retrieve_batch_sequential(
-                query_vectors,
+                query_matrix,
                 resolved_groups,
                 deterministic=current_deterministic,
                 seed=current_seed,
@@ -215,7 +215,7 @@ class SwarmRetriever:
 
     def _retrieve_batch_sequential(
         self,
-        query_vectors: List[np.ndarray],
+        query_vectors: Sequence[np.ndarray],
         resolved_groups: List[Dict],
         deterministic: bool,
         seed: int,
@@ -242,7 +242,7 @@ class SwarmRetriever:
 
     def _retrieve_batch_parallel(
         self,
-        query_vectors: List[np.ndarray],
+        query_vectors: Sequence[np.ndarray],
         resolved_groups: List[Dict],
         deterministic: bool,
         seed: int,
@@ -478,7 +478,7 @@ class SwarmRetriever:
     ) -> Optional[Dict]:
         """Vectorized agent step processing."""
         neighbors = self._get_cached_neighbors(current_loc)
-        if not neighbors:
+        if len(neighbors) == 0:  
             return None
         if step % 2 == 0:
             logger.debug(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
@@ -604,7 +604,7 @@ class SwarmRetriever:
             for func, weight in ranking_funcs
         )
 
-    def _get_cached_neighbors(self, node_id: int) -> List[int]:
+    def _get_cached_neighbors(self, node_id: int) -> np.ndarray:
         """Gets or computes and caches the neighbor list, if enabled."""
         if not self.cache_neighbors:
             return self.graph_store.get_neighbors(node_id)
@@ -615,10 +615,10 @@ class SwarmRetriever:
 
         neighbors = self.graph_store.get_neighbors(node_id)
         with self._cache_lock:
-            self.neighbor_cache.set(node_id, neighbors)
+            self.neighbor_cache.set(node_id, np.array(neighbors))
         return neighbors
     
-    def _fetch_vectors_batch(self, node_ids: List[int]) -> Tuple[np.ndarray, List[int]]:
+    def _fetch_vectors_batch(self, node_ids: Sequence[int]) -> Tuple[np.ndarray, List[int]]:
         """
         Fetches vectors efficiently and returns a dense matrix of foundn vectors.
         
@@ -627,28 +627,44 @@ class SwarmRetriever:
             valid_ids: List[int] of length N_found, mapping rows to node IDs.
         """
         if not self.cache_vectors:
-            raw_vecs = self.vector_store.fetch_batch(node_ids)
-        else:
-            raw_vecs = [None] * len(node_ids)
-            missing_indices = []
-            missing_ids = []
-
-            with self._cache_lock:
-                for i, node_id in enumerate(node_ids):   
-                    cached_vec = self.doc_cache.get(node_id)
-                    if cached_vec is not None:
-                        raw_vecs[i] = cached_vec
-                    else:
-                        missing_indices.append(i)
-                        missing_ids.append(node_id)
+            matrix = self.vector_store.fetch_batch(node_ids)
+            valid_mask = np.any(matrix != 0, axis=1)
             
-            if missing_ids:
-                fetched_vecs = self.vector_store.fetch_batch(missing_ids)
-                with self._cache_lock:
-                    for i, vec in zip(missing_indices, fetched_vecs):
-                        if vec is not None:
-                            self.doc_cache.set(node_ids[i], vec)
-                        raw_vecs[i] = vec
+            # Optimization: If all are valid (common case), return as-is
+            if np.all(valid_mask):
+                return matrix, list(node_ids)
+            
+            # Otherwise, slice both the matrix and the ID list
+            filtered_matrix = matrix[valid_mask]
+            filtered_ids = [nid for i, nid in enumerate(node_ids) if valid_mask[i]]
+            return filtered_matrix, filtered_ids
+        
+        raw_vecs = [None] * len(node_ids)
+        missing_indices = []
+        missing_ids = []
+
+        with self._cache_lock:
+            for i, node_id in enumerate(node_ids):   
+                cached_vec = self.doc_cache.get(node_id)
+                if cached_vec is not None:
+                    raw_vecs[i] = cached_vec
+                else:
+                    missing_indices.append(i)
+                    missing_ids.append(node_id)
+        
+        if missing_ids:
+            fetched_matrix = self.vector_store.fetch_batch(missing_ids)
+            
+            valid_fetched_mask = np.any(fetched_matrix != 0, axis=1)
+            
+            with self._cache_lock:
+                for i, is_valid in enumerate(valid_fetched_mask):
+                    if is_valid:
+                        original_idx = missing_indices[i]
+                        vec = fetched_matrix[i]
+                        
+                        self.doc_cache.set(node_ids[original_idx], vec)
+                        raw_vecs[original_idx] = vec
             
         valid_data = [(nid, v) for nid, v in zip(node_ids, raw_vecs) if v is not None]
         
@@ -656,10 +672,7 @@ class SwarmRetriever:
             return np.array([]), []
             
         valid_ids, valid_vecs = zip(*valid_data)
-        
-        # Stack into (N, D) matrix
-        matrix = np.stack(valid_vecs)
-        return matrix, list(valid_ids)
+        return np.stack(valid_vecs), list(valid_ids)
 
     def _get_cached_query_vector(self, query: Any) -> np.ndarray:
         """Gets or computes and caches the query embedding, if enabled."""
@@ -675,17 +688,19 @@ class SwarmRetriever:
             self.query_cache.set(query, emb)
         return emb
         
-    def _get_cached_query_embeddings_batch(self, queries: list) -> List[np.ndarray]:
+    def _get_cached_query_embeddings_batch(self, queries: list) -> Matrix:
         """
-        Retrieves embeddings for a batch of queries, using the unified
-        single-item cache to avoid redundant computations.
+        Retrieves embeddings for a batch of queries, returning a single 2D array.
         """
-        if not self.cache_vectors or not queries:
+        if not queries:
+            return np.array([]) 
+        if not self.cache_vectors:
             return self.embed_fn.embed_query_batch(queries)
 
-        results_by_index = {}
+        results_by_index: Dict[Any, np.ndarray] = {}
         missing_indices = []
         missing_queries = []
+
         with self._cache_lock:
             for i, q in enumerate(queries):
                 cached_vec = self.query_cache.get(q)
@@ -703,4 +718,16 @@ class SwarmRetriever:
                     self.query_cache.set(q, emb)
                     results_by_index[i] = emb
 
-        return [results_by_index[i] for i in range(len(queries))]
+        if not results_by_index:
+            return np.array([])
+        
+        first_embedding = next(iter(results_by_index.values()))
+        embedding_dim = first_embedding.shape[0]
+        batch_size = len(queries)
+
+        final_embeddings = np.empty((batch_size, embedding_dim), dtype=first_embedding.dtype)
+
+        for i in range(batch_size):
+            final_embeddings[i, :] = results_by_index[i]
+
+        return final_embeddings

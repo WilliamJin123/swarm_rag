@@ -1,6 +1,30 @@
 import pandas as pd
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, TypedDict, Union
 from .metric_functions import MetricFunctions
+
+class RetrievedNode(TypedDict):
+    """A node returned by the retriever."""
+    id: Union[str, int] 
+    node_type: str     
+
+Metrics = TypedDict('Metrics', {
+    # Core fields
+    'latency': float,
+    'MRR': float,
+    'Diversity_Node_Types': float,
+    'Diversity_Count': float,
+    
+    # Hit@K / Recall@K
+    'Hit@1': float,
+    'Recall@1': float,
+    'Hit@5': float,
+    'Recall@5': float,
+    'Hit@10': float,
+    'Recall@10': float,
+    'Hit@20': float,
+    'Recall@20': float,
+}, total=False)
+
 class Evaluator:
     def __init__(self, k_values=[1, 5, 10, 20], diversity_cutoff=20, index_name="Swarm_RAG"):
         """
@@ -16,10 +40,10 @@ class Evaluator:
 
     def calculate_metrics(
         self, 
-        retrieved_nodes: List[Dict[str, Any]], 
+        retrieved_nodes: List[RetrievedNode],
         ground_truth_ids: List[Union[str, int]], 
         latency_sec: float
-    ) -> Dict[str, float]:
+    ) -> Metrics:
         """
         Computes all metrics for a SINGLE query.
         
@@ -28,13 +52,15 @@ class Evaluator:
                              Ordered by relevance (Top 1 first).
             ground_truth_ids: List of strings (the correct node IDs).
             latency_sec: Time taken to retrieve.
+        Returns:
+
         """
         # 1. Setup
         retrieved_ids = [str(n['id']) for n in retrieved_nodes if 'id' in n]
         gt_ids = [str(g) for g in ground_truth_ids]
         gt_set = set(gt_ids)
         
-        metrics: Dict[str, float] = {}
+        metrics: Metrics = {}
         metrics["latency"] = latency_sec
         
         # 2. Hit@K and Recall@K
@@ -67,7 +93,7 @@ class Evaluator:
         
         return metrics
 
-    def aggregate_results(self, results: List[Dict[str, float]]) -> pd.DataFrame:
+    def aggregate_results(self, results: List[Metrics]) -> pd.DataFrame:
         """
         Averages the metrics across all queries to produce the final table.
         """

@@ -1,10 +1,17 @@
 import math
-from typing import Any, Dict, List, Optional
+import os
+from typing import Dict, List, Optional
 import numpy as np
-from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
+from numpy.typing import NDArray
+from multiprocessing import shared_memory
+import scipy.sparse as sp
+import atexit
+
+from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
 from ..interfaces.enums import HeuristicKey
 from ..utils import fail_on_missing_imports, LRUCache
 from ..core import HeuristicContext, HeuristicRegistry
+
 try:
     import torch
     import faiss
@@ -14,12 +21,16 @@ except ImportError:
                 modules=["torch", "stark_qa", "faiss"], 
                 extra_name="stark"
             )
-    
+
+import logging
+logger = logging.getLogger(__name__)    
+
 AVG_DEGREE_BY_DATASET = {
-        "prime": 125.2,
-        "amazon": 18.2,
-        "mag": 43.5,
-    }
+    "prime": 125.2,
+    "amazon": 18.2,
+    "mag": 43.5,
+}
+
 AVG_LOG_DEGREE_BY_DATASET = {
     k: math.log(1 + v)
     for k, v in AVG_DEGREE_BY_DATASET.items()
@@ -32,67 +43,75 @@ class StarkSKBAdapter(GraphStore):
         skb_data: 'SKB', 
         dataset: str, 
         cache_size: int = 10000,
-        adjacency_dict: Optional[Dict[int, List[int]]] = None):
+        adjacency_dict: Optional[Dict[int, List[int]]] = None,
+        cache_path=None
+    ):
         """
-        Ingests a STaRK SKB object. 
+        Uses CSR (Compressed Sparse Row) representation to ingest a STaRK SKB object. 
         """
-
-        print("Initializing graph adapter from STaRK SKB...")
         self.skb = skb_data
-
         if dataset not in AVG_LOG_DEGREE_BY_DATASET:
             raise ValueError(f"Unknown dataset: {dataset}")
 
         self.dataset = dataset
+        self.cache_path = cache_path or f"./adjacency_cache/graph_{dataset}.npz"
         self.avg_log_degree = AVG_LOG_DEGREE_BY_DATASET[dataset]
 
-        if adjacency_dict is not None:
-            print(f"Using pre-computed adjacency with {len(adjacency_dict)} nodes")
-            self.adjacency_dict = adjacency_dict
-            self.degree_dict = {
-                node_id: len(neighbors) 
-                for node_id, neighbors in adjacency_dict.items()
-            }
+        if os.path.exists(self.cache_path):
+            logger.info(f"Loading CSR graph from {self.cache_path}...")
+            self.adj_matrix = sp.load_npz(self.cache_path)
+            self.use_precomputed = True
+        elif adjacency_dict is not None:
+            logger.info("Converting dict to CSR and saving for next time...")
+            self.adj_matrix = self._dict_to_csr(adjacency_dict)
+            sp.save_npz(self.cache_path, self.adj_matrix)
             self.use_precomputed = True
         else:
-            # Fallback to LRU caching
-            print(f"Using LRU cache (size={cache_size}) - consider pre-computing adjacency!")
+            logger.warning("No pre-computed adjacency provided. Falling back to LRU cache (Slow).")
             self.neighbor_cache = LRUCache(cache_size)
-            self.degree_cache = LRUCache(cache_size)
             self.use_precomputed = False
 
-    def get_neighbors(self, node_id) -> list:
+    def _dict_to_csr(self, adj_dict: Dict[int, List[int]]) -> sp.csr_matrix:
+        """Converts adjacency dictionary to a memory-efficient CSR matrix."""
+        nodes = sorted(adj_dict.keys())
+        max_node = nodes[-1] if nodes else 0
+        
+        indptr = [0]
+        indices = []
+        # We use a mapping if node IDs are non-contiguous, but STaRK is usually 0-indexed
+        for i in range(max_node + 1):
+            neighbors = adj_dict.get(i, [])
+            indices.extend(neighbors)
+            indptr.append(len(indices))
+        
+        # Use dummy data (1s) as we only care about topology/indices
+        data = np.ones(len(indices), dtype=np.int8)
+        return sp.csr_matrix((data, indices, indptr), shape=(max_node + 1, max_node + 1))
+
+    def get_neighbors(self, node_id: int) -> np.ndarray:
         if self.use_precomputed:
-            return self.adjacency_dict.get(node_id, [])
+            if node_id >= self.adj_matrix.shape[0]: return []
+            start = self.adj_matrix.indptr[node_id]
+            end = self.adj_matrix.indptr[node_id+1]
+            return self.adj_matrix.indices[start:end].copy()
         
         cached = self.neighbor_cache.get(node_id)
-        if cached is not None:
-            return cached
+        if cached is not None: return np.array(cached)
         
         neighbors = self.skb.get_neighbor_nodes(node_id)
-        self.neighbor_cache.set(node_id, neighbors)
-
-        self.degree_cache.set(node_id, len(neighbors))
-        
-        return neighbors
-    
+        np_neighbors = np.array(neighbors)
+        self.neighbor_cache.set(node_id, np_neighbors)
+        return np_neighbors
+            
     def get_degree(self, node_id: int) -> int:
-        """
-        Fast degree lookup with separate cache.
-        If not cached, fetches neighbors (which caches both).
-        """
-        if self.use_precomputed:    
-            return self.degree_dict.get(node_id, 0)
-        
-        cached_degree = self.degree_cache.get(node_id)
-        if cached_degree is not None:
-            return cached_degree
-        neighbors = self.get_neighbors(node_id)
-        return len(neighbors)
-
-    def contains(self, node_id) -> bool:
         if self.use_precomputed:
-            return node_id in self.adjacency_dict
+            if node_id >= self.adj_matrix.shape[0]: return 0
+            return self.adj_matrix.indptr[node_id+1] - self.adj_matrix.indptr[node_id]
+        return len(self.get_neighbors(node_id))
+
+    def contains(self, node_id: int) -> bool:
+        if self.use_precomputed:
+            return node_id < self.adj_matrix.shape[0]
         return self.skb.node_info.get(node_id, "") != ""
 
     def get_avg_degree(self) -> float:
@@ -119,74 +138,114 @@ class StarkSKBAdapter(GraphStore):
     
 # --- 2. Vector Store Adapter for STaRK Tensors ---
 class StarkInMemoryVectorStore(VectorStore):
-    def __init__(self, doc_embs: dict[int, torch.Tensor]):
+    def __init__(self, doc_embs: Dict[int, torch.Tensor], shared_name: Optional[str] = None):
         """
-        Wraps the raw dictionary of {id: tensor} into a FAISS index for speed.
+        Wraps doc embeddings in SharedMemory to prevent 4x RAM usage in parallel mode.
         """
-        if not doc_embs:
-            raise ValueError("Document embeddings dictionary cannot be empty")
-            
-        self.doc_embs = doc_embs
-        self.ids = list(doc_embs.keys())
-        
-        # Convert to numpy matrix for FAISS
-        # Assuming all tensors are same shape
-        first_tensor = doc_embs[self.ids[0]]
-        dim = first_tensor.squeeze().shape[0]
+        self._parent_pid = os.getpid()
+        faiss.omp_set_num_threads(1)
 
-        matrix = np.stack([
-            t.squeeze().cpu().numpy() 
-            for t in doc_embs.values()
-        ]).astype('float32')
+        raw_ids = np.array(list(doc_embs.keys()))
+        self.id_dtype = raw_ids.dtype
+        sorted_keys = np.sort(raw_ids)
         
-        # Normalize for Cosine Similarity (Inner Product on normalized vectors)
-        faiss.normalize_L2(matrix)
+        first_tensor = doc_embs[sorted_keys[0]].detach().cpu().numpy().squeeze()
+        self.dim = first_tensor.shape[0]
+        self.vec_dtype = first_tensor.dtype
+        self.n_docs = len(sorted_keys)
+
+        matrix_bytes = self.n_docs * self.dim * np.dtype(self.vec_dtype).itemsize
+        id_bytes = self.n_docs * np.dtype(self.id_dtype).itemsize
+
+        if shared_name:
+            # CHILD PROCESS PATH
+            self.shm_matrix = shared_memory.SharedMemory(name=shared_name)
+            self.shm_ids = shared_memory.SharedMemory(name=f"{shared_name}_ids")
+            self._is_owner = False
+        else:
+            # PARENT PROCESS PATH
+            shared_name = f"stark_vstore_{os.getpid()}"
+            self.shm_matrix = shared_memory.SharedMemory(create=True, size=matrix_bytes, name=shared_name)
+            self.shm_ids = shared_memory.SharedMemory(create=True, size=id_bytes, name=f"{shared_name}_ids")
+            self._is_owner = True
+
+        self.matrix = np.ndarray((self.n_docs, self.dim), dtype=self.vec_dtype, buffer=self.shm_matrix.buf)
+        self.ids = np.ndarray((self.n_docs,), dtype=self.id_dtype, buffer=self.shm_ids.buf)
+
+        if self._is_owner:
+            logger.info(f"Parent process: Populating shared memory for {self.n_docs} embeddings...")
+            tensor_list = [doc_embs[rid] for rid in sorted_keys]
+            stacked_matrix = torch.stack(tensor_list).detach().cpu().numpy().astype(self.vec_dtype).squeeze()
+            faiss.normalize_L2(stacked_matrix)
+            np.copyto(self.matrix, stacked_matrix)
+            np.copyto(self.ids, sorted_keys)
+            logger.info("Parent process: Shared memory populated.")
         
-        self.index = faiss.IndexFlatIP(dim) # Inner Product index
-        self.index.add(matrix)
-        
-        # Map Faiss integer ID back to STaRK Node ID
-        self.faiss_id_to_real_id = {i: real_id for i, real_id in enumerate(self.ids)}
-        self.real_id_to_tensor = {real_id: matrix[i] for i, real_id in enumerate(self.ids)}
+        self.index = faiss.IndexFlatIP(self.dim)
+        self.index.add(self.matrix)
+
+        self.real_id_to_idx = {int(real_id): i for i, real_id in enumerate(self.ids)}
+
+        # warmup
+        _ = np.sum(self.matrix[0]) 
+        _ = np.sum(self.ids[:min(100, len(self.ids))])
+
+        atexit.register(self.close)
 
     def search(self, query_vec: np.ndarray, limit: int):
-        """
-        Search for similar vectors using FAISS.
-        """
-        if query_vec is None:
-            raise ValueError(
-                "The query vector provided to the search function is None. "
-                "This usually means the embedding for the query ID was not found. "
-                "Please check that your query embeddings dictionary contains the ID for the query you are trying to retrieve."
-            )
-        # Ensure query is 2D float32 and normalized
         q = query_vec.reshape(1, -1).astype('float32')
         faiss.normalize_L2(q)
-        
-        scores, indices = self.index.search(q, min(limit, self.index.ntotal))
+        scores, indices = self.index.search(q, min(limit, self.n_docs))
         
         results = []
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1: continue
-            real_id = self.faiss_id_to_real_id[idx]
+            real_id = int(self.ids[idx])
             results.append({'id': real_id, 'score': float(score)})
         return results
+    
+    def fetch_batch(self, node_ids) -> Matrix:
+        indices = [self.real_id_to_idx.get(nid, -1) for nid in node_ids]
+        indices_arr = np.array(indices, dtype=np.int64)
 
-    def fetch_batch(self, node_ids) -> List[Optional[np.ndarray]]:
-        # Return raw vectors for the Swarm logic
-        return [self.real_id_to_tensor.get(nid) for nid in node_ids]
+        result = np.zeros((len(node_ids), self.dim), dtype=self.vec_dtype)
+
+        mask = (indices_arr >= 0)
+        
+        if np.any(mask):
+            valid_internal_indices = indices_arr[mask]
+            result[mask] = self.matrix[valid_internal_indices]
+            
+        return result
     
     def fetch(self, node_id: int) -> Optional[np.ndarray]:
-        """
-        Provides a fast, direct O(1) lookup for a single vector.
-        This is ideal for use with an LRU cache.
-        """
-        return self.real_id_to_tensor.get(node_id)
+        idx = self.real_id_to_idx.get(node_id)
+        if idx is not None:
+            return self.matrix[idx]
+        logger.warning(
+            f"VectorStore: Node ID {node_id} was requested but not found in the embedding map. "
+            "This indicates a mismatch between graph nodes and document embeddings."
+        )
+        return None
+
+    def close(self):
+        for shm_attr in ['shm_matrix', 'shm_ids']:
+            if hasattr(self, shm_attr):
+                shm = getattr(self, shm_attr)
+                shm.close()
+                # Unlink ONLY in the parent process
+                if self._is_owner and os.getpid() == self._parent_pid:
+                    try:
+                        shm.unlink()
+                        logger.info(f"Unlinked {shm_attr}")
+                    except:
+                        pass
 
 
 # --- 3. Embedding Adapter (Pre-computed Lookup) ---
 class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     def __init__(self, query_embs: dict[int, torch.Tensor]):
+        """Standardized NumPy pre-conversion to avoid GIL/Torch overhead."""
         self.query_embs = {}
         for qid, emb in query_embs.items():
             if hasattr(emb, 'numpy'):
@@ -198,6 +257,9 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     def embed_query(self, query_id: int) -> np.ndarray:
         return self.query_embs[query_id]
         
-    def embed_query_batch(self, query_ids: list[int]) -> List[np.ndarray]:
-        return [self.embed_query(qid) for qid in query_ids]
-    
+    def embed_query_batch(self, query_ids: list[int]) -> Matrix:
+        """
+        Returns a 2D matrix (N_queries, Dimension) of pre-computed embeddings.
+        """
+        # Fetch individual arrays and stack them into a single (N, D) matrix
+        return np.stack([self.query_embs[qid] for qid in query_ids])

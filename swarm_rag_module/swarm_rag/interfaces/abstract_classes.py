@@ -1,18 +1,21 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Sequence, TypeAlias, Union
 import numpy as np
+from numpy.typing import NDArray
+
+Matrix: TypeAlias = NDArray[Any]  # Shape (N, D)
 
 class VectorStore(ABC):
     """Abstract contract for Vector Databases (LanceDB, Chroma, Faiss, In-Memory)"""
     
     @abstractmethod
-    def search(self, query_vec: np.ndarray, limit: int) -> List[Dict[str, Any]]:
-        """Returns list of dicts: [{'id': ..., 'score': ...}, ...]"""
+    def search(self, query_vec: np.ndarray, limit: int) -> Sequence[Dict[str, Any]]:
+        """Returns sequence of dicts: [{'id': ..., 'score': ...}, ...]"""
         pass
 
     @abstractmethod
-    def fetch_batch(self, node_ids: List[Any]) -> List[Optional[np.ndarray]]:
-        """Returns ordered list of vectors"""
+    def fetch_batch(self, node_ids: Sequence[Any]) -> Matrix:
+        """Returns a 2D matrix of shape (N, D)."""
         pass
 
     @abstractmethod
@@ -24,8 +27,8 @@ class GraphStore(ABC):
     """Abstract contract for Graph Structures (NetworkX, PyG, Neo4j)"""
     
     @abstractmethod
-    def get_neighbors(self, node_id: Any) -> List[Any]:
-        """Returns a list of neighbor node IDs"""
+    def get_neighbors(self, node_id: Any) -> np.ndarray:
+        """Returns a sequence of neighbor node IDs (pref np.ndarray)"""
         pass
 
     @abstractmethod
@@ -48,5 +51,5 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    def embed_query_batch(self, queries: list) -> List[np.ndarray]:
+    def embed_query_batch(self, queries: Sequence) -> Matrix:
         pass

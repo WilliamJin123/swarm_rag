@@ -1,9 +1,13 @@
+
 import random
 import time
 import argparse
 from typing import List, Optional
-
 import pandas as pd
+import logging
+
+# --- Configure logging to see the warnings from VectorStore ---
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from swarm_rag.core import Heuristics, SwarmRetriever, HeuristicRegistry
 from swarm_rag.integrations.stark import StarkInMemoryVectorStore, StarkPreComputedEmbeddingHandler, StarkSKBAdapter
@@ -16,13 +20,7 @@ def test_stark_questions(
     seed: Optional[int] = None,
     human_gen: bool = False
 ) -> None:
-    """
-    Test the first n questions of each QA dataset and generate evaluation metrics and plots.
-    
-    Args:
-        dataset_names: List of dataset names to test (e.g., ["prime", "amazon"])
-        num_questions: Number of questions to process from the start of the dataset.
-    """
+    # ... (function setup is the same) ...
     if seed is not None:
         random.seed(seed)
 
@@ -58,25 +56,22 @@ def test_stark_questions(
             cache_neighbors=False,
         )
 
-        # Initialize Evaluator
         evaluator = Evaluator(k_values=[1, 5, 10, 20], index_name=dataset_name)
-
         total_questions = len(qa_data)
 
         if num_questions >= total_questions:
-            print(f"Requested {num_questions} questions, but dataset only has {total_questions}. Evaluating all questions.")
             sampled_indices = list(range(total_questions))
         else:
-            sampled_indices = random.sample(range(total_questions), num_questions)
-            print(f"Randomly sampling {len(sampled_indices)} questions out of {total_questions} total.")
-
+            # sampled_indices = random.sample(range(total_questions), num_questions)
+            sampled_indices = list(range(num_questions))
+        
         print(f"Starting evaluation on {len(sampled_indices)} questions...")
         query_results = []
 
         for i, idx in enumerate(sampled_indices):
             query, query_id, answer_ids, _ = qa_data[idx]
             
-            if i % 5 == 0: print(f"Processing {i + 1}/{len(sampled_indices)}...")
+            print(f"\n--- Processing Query {i + 1}/{len(sampled_indices)} (ID: {query_id}) ---")
 
             start_time = time.time()
             retrieved_nodes = retriever.retrieve(
@@ -88,20 +83,25 @@ def test_stark_questions(
                 start_subset=10,
                 top_k=20,
                 movement_strategies={
-                    "semantic": (Heuristics.semantic_similarity, 0.35),
+                    "semantic": (Heuristics.semantic_similarity_unnormalized, 0.35),
                     "centrality": (HeuristicRegistry.get_movement("stark_centrality"), 0.2),
                     "diversity": (Heuristics.pheromone_repulsion, 0.4),
                     "jitter": (Heuristics.random_jitter, 0.05),
                 },
                 deposit_strategies={
-                    "semantic_deposit": (Heuristics.deposit_semantic, 1.0)
+                    "semantic_deposit": (Heuristics.deposit_semantic_unnormalized, 1.0)
                 },
                 ranking_strategies={
-                    "visited": (Heuristics.percentage_visited, 0.6),
-                    "semantic": (Heuristics.semantic_rank, 0.4),
+                    "visited": (Heuristics.percentage_visited, 0.5),
+                    "semantic": (Heuristics.semantic_rank, 0.5),
                 },
             )
             latency = time.time() - start_time
+
+            print(f"  Top 3 retrieved IDs: {[node['id'] for node in retrieved_nodes[:3]]}")
+            print(f"  Top 3 scores: {['{:.4f}'.format(node['score']) for node in retrieved_nodes[:3]]}")
+            print(f"  Ground truth IDs: {answer_ids}")
+            print(f"  Ground truth in top 20: {[aid for aid in answer_ids if aid in [n['id'] for n in retrieved_nodes[:20]]]}")
 
             metrics = evaluator.calculate_metrics(
                 retrieved_nodes=retrieved_nodes,
@@ -109,10 +109,11 @@ def test_stark_questions(
                 latency_sec=latency,
             )
             
+            print(f"  Latency: {latency:.4f}s | Hit@1: {metrics['Hit@1']:.2f} | Hit@5: {metrics['Hit@5']:.2f} | Recall@20: {metrics['Recall@20']:.2f} | MRR: {metrics['MRR']:.2f}")
             query_results.append(metrics)
 
         display_df = evaluator.aggregate_results(query_results)
-        print(f"\nAggregated results for {dataset_name}:")
+        print(f"\n{'='*20} AGGREGATED RESULTS FOR {dataset_name} {'='*20}")
         print(display_df)
 
         for result in query_results:

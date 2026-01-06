@@ -11,7 +11,7 @@ from swarm_rag.evolution.execution.fitness import FitnessCalculator
 from swarm_rag.eval import Evaluator
 
 # Import STaRK integrations
-from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG, EvolutionConfigDict
+from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
 from swarm_rag.integrations.stark import (
     StarkInMemoryVectorStore, 
     StarkPreComputedEmbeddingHandler, 
@@ -166,8 +166,11 @@ def run_evolution(
         )
 
     print("Starting Evolution Loop...")
-    best_genome = engine.optimize()
-    
+    try:
+        best_genome = engine.optimize()
+    finally:
+        print("Cleaning up shared memory...")
+        vector_store.close()
     print("\n" + "="*30)
     print("Evolution Complete. Best Genome:")
     print(best_genome)
@@ -192,6 +195,6 @@ if __name__ == "__main__":
         args.dataset, 
         args.gens, 
         args.pop, 
-        args.train_sample_size, 
-        args.val_sample_size
+        args.train_ss, 
+        args.val_ss
     )

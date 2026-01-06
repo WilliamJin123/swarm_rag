@@ -252,7 +252,7 @@ def test_swarm_retriever_groups():
         query=query,
         agent_groups=groups,
         steps=3,
-        drop_inc=0.1 # Test new param
+        drop_zone_inc=0.1 # Test new param
     )
     
     duration = time.time() - start
@@ -272,6 +272,6 @@ def test_swarm_retriever_groups():
     print("  ✓ Batch retrieval passed")
 
 if __name__ == "__main__":
-    # test_swarm_retriever()
-    test_swarm_retriever_groups()
+    test_swarm_retriever()
+    # test_swarm_retriever_groups()
     print("SWARM TESTS PASSED")
