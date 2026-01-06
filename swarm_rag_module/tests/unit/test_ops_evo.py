@@ -104,7 +104,7 @@ def test_mutation_ops():
     # Initial ratio 0.5
     
     ctx = EvolutionContext(population=[], generation=0, config=DEFAULT_EVO_CONFIG)
-    ctx.config['mutation_rate'] = 1.0 # Force mutation
+    ctx.global_mutation_multiplier = 100.0 # Force mutation (overrides clamping)
     
     # Needed for strategy mutation
     ctx.expression_features = {'movement': ['degree'], 'deposit': ['degree'], 'ranking': ['degree']}

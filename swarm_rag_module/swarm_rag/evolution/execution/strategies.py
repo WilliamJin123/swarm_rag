@@ -5,14 +5,15 @@ import numpy as np
 
 from ..types.config import EvolutionContext
 from ..types.expressions import ExpressionEvolution
-from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry
+from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry, _CreationRegistry
 from ...interfaces.enums import GeneticKey
-from ..types.genome import Genome
+from ..types.genome import Genome, DEFAULT_PARAMS
 
 class GeneticRegistry:
     selection = _SelectionRegistry
     crossover = _CrossoverRegistry
     mutation  = _MutationRegistry
+    creation  = _CreationRegistry
 
     @classmethod
     def register_selection(cls, name: "GeneticKey"):
@@ -27,6 +28,10 @@ class GeneticRegistry:
         return cls.mutation.register(name)
 
     @classmethod
+    def register_creation(cls, name: "GeneticKey"):
+        return cls.creation.register(name)
+
+    @classmethod
     def get_selection(cls, name: Union["GeneticKey", str]) -> Callable:
         return cls.selection.get(name)
 
@@ -39,6 +44,10 @@ class GeneticRegistry:
         return cls.mutation.get(name)
 
     @classmethod
+    def get_creation(cls, name: Union["GeneticKey", str]) -> Callable:
+        return cls.creation.get(name)
+
+    @classmethod
     def get(cls, name: Union["GeneticKey", str]) -> Callable:
         """
         Search **all** genetic registries for name
@@ -48,6 +57,8 @@ class GeneticRegistry:
         try: return cls.crossover.get(name)
         except KeyError: pass
         try: return cls.mutation.get(name)
+        except KeyError: pass
+        try: return cls.creation.get(name)
         except KeyError: raise KeyError(f"Genetic heuristic '{name}' is not registered.") from None
 
     @classmethod
@@ -63,11 +74,16 @@ class GeneticRegistry:
         return cls.mutation.all()
 
     @classmethod
+    def all_creation(cls):
+        return cls.creation.all()
+
+    @classmethod
     def all(cls):
         return {
             **cls.selection.all(),
             **cls.crossover.all(),
             **cls.mutation.all(),
+            **cls.creation.all(),
         }
 class GeneticStrategies:
     """
@@ -191,6 +207,145 @@ class GeneticStrategies:
         child.clear_cache()
         return child
     
+    # --- CREATION ---
+
+    @staticmethod
+    @GeneticRegistry.register_creation(GeneticKey.STANDARD_INITIALIZATION)
+    def standard_initialization(ctx: EvolutionContext, count: int) -> List[Genome]:
+        """
+        Default initialization strategy:
+        - Ramped Half-and-Half for expression trees.
+        - Uniform random sampling for scalar parameters.
+        """
+        ranges = ctx.config['param_ranges']
+        max_d = ctx.config['expr_max_depth']
+        n_groups = ctx.config["n_agent_groups"]
+
+        strat_trees = {}
+        for strat_type in ["movement", "deposit"]:
+            features = ctx.expression_features[strat_type]
+            total_trees = count * n_groups
+            
+            flat_list = ExpressionEvolution.generate_ramped_half_and_half(
+                features=features,
+                population_size=total_trees,
+                max_depth=max_d
+            )
+            strat_trees[strat_type] = flat_list
+
+        ranking_features = ctx.expression_features["ranking"]
+        ranking_trees = ExpressionEvolution.generate_ramped_half_and_half(
+            features=ranking_features,
+            population_size=count,
+            max_depth=max_d
+        )
+
+        base_rate = ctx.config['base_mutation_rate']
+
+        population = []
+        for i in range(count):
+            # Randomize Global Params
+            params = DEFAULT_PARAMS.copy()
+            for key in params.keys():
+                if key in ranges:
+                    min_v, max_v = ranges[key]
+                    if isinstance(min_v, int):
+                        params[key] = random.randint(min_v, max_v)
+                    else:
+                        params[key] = random.uniform(min_v, max_v)
+
+            # Randomize Group Ratios & Assign Trees
+            strategies = {}
+            group_ratios = {}
+
+            strategies["ranking"] = ranking_trees[i]
+            
+            for g_idx in range(n_groups):
+                # Ratio
+                min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
+                group_ratios[f"g{g_idx}"] = random.uniform(min_r, max_r)
+                
+                # Strategies (Pop from pre-generated list)
+                strategies[f"g{g_idx}_movement"] = strat_trees["movement"].pop()
+                strategies[f"g{g_idx}_deposit"] = strat_trees["deposit"].pop()
+            
+            # Jitter the initial rate so the population starts diverse
+            start_rate = max(0.01, min(0.5, random.gauss(base_rate, 0.05)))
+
+            genome = Genome(
+                id=f"gen0_{i}",
+                params=params,
+                group_ratios=group_ratios,
+                strategies=strategies,
+                mutation_rate=start_rate
+            )
+            population.append(genome)
+            
+        return population
+
+    @staticmethod
+    @GeneticRegistry.register_creation(GeneticKey.SHALLOW_GROWTH_INITIALIZATION)
+    def shallow_growth_initialization(ctx: EvolutionContext, count: int) -> List[Genome]:
+        """
+        Alternative initialization:
+        - Forces shallow trees (max_depth=2) using 'grow' method.
+        - Useful for starting with simple, interpretable strategies.
+        """
+        ranges = ctx.config['param_ranges']
+        n_groups = ctx.config["n_agent_groups"]
+        base_rate = ctx.config['base_mutation_rate']
+        
+        population = []
+        for i in range(count):
+            # 1. Params
+            params = DEFAULT_PARAMS.copy()
+            for key in params.keys():
+                if key in ranges:
+                    min_v, max_v = ranges[key]
+                    if isinstance(min_v, int):
+                        params[key] = random.randint(min_v, max_v)
+                    else:
+                        params[key] = random.uniform(min_v, max_v)
+
+            # 2. Strategies (Generated on the fly per genome, shallow)
+            strategies = {}
+            group_ratios = {}
+            
+            # Ranking (Depth 2, Grow)
+            strategies["ranking"] = ExpressionEvolution.random_tree(
+                features=ctx.expression_features["ranking"], 
+                max_depth=2, 
+                method='grow'
+            )
+
+            for g_idx in range(n_groups):
+                min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
+                group_ratios[f"g{g_idx}"] = random.uniform(min_r, max_r)
+                
+                strategies[f"g{g_idx}_movement"] = ExpressionEvolution.random_tree(
+                    features=ctx.expression_features["movement"], 
+                    max_depth=2, 
+                    method='grow'
+                )
+                strategies[f"g{g_idx}_deposit"] = ExpressionEvolution.random_tree(
+                    features=ctx.expression_features["deposit"], 
+                    max_depth=2, 
+                    method='grow'
+                )
+
+            start_rate = max(0.01, min(0.5, random.gauss(base_rate, 0.05)))
+            
+            genome = Genome(
+                id=f"gen0_shallow_{i}",
+                params=params,
+                group_ratios=group_ratios,
+                strategies=strategies,
+                mutation_rate=start_rate
+            )
+            population.append(genome)
+
+        return population
+
     # --- MUTATION ---
 
     @staticmethod
@@ -243,6 +398,62 @@ class GeneticStrategies:
                     inplace=True 
                 )
                 genome.strategies[key] = mutated_tree
+
+        genome.clear_cache()
+        return genome
+
+    @staticmethod
+    @GeneticRegistry.register_mutation(GeneticKey.AGGRESSIVE_MUTATION)
+    def aggressive_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
+        """
+        High-impact mutation strategy.
+        - Higher base rate.
+        - Parameters are often re-sampled from global ranges instead of jittered.
+        - Tree mutations prefer 'subtree' replacement.
+        """
+        # 1. Boost rate
+        genome.mutation_rate = 0.4 # Lock to high rate
+        rate = genome.mutation_rate * ctx.global_mutation_multiplier
+        ranges = ctx.config['param_ranges']
+
+        # 2. Aggressive Parameter Resampling
+        for key in genome.params.keys():
+            if random.random() < rate:
+                if key in ranges:
+                    # 50% chance to purely resample from global range (Big Jump)
+                    if random.random() < 0.5:
+                        min_v, max_v = ranges[key]
+                        if isinstance(ranges[key][0], int):
+                            genome.params[key] = random.randint(int(min_v), int(max_v))
+                        else:
+                            genome.params[key] = random.uniform(min_v, max_v)
+                    else:
+                        # 50% chance of large jitter (+/- 30%)
+                        val = genome.params[key]
+                        if isinstance(val, int):
+                            genome.params[key] = max(1, val + random.randint(-5, 5))
+                        else:
+                            genome.params[key] = max(0.01, val * random.uniform(0.7, 1.3))
+
+        # 3. Aggressive Tree Mutation
+        for key, tree in genome.strategies.items():
+            if random.random() < rate:
+                feature_list = ctx.expression_features.get(key)
+                if not feature_list:
+                    if "movement" in key: feature_list = ctx.expression_features.get("movement")
+                    elif "deposit" in key: feature_list = ctx.expression_features.get("deposit")
+                    elif "ranking" in key: feature_list = ctx.expression_features.get("ranking")
+                
+                # Force a subtree replacement (structural change) 
+                # rather than just changing a node value
+                # We do this by manually generating a new random subtree and swapping
+                if random.random() < 0.7:
+                     genome.strategies[key] = ExpressionEvolution.random_tree(feature_list, max_depth=3)
+                else:
+                     # Fallback to standard mutation
+                     genome.strategies[key] = ExpressionEvolution.mutate_tree(
+                         tree, features=feature_list, mutation_rate=1.0, inplace=True
+                     )
 
         genome.clear_cache()
         return genome

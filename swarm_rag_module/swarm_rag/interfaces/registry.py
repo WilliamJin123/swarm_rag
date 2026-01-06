@@ -155,4 +155,8 @@ class _RankingRegistry(_BaseRegistry["HeuristicKey", P, R]):
 
 class _DepositRegistry(_BaseRegistry["HeuristicKey", P, R]):
     _registry: ClassVar[Dict["HeuristicKey" | str, Callable[P, R]]] = {}
-    _enum_type = HeuristicKey   
+    _enum_type = HeuristicKey
+
+class _CreationRegistry(_BaseRegistry["GeneticKey", P, R]):
+    _registry: ClassVar[Dict["GeneticKey" | str, Callable[P, R]]] = {}
+    _enum_type = GeneticKey   

@@ -40,3 +40,8 @@ class GeneticKey(Enum):
 
     # --- MUTATION ---
     EXPRESSION_TREE_MUTATION = "expression_tree_mutation"
+    AGGRESSIVE_MUTATION = "aggressive_mutation"
+
+    # --- CREATION ---
+    STANDARD_INITIALIZATION = "standard_initialization"
+    SHALLOW_GROWTH_INITIALIZATION = "shallow_growth_initialization"

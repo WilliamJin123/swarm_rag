@@ -22,6 +22,7 @@ class EvolutionConfigDict(TypedDict):
     crossover_rate: float
     
     # Strategy Names
+    creation_strategy: str
     selection_strategy: str
     crossover_strategy: str
     mutation_strategy: str
@@ -53,6 +54,7 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "elite_fraction": 0.1,
     "base_mutation_rate": 0.2,
     "crossover_rate": 0.6,
+    "creation_strategy": "standard_initialization",
     "selection_strategy": "tournament",
     "crossover_strategy": "uniform_parameter_mix",
     "mutation_strategy": "expression_tree_mutation",

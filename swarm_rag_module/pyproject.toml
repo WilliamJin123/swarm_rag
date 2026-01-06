@@ -23,7 +23,10 @@ namespaces = false
 stark = [
     "stark-qa",
     "torch",
-    "faiss-cpu"
+    "faiss-cpu",
+    "pandas",
+    "scipy",
+    "tqdm"
 ]
 faiss = [
     "faiss-cpu"
@@ -37,5 +40,9 @@ all = [
     "torch",
     "gdown",
     "faiss-cpu",
-    "networkx"
+    "networkx",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "tqdm"
 ]
