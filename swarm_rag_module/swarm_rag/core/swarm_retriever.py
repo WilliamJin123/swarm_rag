@@ -64,9 +64,12 @@ class SwarmRetriever:
         self.deterministic = deterministic
         self.seed = seed
 
-        self._cache_lock = Lock()
+        self._neighbor_lock = Lock()
+        self._doc_lock = Lock()
+        self._query_lock = Lock()
 
-        # Performance optimizations
+        self.avg_degree = self.graph_store.get_avg_degree()
+
         self.cache_neighbors = cache_neighbors
         if self.cache_neighbors:
             self.neighbor_cache = LRUCache(neighbor_cache_size)
@@ -490,8 +493,7 @@ class SwarmRetriever:
         # Prefetch Vectorization Metadata
         p_vals = np.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
         degrees = np.array([len(self._get_cached_neighbors(nid)) for nid in valid_ids])
-        
-        avg_degree = self.graph_store.get_avg_degree()
+    
 
         ctx = HeuristicContext(
             query_vec=query_vec,
@@ -500,7 +502,7 @@ class SwarmRetriever:
             pheromone_values=p_vals,
             node_degrees=degrees,
             max_pheromone=max_pheromone,
-            avg_degree=avg_degree,
+            avg_degree=self.avg_degree,
             step_index=step,
             agent_index=agent_id,
             graph=self.graph_store
@@ -608,13 +610,13 @@ class SwarmRetriever:
         """Gets or computes and caches the neighbor list, if enabled."""
         if not self.cache_neighbors:
             return self.graph_store.get_neighbors(node_id)
-        with self._cache_lock:
+        with self._neighbor_lock:
             cached = self.neighbor_cache.get(node_id)
         if cached is not None:
             return cached
 
         neighbors = self.graph_store.get_neighbors(node_id)
-        with self._cache_lock:
+        with self._neighbor_lock:
             self.neighbor_cache.set(node_id, np.array(neighbors))
         return neighbors
     
@@ -630,7 +632,7 @@ class SwarmRetriever:
             matrix = self.vector_store.fetch_batch(node_ids)
             valid_mask = ~np.isnan(matrix).any(axis=1)
             
-            # Optimization: If all are valid (common case), return as-is
+            # If all are valid (common case), return as-is
             if np.all(valid_mask):
                 return matrix, list(node_ids)
             
@@ -643,7 +645,7 @@ class SwarmRetriever:
         missing_indices = []
         missing_ids = []
 
-        with self._cache_lock:
+        with self._doc_lock:
             for i, node_id in enumerate(node_ids):   
                 cached_vec = self.doc_cache.get(node_id)
                 if cached_vec is not None:
@@ -656,7 +658,7 @@ class SwarmRetriever:
             fetched_matrix = self.vector_store.fetch_batch(missing_ids)
             valid_fetched_mask = ~np.isnan(fetched_matrix).any(axis=1)
             
-            with self._cache_lock:
+            with self._doc_lock:
                 for i, is_valid in enumerate(valid_fetched_mask):
                     if is_valid:
                         original_idx = missing_indices[i]
@@ -677,13 +679,13 @@ class SwarmRetriever:
         """Gets or computes and caches the query embedding, if enabled."""
         if not self.cache_vectors:
             return self.embed_fn.embed_query(query)
-        with self._cache_lock:
+        with self._query_lock:
             cached = self.query_cache.get(query)
         if cached is not None:
             return cached
 
         emb = self.embed_fn.embed_query(query)
-        with self._cache_lock:
+        with self._query_lock:
             self.query_cache.set(query, emb)
         return emb
         
@@ -700,7 +702,7 @@ class SwarmRetriever:
         missing_indices = []
         missing_queries = []
 
-        with self._cache_lock:
+        with self._query_lock:
             for i, q in enumerate(queries):
                 cached_vec = self.query_cache.get(q)
                 if cached_vec is not None:
@@ -711,7 +713,7 @@ class SwarmRetriever:
 
         if missing_queries:
             batch_embeddings = self.embed_fn.embed_query_batch(missing_queries)
-            with self._cache_lock:
+            with self._query_lock:
                 for i, emb in zip(missing_indices, batch_embeddings):
                     q = queries[i]
                     self.query_cache.set(q, emb)

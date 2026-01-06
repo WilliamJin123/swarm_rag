@@ -93,7 +93,8 @@ class StarkSKBAdapter(GraphStore):
             if node_id >= self.adj_matrix.shape[0]: return []
             start = self.adj_matrix.indptr[node_id]
             end = self.adj_matrix.indptr[node_id+1]
-            return self.adj_matrix.indices[start:end].copy()
+            # Treat as READ-ONLY.
+            return self.adj_matrix.indices[start:end]
         
         cached = self.neighbor_cache.get(node_id)
         if cached is not None: return np.array(cached)
