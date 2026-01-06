@@ -15,7 +15,7 @@ class VectorStore(ABC):
 
     @abstractmethod
     def fetch_batch(self, node_ids: Sequence[Any]) -> Matrix:
-        """Returns a 2D matrix of shape (N, D)."""
+        """Returns a 2D matrix of shape (N, D). NaN for invalid indices."""
         pass
 
     @abstractmethod

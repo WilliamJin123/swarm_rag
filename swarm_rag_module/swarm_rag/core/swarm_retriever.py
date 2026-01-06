@@ -628,7 +628,7 @@ class SwarmRetriever:
         """
         if not self.cache_vectors:
             matrix = self.vector_store.fetch_batch(node_ids)
-            valid_mask = np.any(matrix != 0, axis=1)
+            valid_mask = ~np.isnan(matrix).any(axis=1)
             
             # Optimization: If all are valid (common case), return as-is
             if np.all(valid_mask):
@@ -654,8 +654,7 @@ class SwarmRetriever:
         
         if missing_ids:
             fetched_matrix = self.vector_store.fetch_batch(missing_ids)
-            
-            valid_fetched_mask = np.any(fetched_matrix != 0, axis=1)
+            valid_fetched_mask = ~np.isnan(fetched_matrix).any(axis=1)
             
             with self._cache_lock:
                 for i, is_valid in enumerate(valid_fetched_mask):

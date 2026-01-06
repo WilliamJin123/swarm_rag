@@ -119,7 +119,7 @@ class Heuristics:
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY)
-    def semantic_similarity(ctx: HeuristicContext) -> np.ndarray:
+    def semantic_similarity(ctx: HeuristicContext) -> Union[float, np.ndarray]:
         """
         NORMALIZED Cosine Similarity: Maps [-1, 1] to [0, 1].
         - 0.0 = completely opposite direction (cosine = -1)
@@ -132,7 +132,7 @@ class Heuristics:
 
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY_UNNORMALIZED)
-    def semantic_similarity_unnormalized(ctx: HeuristicContext) -> np.ndarray:
+    def semantic_similarity_unnormalized(ctx: HeuristicContext) -> Union[float, np.ndarray]:
         """
         RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
         """

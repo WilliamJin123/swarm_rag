@@ -208,7 +208,8 @@ class StarkInMemoryVectorStore(VectorStore):
         indices = [self.real_id_to_idx.get(nid, -1) for nid in node_ids]
         indices_arr = np.array(indices, dtype=np.int64)
 
-        result = np.zeros((len(node_ids), self.dim), dtype=self.vec_dtype)
+        # Use NaN for missing vectors
+        result = np.full((len(node_ids), self.dim), np.nan, dtype=self.vec_dtype)
 
         mask = (indices_arr >= 0)
         
