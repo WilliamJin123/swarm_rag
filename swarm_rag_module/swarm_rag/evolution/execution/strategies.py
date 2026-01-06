@@ -342,7 +342,84 @@ class GeneticStrategies:
                 strategies=strategies,
                 mutation_rate=start_rate
             )
+            genome.normalize_ratios()
             population.append(genome)
+
+        return population
+
+    @staticmethod
+    @GeneticRegistry.register_creation(GeneticKey.SEEDED_INITIALIZATION)
+    def seeded_initialization(ctx: EvolutionContext, count: int) -> List[Genome]:
+        """
+        Injects known effective strategies (Vector, Pheromone, Hybrid) 
+        and fills the rest with random genomes.
+        """
+        population = []
+        n_groups = ctx.config["n_agent_groups"]
+        
+        # --- Helper to create a seed genome ---
+        def create_seed(name: str, mov_expr: str, dep_expr: str, rank_expr: str, params: dict = None):
+            strategies = {}
+            # Parse simple string expressions into ExpressionNodes (Manual Construction)
+            # NOTE: For complex expressions, a parser would be better, but we construct simple ones manually here.
+            
+            def make_node(val):
+                if val in ["*", "+", "-", "/"]: return ExpressionNode("op", val)
+                if val in ["semantic_similarity", "pheromone_repulsion", "flat", "deposit_semantic", "semantic_rank", "percentage_visited"]:
+                     return ExpressionNode("feature", val)
+                return ExpressionNode("const", float(val))
+
+            # Helper to build simple tree from strict format: "A * B" or just "A"
+            def build_simple(expr_str):
+                parts = expr_str.split()
+                if len(parts) == 3: # A * B
+                    return ExpressionNode("op", parts[1], [make_node(parts[0]), make_node(parts[2])])
+                return make_node(parts[0])
+
+            strategies["ranking"] = build_simple(rank_expr)
+            
+            group_ratios = {}
+            for g in range(n_groups):
+                group_ratios[f"g{g}"] = 1.0 / n_groups
+                strategies[f"g{g}_movement"] = build_simple(mov_expr)
+                strategies[f"g{g}_deposit"] = build_simple(dep_expr)
+
+            p = DEFAULT_PARAMS.copy()
+            if params: p.update(params)
+            
+            return Genome(id=name, params=p, group_ratios=group_ratios, strategies=strategies, mutation_rate=0.1)
+
+        # 1. Pure Vector
+        population.append(create_seed(
+            "gen0_seed_vector", 
+            "semantic_similarity", "deposit_semantic", "semantic_rank",
+            {"steps": 4}
+        ))
+        
+        # 2. Hybrid (Vector * Pheromone)
+        if count > 1:
+            population.append(create_seed(
+                "gen0_seed_hybrid", 
+                "semantic_similarity * pheromone_repulsion", "deposit_semantic", "semantic_rank",
+                {"steps": 5}
+            ))
+
+        # 3. Pure Pheromone (Exploration)
+        if count > 2:
+            population.append(create_seed(
+                "gen0_seed_ant", 
+                "pheromone_repulsion", "flat", "percentage_visited",
+                {"steps": 8, "decay": 0.95}
+            ))
+
+        # Fill remainder with standard random initialization
+        remaining = count - len(population)
+        if remaining > 0:
+            random_pop = GeneticStrategies.standard_initialization(ctx, remaining)
+            # Fix IDs to avoid collision
+            for i, g in enumerate(random_pop):
+                g.id = f"gen0_rand_{i}"
+            population.extend(random_pop)
 
         return population
 

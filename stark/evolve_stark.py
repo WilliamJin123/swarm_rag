@@ -120,6 +120,7 @@ def run_evolution(
         "n_generations": n_gens,
         "population_size": pop_size,
         "concurrent_evaluations": 4,
+        "creation_strategy": "seeded_initialization", # Inject known good strategies
         
         # Constraints
         "expr_max_depth": 5,
@@ -222,7 +223,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="prime")
     parser.add_argument("--gens", type=int, default=20)
-    parser.add_argument("--pop", type=int, default=30)
+    parser.add_argument("--pop", type=int, default=40)
     parser.add_argument("--train_ss", type=int, default=100, help="Number of training samples to use for evolution.")
     parser.add_argument("--val_ss", type=int, default=50, help="Number of validation samples to use for evolution.")
     parser.add_argument("--scratch", action="store_true", dest="start_from_scratch", help="If set, clears previous checkpoints/logs to start fresh.")
