@@ -9,17 +9,25 @@ import os
 from typing import Dict, List
 from tqdm import tqdm
 
-def load_and_download_skb(dataset_name: str = 'prime', root: str = './skb') -> SKB:
+# Get the directory where this script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_and_download_skb(dataset_name: str = 'prime', root: str = None) -> SKB:
+    if root is None:
+        root = os.path.join(BASE_DIR, 'skb')
     dataset_path = os.path.join(root, dataset_name)
     download = not os.path.isdir(dataset_path)
     return load_skb(dataset_name, root, download_processed=download)
 
-def load_and_download_qa(dataset_name: str = 'prime', root: str = './qa', human_gen = False) -> STaRKDataset:
-    
+def load_and_download_qa(dataset_name: str = 'prime', root: str = None, human_gen = False) -> STaRKDataset:
+    if root is None:
+        root = os.path.join(BASE_DIR, 'qa')
     return load_qa(name=dataset_name, root=root, human_generated_eval=human_gen)
 
-def load_and_download_embeddings(dataset_name: str, root: str = './embeddings', emb_model: str = 'text-embedding-ada-002') -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
+def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model: str = 'text-embedding-ada-002') -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
     """Returns query_embs, doc_embs"""
+    if root is None:
+        root = os.path.join(BASE_DIR, 'embeddings')
     PREDEFINED_IDS = {
         'prime': {
             'query': '1MshwJttPZsHEM2cKA5T13SIrsLeBEdyU',
@@ -63,7 +71,7 @@ def load_and_download_embeddings(dataset_name: str, root: str = './embeddings', 
     
     return query_embs, doc_embs
 
-def precompute_stark_adjacency(skb: SKB, dataset_name: str, cache_dir: str = "./adjacency_cache") -> Dict[int, List[int]]:
+def precompute_stark_adjacency(skb: SKB, dataset_name: str, cache_dir: str = None) -> Dict[int, List[int]]:
     """
     Pre-compute and cache all neighbor lists from STARK SKB.
     This converts slow sparse tensor operations into fast dictionary lookups.
@@ -76,6 +84,8 @@ def precompute_stark_adjacency(skb: SKB, dataset_name: str, cache_dir: str = "./
     Returns:
         Dictionary mapping node_id -> list of neighbor ids
     """
+    if cache_dir is None:
+        cache_dir = os.path.join(BASE_DIR, "adjacency_cache")
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = os.path.join(cache_dir, f"{dataset_name}_adjacency.pkl")
     

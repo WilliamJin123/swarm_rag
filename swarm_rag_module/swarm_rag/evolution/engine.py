@@ -116,7 +116,16 @@ class EvolutionEngine:
                 self.config['population_size']
             )
 
-        best_genome: Genome = None
+        best_genome: Genome = getattr(self, 'restored_best_genome', None)
+        
+        # Fallback: If no best_genome restored, try to find one in the current population
+        if best_genome is None and population:
+             # Check if any have been evaluated
+             evaluated_pop = [g for g in population if g.fitness.quality_score > -float('inf')]
+             if evaluated_pop:
+                 evaluated_pop.sort(key=lambda g: g.fitness, reverse=True)
+                 best_genome = evaluated_pop[0].copy()
+
         n_gen = self.config["n_generations"]
 
         start_gen = self.evo_context.generation if self.evo_context.population else 0
@@ -301,5 +310,6 @@ class EvolutionEngine:
         if 'tracker_history' in state:
             engine.tracker.history = state['tracker_history']
             
+        engine.restored_best_genome = state.get('best_genome')
         print(f"  ✓ State restored. Resuming from Generation {state['generation']}")
         return engine

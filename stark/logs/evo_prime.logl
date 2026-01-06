@@ -351,3 +351,144 @@
 2026-01-05 15:10:08,392 - INFO -     [Retriever] [gen0_28_copy] Sequential Progress: 50/50 queries
 2026-01-05 15:10:08,681 - INFO -   > Finished 'gen0_28_copy' (1/1) | Qual: -0.2298 | Cost: 0.6 | R@20: 0.2736 | H@1: 0.1000 | H@5: 0.2400 | MRR: 0.1717
 2026-01-05 15:10:08,684 - INFO - --> Validation Gen 0: Recall 0.2736
+2026-01-06 14:13:08,199 - INFO - Evaluating 4 genomes...
+2026-01-06 14:13:08,199 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:13:08,199 - INFO -   > max_workers: 4 workers
+2026-01-06 14:13:08,200 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 14:13:08,310 - INFO - Unlinked shm_matrix
+2026-01-06 14:13:08,310 - INFO - Unlinked shm_ids
+2026-01-06 14:13:08,312 - INFO - Unlinked shm_matrix
+2026-01-06 14:13:08,312 - INFO - Unlinked shm_ids
+2026-01-06 14:15:18,664 - INFO - Evaluating 4 genomes...
+2026-01-06 14:15:18,664 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:15:18,665 - INFO -   > max_workers: 4 workers
+2026-01-06 14:15:18,665 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 14:15:34,543 - INFO -     [Retriever] [gen0_1_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:15:34,545 - INFO -   > [Short-Circuit] gen0_1 aborted. Probe Quality: -0.0140
+2026-01-06 14:15:34,546 - INFO -   > Finished 'gen0_1' (1/4) | Qual: -0.0140 | Cost: 0.8 | R@20: 0.2000 | H@1: 0.1000 | H@5: 0.1000 | MRR: 0.1062
+2026-01-06 14:15:38,078 - INFO -     [Retriever] [gen0_3_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:15:38,089 - INFO -   > [Short-Circuit] gen0_3 aborted. Probe Quality: -0.1648
+2026-01-06 14:15:38,090 - INFO -   > Finished 'gen0_3' (2/4) | Qual: -0.1648 | Cost: 1.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 14:15:46,870 - INFO -     [Retriever] [gen0_0_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:15:46,876 - INFO -   > Finished 'gen0_0' (3/4) | Qual: 0.1448 | Cost: 2.8 | R@20: 0.4000 | H@1: 0.2000 | H@5: 0.3000 | MRR: 0.2327
+2026-01-06 14:15:47,257 - INFO -     [Retriever] [gen0_2_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:15:47,259 - INFO -   > [Short-Circuit] gen0_2 aborted. Probe Quality: 0.0405
+2026-01-06 14:15:47,259 - INFO -   > Finished 'gen0_2' (4/4) | Qual: 0.0405 | Cost: 1.4 | R@20: 0.2000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.0500
+2026-01-06 14:15:47,260 - INFO - Gen 0: New Best Found! Score: 0.1448
+2026-01-06 14:15:47,260 - INFO - Evaluating 1 genomes...
+2026-01-06 14:15:47,260 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:15:47,261 - INFO -   > max_workers: 4 workers
+2026-01-06 14:15:47,261 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 14:15:49,016 - INFO -     [Retriever] [gen0_0_copy_probe] Parallel Progress: 5/5 queries
+2026-01-06 14:15:49,017 - INFO -   > [Short-Circuit] gen0_0_copy aborted. Probe Quality: -0.0639
+2026-01-06 14:15:49,018 - INFO -   > Finished 'gen0_0_copy' (1/1) | Qual: -0.0639 | Cost: 0.1 | R@20: 0.2000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0333
+2026-01-06 14:15:49,018 - INFO - --> Validation Gen 0: Recall 0.2000
+2026-01-06 14:15:49,034 - INFO - Evaluating 1 genomes...
+2026-01-06 14:15:49,035 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:15:49,035 - INFO -   > max_workers: 4 workers
+2026-01-06 14:15:49,035 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 14:15:52,563 - INFO -     [Retriever] [gen0_0_copy_copy_probe] Parallel Progress: 5/5 queries
+2026-01-06 14:15:52,564 - INFO -   > [Short-Circuit] gen0_0_copy_copy aborted. Probe Quality: -0.0360
+2026-01-06 14:15:52,565 - INFO -   > Finished 'gen0_0_copy_copy' (1/1) | Qual: -0.0360 | Cost: 0.2 | R@20: 0.2000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0333
+2026-01-06 14:15:52,566 - INFO - --> Validation Gen 1: Recall 0.2000
+2026-01-06 14:40:41,066 - INFO - Evaluating 10 genomes...
+2026-01-06 14:40:41,067 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:40:41,067 - INFO -   > max_workers: 4 workers
+2026-01-06 14:40:41,067 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 14:40:57,152 - INFO -     [Retriever] [gen0_3_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:40:57,155 - INFO -   > Finished 'gen0_3' (1/4) | Qual: 0.1014 | Cost: 1.6 | R@20: 0.3000 | H@1: 0.1000 | H@5: 0.3000 | MRR: 0.1833
+2026-01-06 14:41:13,507 - INFO -     [Retriever] [gen0_1_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:13,526 - INFO -   > [Short-Circuit] gen0_1 aborted. Probe Quality: 0.0418
+2026-01-06 14:41:13,528 - INFO -   > Finished 'gen0_1' (2/4) | Qual: 0.0418 | Cost: 1.6 | R@20: 0.2000 | H@1: 0.1000 | H@5: 0.1000 | MRR: 0.1125
+2026-01-06 14:41:26,489 - INFO -     [Retriever] [gen0_2_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:26,490 - INFO -   > [Short-Circuit] gen0_2 aborted. Probe Quality: -0.2228
+2026-01-06 14:41:26,491 - INFO -   > Finished 'gen0_2' (3/4) | Qual: -0.2228 | Cost: 2.3 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 14:41:26,818 - INFO -     [Retriever] [gen0_0_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:26,819 - INFO -   > [Short-Circuit] gen0_0 aborted. Probe Quality: -0.1560
+2026-01-06 14:41:26,820 - INFO -   > Finished 'gen0_0' (4/4) | Qual: -0.1560 | Cost: 2.3 | R@20: 0.1000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0059
+2026-01-06 14:41:26,820 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 14:41:40,794 - INFO -     [Retriever] [gen0_7_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:40,797 - INFO -   > [Short-Circuit] gen0_7 aborted. Probe Quality: -0.0727
+2026-01-06 14:41:40,797 - INFO -   > Finished 'gen0_7' (1/4) | Qual: -0.0727 | Cost: 0.7 | R@20: 0.0125 | H@1: 0.0000 | H@5: 0.1000 | MRR: 0.0250
+2026-01-06 14:41:42,203 - INFO -     [Retriever] [gen0_4_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:42,205 - INFO -   > [Short-Circuit] gen0_4 aborted. Probe Quality: -0.0935
+2026-01-06 14:41:42,206 - INFO -   > Finished 'gen0_4' (2/4) | Qual: -0.0935 | Cost: 0.8 | R@20: 0.1000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0091
+2026-01-06 14:41:46,127 - INFO -     [Retriever] [gen0_6_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:46,128 - INFO -   > [Short-Circuit] gen0_6 aborted. Probe Quality: 0.0987
+2026-01-06 14:41:46,129 - INFO -   > Finished 'gen0_6' (3/4) | Qual: 0.0987 | Cost: 1.0 | R@20: 0.3000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.0650
+2026-01-06 14:41:46,643 - INFO -     [Retriever] [gen0_5_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:46,643 - INFO -   > [Short-Circuit] gen0_5 aborted. Probe Quality: -0.1474
+2026-01-06 14:41:46,645 - INFO -   > Finished 'gen0_5' (4/4) | Qual: -0.1474 | Cost: 1.0 | R@20: 0.0125 | H@1: 0.0000 | H@5: 0.1000 | MRR: 0.0333
+2026-01-06 14:41:46,645 - INFO -   > Starting batch of 2 genomes...
+2026-01-06 14:41:59,395 - INFO -     [Retriever] [gen0_9_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:41:59,396 - INFO -   > [Short-Circuit] gen0_9 aborted. Probe Quality: -0.0012
+2026-01-06 14:41:59,397 - INFO -   > Finished 'gen0_9' (1/2) | Qual: -0.0012 | Cost: 0.6 | R@20: 0.4000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.0789
+2026-01-06 14:42:06,929 - INFO -     [Retriever] [gen0_8_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:42:06,931 - INFO -   > Finished 'gen0_8' (2/2) | Qual: 0.1389 | Cost: 2.0 | R@20: 0.4000 | H@1: 0.1000 | H@5: 0.2000 | MRR: 0.1736
+2026-01-06 14:42:06,932 - INFO - Gen 0: New Best Found! Score: 0.1389
+2026-01-06 14:42:06,932 - INFO - Evaluating 1 genomes...
+2026-01-06 14:42:06,933 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:42:06,933 - INFO -   > max_workers: 4 workers
+2026-01-06 14:42:06,933 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 14:42:12,935 - INFO -     [Retriever] [gen0_8_copy_probe] Parallel Progress: 5/5 queries
+2026-01-06 14:42:12,937 - INFO -   > [Short-Circuit] gen0_8_copy aborted. Probe Quality: -0.0236
+2026-01-06 14:42:12,938 - INFO -   > Finished 'gen0_8_copy' (1/1) | Qual: -0.0236 | Cost: 0.3 | R@20: 0.2000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0222
+2026-01-06 14:42:12,938 - INFO - --> Validation Gen 0: Recall 0.2000
+2026-01-06 14:42:12,995 - INFO - Evaluating 1 genomes...
+2026-01-06 14:42:12,995 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:42:12,996 - INFO -   > max_workers: 4 workers
+2026-01-06 14:42:12,996 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 14:42:18,807 - INFO -     [Retriever] [gen0_8_copy_probe] Parallel Progress: 5/5 queries
+2026-01-06 14:42:18,809 - INFO -   > [Short-Circuit] gen0_8_copy aborted. Probe Quality: 0.0320
+2026-01-06 14:42:18,809 - INFO -   > Finished 'gen0_8_copy' (1/1) | Qual: 0.0320 | Cost: 0.3 | R@20: 0.2000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.1000
+2026-01-06 14:42:18,809 - INFO - --> Validation Gen 5: Recall 0.2000
+2026-01-06 14:55:52,944 - INFO - Evaluating 10 genomes...
+2026-01-06 14:55:52,945 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:55:52,945 - INFO -   > max_workers: 4 workers
+2026-01-06 14:55:52,946 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 14:56:11,606 - INFO -     [Retriever] [gen0_3_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:56:11,609 - INFO -   > Finished 'gen0_3' (1/4) | Qual: 0.1596 | Cost: 1.9 | R@20: 0.4000 | H@1: 0.2000 | H@5: 0.3000 | MRR: 0.2386
+2026-01-06 14:56:37,325 - INFO -     [Retriever] [gen0_1_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:56:37,328 - INFO -   > Finished 'gen0_1' (2/4) | Qual: 0.1709 | Cost: 4.4 | R@20: 0.4125 | H@1: 0.2000 | H@5: 0.2000 | MRR: 0.2278
+2026-01-06 14:56:41,287 - INFO -     [Retriever] [gen0_2_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:56:41,288 - INFO -   > [Short-Circuit] gen0_2 aborted. Probe Quality: -0.2228
+2026-01-06 14:56:41,289 - INFO -   > Finished 'gen0_2' (3/4) | Qual: -0.2228 | Cost: 2.4 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 14:56:41,575 - INFO -     [Retriever] [gen0_0_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:56:41,577 - INFO -   > [Short-Circuit] gen0_0 aborted. Probe Quality: -0.1457
+2026-01-06 14:56:41,578 - INFO -   > Finished 'gen0_0' (4/4) | Qual: -0.1457 | Cost: 2.4 | R@20: 0.1250 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0162
+2026-01-06 14:56:41,578 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 14:56:55,119 - INFO -     [Retriever] [gen0_7_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:56:55,121 - INFO -   > [Short-Circuit] gen0_7 aborted. Probe Quality: -0.0898
+2026-01-06 14:56:55,121 - INFO -   > Finished 'gen0_7' (1/4) | Qual: -0.0898 | Cost: 0.7 | R@20: 0.0125 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0167
+2026-01-06 14:56:56,535 - INFO -     [Retriever] [gen0_4_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:56:56,537 - INFO -   > [Short-Circuit] gen0_4 aborted. Probe Quality: -0.1149
+2026-01-06 14:56:56,537 - INFO -   > Finished 'gen0_4' (2/4) | Qual: -0.1149 | Cost: 0.7 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 14:57:01,443 - INFO -     [Retriever] [gen0_6_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:57:01,445 - INFO -   > [Short-Circuit] gen0_6 aborted. Probe Quality: 0.0777
+2026-01-06 14:57:01,445 - INFO -   > Finished 'gen0_6' (3/4) | Qual: 0.0777 | Cost: 1.0 | R@20: 0.2000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.0583
+2026-01-06 14:57:02,589 - INFO -     [Retriever] [gen0_5_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:57:02,590 - INFO -   > [Short-Circuit] gen0_5 aborted. Probe Quality: -0.1828
+2026-01-06 14:57:02,590 - INFO -   > Finished 'gen0_5' (4/4) | Qual: -0.1828 | Cost: 1.1 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 14:57:02,591 - INFO -   > Starting batch of 2 genomes...
+2026-01-06 14:57:15,829 - INFO -     [Retriever] [gen0_9_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:57:15,830 - INFO -   > [Short-Circuit] gen0_9 aborted. Probe Quality: -0.0220
+2026-01-06 14:57:15,831 - INFO -   > Finished 'gen0_9' (1/2) | Qual: -0.0220 | Cost: 0.7 | R@20: 0.3000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.0733
+2026-01-06 14:57:22,367 - INFO -     [Retriever] [gen0_8_probe] Parallel Progress: 10/10 queries
+2026-01-06 14:57:22,369 - INFO -   > Finished 'gen0_8' (2/2) | Qual: 0.1675 | Cost: 2.0 | R@20: 0.5125 | H@1: 0.1000 | H@5: 0.2000 | MRR: 0.1851
+2026-01-06 14:57:22,370 - INFO - Gen 0: New Best Found! Score: 0.1709
+2026-01-06 14:57:22,371 - INFO - Evaluating 1 genomes...
+2026-01-06 14:57:22,372 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:57:22,372 - INFO -   > max_workers: 4 workers
+2026-01-06 14:57:22,372 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 14:57:25,178 - INFO -     [Retriever] [gen0_1_copy_probe] Parallel Progress: 5/5 queries
+2026-01-06 14:57:25,179 - INFO -   > [Short-Circuit] gen0_1_copy aborted. Probe Quality: 0.0688
+2026-01-06 14:57:25,180 - INFO -   > Finished 'gen0_1_copy' (1/1) | Qual: 0.0688 | Cost: 0.1 | R@20: 0.4000 | H@1: 0.0000 | H@5: 0.2000 | MRR: 0.0792
+2026-01-06 14:57:25,180 - INFO - --> Validation Gen 0: Recall 0.4000
+2026-01-06 14:57:25,242 - INFO - Evaluating 1 genomes...
+2026-01-06 14:57:25,243 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 14:57:25,243 - INFO -   > max_workers: 4 workers
+2026-01-06 14:57:25,243 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 14:57:26,976 - INFO -     [Retriever] [gen0_1_copy_copy_copy_copy_copy_copy_probe] Parallel Progress: 5/5 queries
+2026-01-06 14:57:26,977 - INFO -   > [Short-Circuit] gen0_1_copy_copy_copy_copy_copy_copy aborted. Probe Quality: -0.0929
+2026-01-06 14:57:26,978 - INFO -   > Finished 'gen0_1_copy_copy_copy_copy_copy_copy' (1/1) | Qual: -0.0929 | Cost: 0.1 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 14:57:26,978 - INFO - --> Validation Gen 5: Recall 0.0000

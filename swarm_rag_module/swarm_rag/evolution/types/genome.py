@@ -65,6 +65,10 @@ class Genome:
 
     _compiled_cache: CompiledStrategies = field(default_factory=dict, repr=False)
 
+    def __post_init__(self):
+        """Ensure consistent state after initialization."""
+        self._normalize_ratios()
+
     def __hash__(self):
         """Allows Genome to be used in sets or as dict keys."""
         return hash(self.id)
@@ -94,10 +98,26 @@ class Genome:
         # Ensure cache exists
         if '_compiled_cache' not in self.__dict__:
             self._compiled_cache = {}
+        self._normalize_ratios()
 
     def complexity(self) -> int:
         """Sum of the size of all expression trees."""
         return sum(tree.size() for tree in self.strategies.values())
+    
+    def _normalize_ratios(self):
+        """Ensures group_ratios sum to 1.0."""
+        if not self.group_ratios:
+            return
+            
+        total = sum(self.group_ratios.values())
+        if total <= 1e-9:
+            # If all are zero, distribute evenly
+            n = len(self.group_ratios)
+            for k in self.group_ratios:
+                self.group_ratios[k] = 1.0 / n
+        else:
+            for k in self.group_ratios:
+                self.group_ratios[k] /= total
     
     def clear_cache(self):
         """Must be called after any mutation."""
@@ -118,13 +138,20 @@ class Genome:
         """
         Deep copy ensures mutations don't bleed into parents/elites.
         """
+        # Manually copy fitness to avoid reference sharing
+        new_fitness = FitnessResult(
+            quality_score=self.fitness.quality_score,
+            stability_score=self.fitness.stability_score,
+            cost_score=self.fitness.cost_score
+        )
+
         return Genome(
             id=f"{self.id}_copy",
             mutation_rate=self.mutation_rate,
             params=self.params.copy(),
             group_ratios=self.group_ratios.copy(),
             strategies={k: v.copy() for k, v in self.strategies.items()},
-            fitness=self.fitness, 
+            fitness=new_fitness, 
             metrics=self.metrics.copy(),
             latency_ms=self.latency_ms,
             evaluated=self.evaluated,
@@ -154,6 +181,55 @@ class Genome:
             d['fitness'] = d['fitness'].to_dict()
         
         return d
+    
+    def pretty_print(self, printer: Callable[[str], Any] = print):
+        """
+        Prints a human-readable summary of the genome using the provided printer.
+        
+        Args:
+            printer: Function to handle output (e.g., print, logger.info). Defaults to print.
+        """
+        border = "=" * 60
+        separator = "-" * 60
+        
+        printer(border)
+        printer(f"GENOME REPORT: {self.id}")
+        printer(border)
+        
+        # 1. Fitness & Metrics
+        printer(f"Fitness Score: {self.fitness}")
+        if self.metrics:
+            printer("Detailed Metrics:")
+            # Sort metrics for consistent output
+            for k, v in sorted(self.metrics.items()):
+                printer(f"  • {k:<15} : {v:.4f}")
+        printer(separator)
+
+        # 2. Hyperparameters
+        printer("Hyperparameters:")
+        max_len = max(len(k) for k in self.params.keys()) if self.params else 0
+        for k, v in sorted(self.params.items()):
+            printer(f"  • {k:<{max_len}} : {v}")
+        
+        # 3. Group Ratios
+        if self.group_ratios:
+            printer(separator)
+            printer("Agent Group Ratios:")
+            for k, v in sorted(self.group_ratios.items()):
+                printer(f"  • {k:<5} : {v:.2%} ({v:.4f})")
+        
+        # 4. Strategies (Expressions)
+        if self.strategies:
+            printer(separator)
+            printer("Evolved Strategies:")
+            for name, tree in sorted(self.strategies.items()):
+                # Clean up the name for display
+                display_name = name.replace("evolved_", "").replace("_", " ").title()
+                printer(f"  [ {display_name} ]")
+                printer(f"    {tree.to_string()}")
+                printer("") # Empty line between strategies for readability
+
+        printer(border)
 
 class GenomeCompiler:
     """

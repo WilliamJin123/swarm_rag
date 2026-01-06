@@ -24,6 +24,9 @@ from load_stark import (
     precompute_stark_adjacency
 )
 
+# Get the directory where this script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     """
     Loads STaRK data and converts it into the format expected by EvolutionEngine.
@@ -51,7 +54,8 @@ def run_evolution(
     n_gens=20, 
     pop_size=30, 
     train_sample_size=100,
-    val_sample_size=50
+    val_sample_size=50,
+    start_from_scratch=False
 ):
     # Load
     skb = load_and_download_skb(dataset_name)
@@ -60,7 +64,8 @@ def run_evolution(
     
     # Initialize Core Components
     vector_store = StarkInMemoryVectorStore(doc_embs)
-    graph_store = StarkSKBAdapter(skb, dataset_name, adjacency_dict=adj_dict)
+    graph_cache_path = os.path.join(BASE_DIR, "adjacency_cache", f"graph_{dataset_name}.npz")
+    graph_store = StarkSKBAdapter(skb, dataset_name, adjacency_dict=adj_dict, cache_path=graph_cache_path)
     embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
     
     # Create Retriever 
@@ -101,8 +106,13 @@ def run_evolution(
     
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
 
-    os.makedirs("./logs", exist_ok=True)
-    os.makedirs("./checkpoints", exist_ok=True)
+    log_dir = os.path.join(BASE_DIR, "logs")
+    ckpt_dir = os.path.join(BASE_DIR, "checkpoints")
+    best_params_dir = os.path.join(BASE_DIR, "best_params")
+    
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)
+    os.makedirs(best_params_dir, exist_ok=True)
 
     # Configure Engine
     evo_config = DEFAULT_EVO_CONFIG.copy() # Create copy first
@@ -121,12 +131,32 @@ def run_evolution(
         },
         
         # PATHS
-        "log_path": f"./logs/evo_{dataset_name}.jsonl",
-        "plot_path": f"./logs/plot_{dataset_name}.png",
-        "checkpoint_path": f"./checkpoints/ckpt_{dataset_name}.pkl",
+        "log_path": os.path.join(log_dir, f"evo_{dataset_name}.jsonl"),
+        "plot_path": os.path.join(log_dir, f"plot_{dataset_name}.png"),
+        "checkpoint_path": os.path.join(ckpt_dir, f"ckpt_{dataset_name}.pkl"),
         "validation_frequency": 5,
         "max_workers_per_retrieval": 4
     })
+    
+    # CLEANUP IF START_FROM_SCRATCH
+    if start_from_scratch:
+        print("\n[Scratch Mode] Clearing previous evolution data...")
+        best_params_path = os.path.join(best_params_dir, f"best_params_{dataset_name}.json")
+        files_to_remove = [
+            evo_config["log_path"],
+            evo_config["plot_path"],
+            evo_config["checkpoint_path"],
+            best_params_path
+        ]
+        
+        for fpath in files_to_remove:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                    print(f"  Deleted: {fpath}")
+                except Exception as e:
+                    print(f"  Error deleting {fpath}: {e}")
+        print("[Scratch Mode] Cleanup complete.\n")
 
 
     # Initialize Extensions
@@ -173,12 +203,18 @@ def run_evolution(
         vector_store.close()
     print("\n" + "="*30)
     print("Evolution Complete. Best Genome:")
-    print(best_genome)
+    if best_genome:
+        best_genome.pretty_print()
+    else:
+        print("No best genome found.")
     print("="*30)
     
     # Save specifically the best params for easy copy-pasting
     import json
-    with open(f"best_params_{dataset_name}.json", "w") as f:
+    # best_params_dir created above
+    best_params_path = os.path.join(best_params_dir, f"best_params_{dataset_name}.json")
+    
+    with open(best_params_path, "w") as f:
         # Helper to dump the genome cleanly
         json.dump(best_genome.to_dict(), f, indent=2)
 
@@ -189,6 +225,7 @@ if __name__ == "__main__":
     parser.add_argument("--pop", type=int, default=30)
     parser.add_argument("--train_ss", type=int, default=100, help="Number of training samples to use for evolution.")
     parser.add_argument("--val_ss", type=int, default=50, help="Number of validation samples to use for evolution.")
+    parser.add_argument("--scratch", action="store_true", dest="start_from_scratch", help="If set, clears previous checkpoints/logs to start fresh.")
     args = parser.parse_args()
     
     run_evolution(
@@ -196,5 +233,6 @@ if __name__ == "__main__":
         args.gens, 
         args.pop, 
         args.train_ss, 
-        args.val_ss
+        args.val_ss,
+        args.start_from_scratch
     )

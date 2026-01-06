@@ -252,9 +252,11 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
         for qid, emb in query_embs.items():
             if hasattr(emb, 'numpy'):
                 # Handle torch tensors (move to CPU if needed)
-                self.query_embs[qid] = emb.cpu().detach().numpy() if hasattr(emb, 'is_cuda') and emb.is_cuda else emb.numpy()
+                arr = emb.cpu().detach().numpy() if hasattr(emb, 'is_cuda') and emb.is_cuda else emb.numpy()
             else:
-                self.query_embs[qid] = np.array(emb)
+                arr = np.array(emb)
+            
+            self.query_embs[qid] = arr.squeeze()
 
     def embed_query(self, query_id: int) -> np.ndarray:
         return self.query_embs[query_id]

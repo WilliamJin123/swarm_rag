@@ -87,20 +87,66 @@ class ExpressionNode:
         return 1 + sum(child.size() for child in self.children)
     
     def to_string(self) -> str:
-        """Convert to readable mathematical expression."""
+        """
+        Convert to readable mathematical expression.
+        Uses operator precedence to minimize unnecessary parentheses.
+        """
+        PRECEDENCE = {
+            '+': 1, '-': 1,
+            '*': 2, '/': 2,
+            'max': 0, 'min': 0
+        }
+        
+        def _get_precedence(node: 'ExpressionNode') -> int:
+            if node.type == 'op':
+                return PRECEDENCE.get(node.value, 99)
+            elif node.type == 'func':
+                return 100 # Function calls bind tightly
+            return 100 # Consts/Features bind tightest
+
         if self.type == 'const':
             return f"{self.value:.3f}"
+        
         elif self.type == 'feature':
-            return str(self.value)
+            val = self.value
+            if hasattr(val, 'value'): 
+                return str(val.value)
+            return str(val)
+        
         elif self.type == 'func':
             if self.children:
-                return f"{self.value}({self.children[0].to_string()})"
+                child_str = self.children[0].to_string()
+                return f"{self.value}({child_str})"
             return self.value
+        
         elif self.type == 'op':
             if len(self.children) >= 2:
-                left = self.children[0].to_string()
-                right = self.children[1].to_string()
-                return f"({left} {self.value} {right})"
+                left = self.children[0]
+                right = self.children[1]
+                
+                left_str = left.to_string()
+                right_str = right.to_string()
+                
+                my_prec = _get_precedence(self)
+                left_prec = _get_precedence(left)
+                right_prec = _get_precedence(right)
+                
+                # Wrap left if it has lower precedence
+                if left_prec < my_prec:
+                    left_str = f"({left_str})"
+                
+                # Wrap right if it has lower precedence OR equal precedence (for left-associativity)
+                # e.g. a - (b - c) needs parens, but (a - b) - c doesn't
+                # Division and Subtraction are non-associative in a way that requires care.
+                # simpler rule: if right child has same precedence, wrap it (safe for - and /)
+                if right_prec < my_prec or (right_prec == my_prec and self.value in ['-', '/']):
+                     right_str = f"({right_str})"
+
+                # Special formatting for min/max
+                if self.value in ['max', 'min']:
+                     return f"{self.value}({left_str}, {right_str})"
+
+                return f"{left_str} {self.value} {right_str}"
             return "?"
         return "?"
     
@@ -119,9 +165,13 @@ class ExpressionNode:
         Returns:
             A dictionary representation of the node and its children.
         """
+        val = self.value
+        if hasattr(val, 'value'): # Handle Enums
+            val = val.value
+
         return {
             "type": self.type,
-            "value": self.value,
+            "value": val,
             "children": [child.to_dict() for child in self.children]
         }
 
