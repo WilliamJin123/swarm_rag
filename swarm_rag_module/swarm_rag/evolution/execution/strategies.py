@@ -4,7 +4,7 @@ import random
 import numpy as np
 
 from ..types.config import EvolutionContext
-from ..types.expressions import ExpressionEvolution
+from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry, _CreationRegistry
 from ...interfaces.enums import GeneticKey
 from ..types.genome import Genome, DEFAULT_PARAMS
@@ -356,29 +356,39 @@ class GeneticStrategies:
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
-        # Parameter Mutation (Numeric Jitter)
+        # 1. Parameter Mutation (Smart Jitter)
         for key, val in genome.params.items():
             if random.random() < rate:
-                if isinstance(val, int):
-                    # Integer Jitter (+/- 1 to 3)
-                    delta = random.randint(-2, 2)
-                    new_val = max(1, val + delta)
-                    genome.params[key] = new_val
-                elif isinstance(val, float):
-                    # Float Jitter (+/- 10%)
-                    new_val = val * random.uniform(0.9, 1.1)
-                    # Clamp to reasonable bounds (0-1 for decay usually)
-                    if 0.0 < val < 1.0: 
-                        new_val = max(0.01, min(0.999, new_val))
-                    genome.params[key] = new_val
+                # 80% chance: Fine-tuning (Small Gaussian jitter)
+                if random.random() < 0.8:
+                    if isinstance(val, int):
+                        delta = int(round(random.gauss(0, 1.5))) # +/- 1 or 2 usually
+                        new_val = max(1, val + delta)
+                        genome.params[key] = new_val
+                    elif isinstance(val, float):
+                        # +/- 10% relative change
+                        factor = random.gauss(1.0, 0.1)
+                        new_val = val * factor
+                        # Clamp to 0.001 - 1.0 (typical for most floats here)
+                        genome.params[key] = max(0.001, min(0.999, new_val))
+                
+                # 20% chance: Exploration (Re-sample or Large Jump)
+                else:
+                     ranges = ctx.config.get('param_ranges', {})
+                     if key in ranges:
+                         min_v, max_v = ranges[key]
+                         if isinstance(min_v, int):
+                             genome.params[key] = random.randint(min_v, max_v)
+                         else:
+                             genome.params[key] = random.uniform(min_v, max_v)
 
-        # Group Ratio Mutation
+        # 2. Group Ratio Mutation
         for key, val in genome.group_ratios.items():
             if random.random() < rate:
                 # Jitter ratio
                 genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.8, 1.2)))
 
-        # Strategy Tree Mutation
+        # 3. Strategy Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
                 feature_list = ctx.expression_features.get(key)
@@ -391,13 +401,33 @@ class GeneticStrategies:
                     elif key == "ranking":
                         feature_list = ctx.expression_features.get("ranking")
 
-                mutated_tree = ExpressionEvolution.mutate_tree(
-                    tree,
-                    features=feature_list,
-                    mutation_rate=rate,
-                    inplace=True 
-                )
-                genome.strategies[key] = mutated_tree
+                # Structural Mutations
+                mut_choice = random.random()
+                
+                if mut_choice < 0.1 and tree.type == 'op':
+                    # Hoist: Replace current node with one of its children (Simplification)
+                    if tree.children:
+                        genome.strategies[key] = random.choice(tree.children).copy()
+                
+                elif mut_choice < 0.2:
+                    # Wrapper: Wrap current tree in a unary function (Complexity)
+                    func = random.choice(['log', 'sigmoid', 'tanh'])
+                    new_root = ExpressionNode(type='func', value=func, children=[tree.copy()])
+                    genome.strategies[key] = new_root
+
+                else:
+                    # Standard Node/Subtree Mutation
+                    mutated_tree = ExpressionEvolution.mutate_tree(
+                        tree,
+                        features=feature_list,
+                        mutation_rate=rate,
+                        inplace=True 
+                    )
+                    genome.strategies[key] = mutated_tree
+                
+                # Occasional Simplification/Pruning to prevent bloat
+                if random.random() < 0.1:
+                    genome.strategies[key] = ExpressionEvolution.simplify_tree(genome.strategies[key], max_size=30)
 
         genome.clear_cache()
         return genome

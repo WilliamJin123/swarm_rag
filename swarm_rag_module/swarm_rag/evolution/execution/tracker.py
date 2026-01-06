@@ -91,7 +91,7 @@ class ProgressTracker:
         if "train_best_cost" in df.columns:
             ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
             color = 'tab:red'
-            ax2.set_ylabel('Cost / Latency (ms) (Lower is Better)', color=color)
+            ax2.set_ylabel('Cost / Latency (s) (Lower is Better)', color=color)
             ax2.plot(df["generation"], df["train_best_cost"], label="Train Cost", color=color, linestyle=":", alpha=0.6)
             ax2.tick_params(axis='y', labelcolor=color)
 

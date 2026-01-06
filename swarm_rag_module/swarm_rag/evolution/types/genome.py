@@ -134,7 +134,7 @@ class Genome:
             
         return {**self.params}
     
-    def copy(self) -> 'Genome':
+    def copy(self, new_id: str = None) -> 'Genome':
         """
         Deep copy ensures mutations don't bleed into parents/elites.
         """
@@ -144,9 +144,11 @@ class Genome:
             stability_score=self.fitness.stability_score,
             cost_score=self.fitness.cost_score
         )
+        
+        target_id = new_id if new_id is not None else f"{self.id}_copy"
 
         return Genome(
-            id=f"{self.id}_copy",
+            id=target_id,
             mutation_rate=self.mutation_rate,
             params=self.params.copy(),
             group_ratios=self.group_ratios.copy(),

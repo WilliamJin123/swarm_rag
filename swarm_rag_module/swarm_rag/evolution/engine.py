@@ -157,7 +157,7 @@ class EvolutionEngine:
             avg_qual = np.mean([g.fitness.quality_score for g in population])
             if best_genome is None or current_best.fitness > best_genome.fitness:
                 logger.info(f"Gen {gen}: New Best Found! Score: {current_best.fitness.quality_score:.4f}")
-                best_genome = current_best.copy()
+                best_genome = current_best.copy(new_id=current_best.id)
 
             pbar.set_postfix({
                 "Best": f"{current_best.fitness.quality_score:.4f}",
