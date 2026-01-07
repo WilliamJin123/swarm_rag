@@ -1,5 +1,6 @@
 import random
 import numpy as np
+from ..ops import xp, to_device, to_cpu, init_backend
 from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,7 +56,9 @@ class SwarmRetriever:
         cache_vectors: bool = True,
         doc_cache_size: int = 50000,
         query_cache_size: int = 1000,
+        use_gpu: bool = False,
     ):
+        init_backend(use_gpu)
         self.vector_store = vector_store
         self.graph_store = graph_store
         self.embed_fn = embedding_provider
@@ -316,14 +319,15 @@ class SwarmRetriever:
 
         if deterministic:
             py_rng = random.Random(seed)
-            np_rng = np.random.default_rng(seed)
+            xp_rng = xp.random.default_rng(seed)
         else:
             py_rng = random
-            np_rng = np.random
+            xp_rng = xp.random
 
         # Normalize and Flatten
+        query_vec = to_device(query_vec)
         query_vec = query_vec.flatten()
-        query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+        query_vec = query_vec / (xp.linalg.norm(query_vec) + 1e-8)
 
         ranking_funcs = self._resolve_strategy_funcs(ranking_strategies, "ranking")
 
@@ -371,7 +375,7 @@ class SwarmRetriever:
                         deposit_funcs=dep_funcs, 
                         step=step,
                         max_pheromone=max_pheromone,
-                        np_rng=np_rng
+                        xp_rng=xp_rng
                     )
 
                     if result:
@@ -477,7 +481,7 @@ class SwarmRetriever:
         deposit_funcs: List[tuple],
         step: int,
         max_pheromone: float,
-        np_rng: np.random.Generator
+        xp_rng: Any
     ) -> Optional[Dict]:
         """Vectorized agent step processing."""
         neighbors = self._get_cached_neighbors(current_loc)
@@ -491,8 +495,8 @@ class SwarmRetriever:
         if len(valid_ids) == 0:
             return None
         # Prefetch Vectorization Metadata
-        p_vals = np.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
-        degrees = np.array([len(self._get_cached_neighbors(nid)) for nid in valid_ids])
+        p_vals = xp.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
+        degrees = xp.array([len(self._get_cached_neighbors(nid)) for nid in valid_ids])
     
 
         ctx = HeuristicContext(
@@ -509,21 +513,21 @@ class SwarmRetriever:
         )
 
         # Calculate weighted scores
-        total_scores = np.zeros(len(valid_ids), dtype=np.float32)
+        total_scores = xp.zeros(len(valid_ids), dtype=xp.float32)
         for func, weight in movement_funcs:
             scores = func(ctx)
             total_scores += scores * weight
-        total_scores = np.maximum(total_scores, 0.001)
+        total_scores = xp.maximum(total_scores, 0.001)
         
         if len(valid_ids) > 5:
              total_scores[total_scores < 0.01] = 0.0
              
-        if np.sum(total_scores) == 0:
+        if xp.sum(total_scores) == 0:
             return None
 
         # Selection
-        probs = total_scores / np.sum(total_scores)
-        chosen_idx = np_rng.choice(len(valid_ids), p=probs)
+        probs = total_scores / xp.sum(total_scores)
+        chosen_idx = int(xp_rng.choice(len(valid_ids), p=probs))
         next_node = valid_ids[chosen_idx]
         
         # Calculate deposit
@@ -533,12 +537,12 @@ class SwarmRetriever:
         ctx.node_degrees = degrees[chosen_idx : chosen_idx+1]
         
         # Summing arrays of shape (1,)
-        deposit_array = np.zeros(1)
+        deposit_array = xp.zeros(1)
         for func, weight in deposit_funcs:
              deposit_array += func(ctx) * weight
 
         # Explicitly extract the float for our python dict
-        deposit_amount = deposit_array.item()
+        deposit_amount = float(deposit_array.item())
         
         return {
             'new_location': next_node,
@@ -630,15 +634,18 @@ class SwarmRetriever:
         """
         if not self.cache_vectors:
             matrix = self.vector_store.fetch_batch(node_ids)
-            valid_mask = ~np.isnan(matrix).any(axis=1)
+            matrix = to_device(matrix)
+            valid_mask = ~xp.isnan(matrix).any(axis=1)
             
             # If all are valid (common case), return as-is
-            if np.all(valid_mask):
+            if xp.all(valid_mask):
                 return matrix, list(node_ids)
             
             # Otherwise, slice both the matrix and the ID list
             filtered_matrix = matrix[valid_mask]
-            filtered_ids = [nid for i, nid in enumerate(node_ids) if valid_mask[i]]
+            # valid_mask is on device. converting to cpu for list comp might be needed if it's cupy
+            valid_mask_cpu = to_cpu(valid_mask)
+            filtered_ids = [nid for i, nid in enumerate(node_ids) if valid_mask_cpu[i]]
             return filtered_matrix, filtered_ids
         
         raw_vecs = [None] * len(node_ids)
@@ -656,10 +663,12 @@ class SwarmRetriever:
         
         if missing_ids:
             fetched_matrix = self.vector_store.fetch_batch(missing_ids)
-            valid_fetched_mask = ~np.isnan(fetched_matrix).any(axis=1)
+            fetched_matrix = to_device(fetched_matrix)
+            valid_fetched_mask = ~xp.isnan(fetched_matrix).any(axis=1)
+            valid_fetched_mask_cpu = to_cpu(valid_fetched_mask)
             
             with self._doc_lock:
-                for i, is_valid in enumerate(valid_fetched_mask):
+                for i, is_valid in enumerate(valid_fetched_mask_cpu):
                     if is_valid:
                         original_idx = missing_indices[i]
                         vec = fetched_matrix[i]
@@ -670,21 +679,21 @@ class SwarmRetriever:
         valid_data = [(nid, v) for nid, v in zip(node_ids, raw_vecs) if v is not None]
         
         if not valid_data:
-            return np.array([]), []
+            return xp.array([]), []
             
         valid_ids, valid_vecs = zip(*valid_data)
-        return np.stack(valid_vecs), list(valid_ids)
+        return xp.stack(valid_vecs), list(valid_ids)
 
     def _get_cached_query_vector(self, query: Any) -> np.ndarray:
         """Gets or computes and caches the query embedding, if enabled."""
         if not self.cache_vectors:
-            return self.embed_fn.embed_query(query)
+            return to_device(self.embed_fn.embed_query(query))
         with self._query_lock:
             cached = self.query_cache.get(query)
         if cached is not None:
             return cached
 
-        emb = self.embed_fn.embed_query(query)
+        emb = to_device(self.embed_fn.embed_query(query))
         with self._query_lock:
             self.query_cache.set(query, emb)
         return emb
@@ -694,9 +703,9 @@ class SwarmRetriever:
         Retrieves embeddings for a batch of queries, returning a single 2D array.
         """
         if not queries:
-            return np.array([]) 
+            return xp.array([]) 
         if not self.cache_vectors:
-            return self.embed_fn.embed_query_batch(queries)
+            return to_device(self.embed_fn.embed_query_batch(queries))
 
         results_by_index: Dict[Any, np.ndarray] = {}
         missing_indices = []
@@ -713,6 +722,7 @@ class SwarmRetriever:
 
         if missing_queries:
             batch_embeddings = self.embed_fn.embed_query_batch(missing_queries)
+            batch_embeddings = to_device(batch_embeddings)
             with self._query_lock:
                 for i, emb in zip(missing_indices, batch_embeddings):
                     q = queries[i]
@@ -720,13 +730,13 @@ class SwarmRetriever:
                     results_by_index[i] = emb
 
         if not results_by_index:
-            return np.array([])
+            return xp.array([])
         
         first_embedding = next(iter(results_by_index.values()))
         embedding_dim = first_embedding.shape[0]
         batch_size = len(queries)
 
-        final_embeddings = np.empty((batch_size, embedding_dim), dtype=first_embedding.dtype)
+        final_embeddings = xp.empty((batch_size, embedding_dim), dtype=first_embedding.dtype)
 
         for i in range(batch_size):
             final_embeddings[i, :] = results_by_index[i]

@@ -54,8 +54,11 @@ def run_evolution(
     n_gens=30, 
     pop_size=60, 
     train_sample_size=150,
-    val_sample_size=75,
-    start_from_scratch=False
+    val_sample_size=100,
+    start_from_scratch=False,
+    concurrent_evals=4,
+    max_workers=4,
+    use_gpu=False
 ):
     # Load
     skb = load_and_download_skb(dataset_name)
@@ -74,7 +77,8 @@ def run_evolution(
         graph_store=graph_store,
         embedding_provider=embedding_provider,
         cache_neighbors=False, # Stark Extension Handles this
-        cache_vectors=True
+        cache_vectors=True,
+        use_gpu=use_gpu
     )
     
     # Prepare Data Subsets
@@ -97,7 +101,7 @@ def run_evolution(
             "Recall@5": 0.07, 
             "Hit@20": 0.05,     
             "Recall@10": 0.06,
-            "complexity": -0.00005,
+            "complexity": -0.0001,
             # "variance": -0.1, 
             # "latency": -0.00005, 
             # Don't penalize these because we are using lexicographic fitness (these are accounted for in the secondary / tertiary scores) 
@@ -119,7 +123,7 @@ def run_evolution(
     evo_config.update({                    # Then update
         "n_generations": n_gens,
         "population_size": pop_size,
-        "concurrent_evaluations": 4,
+        "concurrent_evaluations": concurrent_evals,
         "creation_strategy": "seeded_initialization", # Inject known good strategies
         "crossover_strategy": "subtree_crossover", # Use the new GP-style crossover
         "base_mutation_rate": 0.3,
@@ -138,7 +142,7 @@ def run_evolution(
         "plot_path": os.path.join(log_dir, f"plot_{dataset_name}.png"),
         "checkpoint_path": os.path.join(ckpt_dir, f"ckpt_{dataset_name}.pkl"),
         "validation_frequency": 5,
-        "max_workers_per_retrieval": 4
+        "max_workers_per_retrieval": max_workers
     })
     
     # CLEANUP IF START_FROM_SCRATCH
@@ -227,8 +231,11 @@ if __name__ == "__main__":
     parser.add_argument("--gens", type=int, default=30)
     parser.add_argument("--pop", type=int, default=60)
     parser.add_argument("--train_ss", type=int, default=150, help="Number of training samples to use for evolution.")
-    parser.add_argument("--val_ss", type=int, default=75, help="Number of validation samples to use for evolution.")
+    parser.add_argument("--val_ss", type=int, default=100, help="Number of validation samples to use for evolution.")
+    parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent genomes to evaluate.")
+    parser.add_argument("--workers", type=int, default=4, help="Number of threads per retrieval.")
     parser.add_argument("--scratch", action="store_true", dest="start_from_scratch", help="If set, clears previous checkpoints/logs to start fresh.")
+    parser.add_argument("--gpu", action="store_true", help="Enable GPU acceleration (requires cupy).")
     args = parser.parse_args()
     
     run_evolution(
@@ -237,5 +244,8 @@ if __name__ == "__main__":
         args.pop, 
         args.train_ss, 
         args.val_ss,
-        args.start_from_scratch
+        args.start_from_scratch,
+        args.concurrent,
+        args.workers,
+        args.gpu
     )

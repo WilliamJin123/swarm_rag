@@ -1102,3 +1102,246 @@
 2026-01-06 15:49:11,442 - INFO -   > [Short-Circuit] gen0_seed_hybrid_copy_copy_copy_copy_copy_copy_copy_copy aborted. Probe Quality: -0.0177
 2026-01-06 15:49:11,444 - INFO -   > Finished 'gen0_seed_hybrid_copy_copy_copy_copy_copy_copy_copy_copy' (1/1) | Qual: -0.0177 | Cost: 1.3 | R@20: 0.1321 | H@1: 0.0500 | H@5: 0.1000 | MRR: 0.0853
 2026-01-06 15:49:11,444 - INFO - --> Validation Gen 29: Recall 0.1321
+2026-01-06 17:57:16,186 - INFO - Evaluating 60 genomes...
+2026-01-06 17:57:16,187 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 17:57:16,187 - INFO -   > max_workers: 4 workers
+2026-01-06 17:57:16,188 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 17:57:38,964 - INFO -     [Retriever] [gen0_rand_0_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:10:56,920 - INFO - Evaluating 60 genomes...
+2026-01-06 18:10:56,920 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-06 18:10:56,920 - INFO -   > max_workers: 4 workers
+2026-01-06 18:10:56,920 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 18:11:44,735 - INFO -     [Retriever] [gen0_seed_vector_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:12:02,705 - INFO -     [Retriever] [gen0_seed_hybrid_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:12:20,358 - INFO -     [Retriever] [gen0_seed_vector_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:12:41,085 - INFO -     [Retriever] [gen0_seed_hybrid_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:12:51,397 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 10/130 queries
+2026-01-06 18:12:55,171 - INFO -     [Retriever] [gen0_seed_ant_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:13:12,896 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 20/130 queries
+2026-01-06 18:13:17,496 - INFO -     [Retriever] [gen0_rand_0_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:13:31,420 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 10/130 queries
+2026-01-06 18:13:39,628 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 30/130 queries
+2026-01-06 18:14:04,903 - INFO -     [Retriever] [gen0_seed_ant_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:14:05,887 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 40/130 queries
+2026-01-06 18:14:13,763 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 20/130 queries
+2026-01-06 18:14:43,513 - INFO -     [Retriever] [gen0_rand_0_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:14:45,900 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 30/130 queries
+2026-01-06 18:14:49,747 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 50/130 queries
+2026-01-06 18:15:18,901 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 60/130 queries
+2026-01-06 18:15:24,376 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 10/130 queries
+2026-01-06 18:15:41,407 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 40/130 queries
+2026-01-06 18:15:50,097 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 70/130 queries
+2026-01-06 18:16:13,497 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 80/130 queries
+2026-01-06 18:16:33,572 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 50/130 queries
+2026-01-06 18:16:34,345 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 90/130 queries
+2026-01-06 18:16:40,303 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 10/130 queries
+2026-01-06 18:17:00,976 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 100/130 queries
+2026-01-06 18:17:03,938 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 20/130 queries
+2026-01-06 18:17:12,048 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 110/130 queries
+2026-01-06 18:17:27,900 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 60/130 queries
+2026-01-06 18:17:49,621 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 120/130 queries
+2026-01-06 18:18:00,502 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 70/130 queries
+2026-01-06 18:18:16,571 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 30/130 queries
+2026-01-06 18:18:22,698 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 20/130 queries
+2026-01-06 18:18:26,271 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 80/130 queries
+2026-01-06 18:18:30,192 - INFO -     [Retriever] [gen0_seed_vector] Parallel Progress: 130/130 queries
+2026-01-06 18:18:30,198 - INFO -   > Finished 'gen0_seed_vector' (1/4) | Qual: 0.2594 | Cost: 3.0 | R@20: 0.3534 | H@1: 0.1267 | H@5: 0.3200 | MRR: 0.2190
+2026-01-06 18:18:47,017 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 90/130 queries
+2026-01-06 18:19:12,916 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 100/130 queries
+2026-01-06 18:19:26,577 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 110/130 queries
+2026-01-06 18:19:30,769 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 30/130 queries
+2026-01-06 18:19:34,670 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 40/130 queries
+2026-01-06 18:20:08,608 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 120/130 queries
+2026-01-06 18:20:44,083 - INFO -     [Retriever] [gen0_seed_hybrid] Parallel Progress: 130/130 queries
+2026-01-06 18:20:44,093 - INFO -   > Finished 'gen0_seed_hybrid' (2/4) | Qual: 0.2567 | Cost: 3.9 | R@20: 0.3409 | H@1: 0.1333 | H@5: 0.3133 | MRR: 0.2221
+2026-01-06 18:20:57,174 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 50/130 queries
+2026-01-06 18:21:04,294 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 40/130 queries
+2026-01-06 18:21:56,781 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 60/130 queries
+2026-01-06 18:22:09,222 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 50/130 queries
+2026-01-06 18:22:30,604 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 70/130 queries
+2026-01-06 18:23:03,870 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 80/130 queries
+2026-01-06 18:23:05,993 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 60/130 queries
+2026-01-06 18:23:47,511 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 90/130 queries
+2026-01-06 18:24:04,221 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 70/130 queries
+2026-01-06 18:24:26,418 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 100/130 queries
+2026-01-06 18:24:51,032 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 80/130 queries
+2026-01-06 18:24:51,551 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 110/130 queries
+2026-01-06 18:25:28,860 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 90/130 queries
+2026-01-06 18:25:32,993 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 120/130 queries
+2026-01-06 18:26:10,831 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 100/130 queries
+2026-01-06 18:26:24,008 - INFO -     [Retriever] [gen0_seed_ant] Parallel Progress: 130/130 queries
+2026-01-06 18:26:24,014 - INFO -   > Finished 'gen0_seed_ant' (3/4) | Qual: 0.2166 | Cost: 6.2 | R@20: 0.2965 | H@1: 0.1000 | H@5: 0.2800 | MRR: 0.1737
+2026-01-06 18:26:26,292 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 110/130 queries
+2026-01-06 18:27:02,134 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 120/130 queries
+2026-01-06 18:27:19,659 - INFO -     [Retriever] [gen0_rand_0] Parallel Progress: 130/130 queries
+2026-01-06 18:27:19,667 - INFO -   > Finished 'gen0_rand_0' (4/4) | Qual: 0.1974 | Cost: 6.6 | R@20: 0.3496 | H@1: 0.0600 | H@5: 0.2800 | MRR: 0.1446
+2026-01-06 18:27:19,669 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 18:27:42,403 - INFO -     [Retriever] [gen0_rand_3_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:28:17,037 - INFO -     [Retriever] [gen0_rand_3_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:28:17,039 - INFO -   > [Short-Circuit] gen0_rand_3 aborted. Probe Quality: 0.0458
+2026-01-06 18:28:17,041 - INFO -   > Finished 'gen0_rand_3' (1/4) | Qual: 0.0458 | Cost: 2.9 | R@20: 0.0339 | H@1: 0.0500 | H@5: 0.1000 | MRR: 0.0694
+2026-01-06 18:28:17,488 - INFO -     [Retriever] [gen0_rand_1_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:28:42,362 - INFO -     [Retriever] [gen0_rand_1_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:28:42,365 - INFO -   > [Short-Circuit] gen0_rand_1 aborted. Probe Quality: -0.0151
+2026-01-06 18:28:42,366 - INFO -   > Finished 'gen0_rand_1' (2/4) | Qual: -0.0151 | Cost: 4.1 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 18:29:02,109 - INFO -     [Retriever] [gen0_rand_4_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:29:39,131 - INFO -     [Retriever] [gen0_rand_4_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:29:43,480 - INFO -     [Retriever] [gen0_rand_2_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:30:25,904 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 10/130 queries
+2026-01-06 18:30:52,747 - INFO -     [Retriever] [gen0_rand_2_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:31:05,217 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 20/130 queries
+2026-01-06 18:31:42,794 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 30/130 queries
+2026-01-06 18:32:15,745 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 10/130 queries
+2026-01-06 18:32:34,957 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 40/130 queries
+2026-01-06 18:33:30,559 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 50/130 queries
+2026-01-06 18:33:35,004 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 20/130 queries
+2026-01-06 18:34:19,073 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 60/130 queries
+2026-01-06 18:34:45,390 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 30/130 queries
+2026-01-06 18:35:03,560 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 70/130 queries
+2026-01-06 18:35:37,914 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 80/130 queries
+2026-01-06 18:36:16,755 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 90/130 queries
+2026-01-06 18:36:19,818 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 40/130 queries
+2026-01-06 18:36:53,906 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 100/130 queries
+2026-01-06 18:37:19,662 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 110/130 queries
+2026-01-06 18:38:08,860 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 50/130 queries
+2026-01-06 18:38:11,569 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 120/130 queries
+2026-01-06 18:38:42,022 - INFO -     [Retriever] [gen0_rand_4] Parallel Progress: 130/130 queries
+2026-01-06 18:38:42,026 - INFO -   > Finished 'gen0_rand_4' (3/4) | Qual: 0.2120 | Cost: 4.5 | R@20: 0.3107 | H@1: 0.1267 | H@5: 0.2533 | MRR: 0.1935
+2026-01-06 18:39:08,674 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 60/130 queries
+2026-01-06 18:39:43,501 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 70/130 queries
+2026-01-06 18:40:14,348 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 80/130 queries
+2026-01-06 18:40:49,996 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 90/130 queries
+2026-01-06 18:41:16,229 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 100/130 queries
+2026-01-06 18:41:38,151 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 110/130 queries
+2026-01-06 18:42:24,902 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 120/130 queries
+2026-01-06 18:42:49,913 - INFO -     [Retriever] [gen0_rand_2] Parallel Progress: 130/130 queries
+2026-01-06 18:42:49,919 - INFO -   > Finished 'gen0_rand_2' (4/4) | Qual: 0.2403 | Cost: 6.2 | R@20: 0.3225 | H@1: 0.1200 | H@5: 0.3133 | MRR: 0.2069
+2026-01-06 18:42:49,919 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 18:43:11,583 - INFO -     [Retriever] [gen0_rand_8_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:43:21,268 - INFO -     [Retriever] [gen0_rand_8_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:43:22,256 - INFO -     [Retriever] [gen0_rand_7_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:43:36,253 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 10/130 queries
+2026-01-06 18:43:51,138 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 20/130 queries
+2026-01-06 18:43:51,495 - INFO -     [Retriever] [gen0_rand_5_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:44:01,934 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 30/130 queries
+2026-01-06 18:44:14,579 - INFO -     [Retriever] [gen0_rand_7_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:44:17,695 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 40/130 queries
+2026-01-06 18:44:24,835 - INFO -     [Retriever] [gen0_rand_5_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:44:32,598 - INFO -     [Retriever] [gen0_rand_6_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:44:37,257 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 50/130 queries
+2026-01-06 18:44:41,506 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 10/130 queries
+2026-01-06 18:44:55,940 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 60/130 queries
+2026-01-06 18:45:14,718 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 70/130 queries
+2026-01-06 18:45:22,051 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 10/130 queries
+2026-01-06 18:45:24,798 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 20/130 queries
+2026-01-06 18:45:26,069 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 80/130 queries
+2026-01-06 18:45:36,834 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 90/130 queries
+2026-01-06 18:45:49,874 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 30/130 queries
+2026-01-06 18:45:50,562 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 100/130 queries
+2026-01-06 18:45:58,747 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 110/130 queries
+2026-01-06 18:46:08,891 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 20/130 queries
+2026-01-06 18:46:11,506 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 120/130 queries
+2026-01-06 18:46:25,458 - INFO -     [Retriever] [gen0_rand_8] Parallel Progress: 130/130 queries
+2026-01-06 18:46:25,464 - INFO -   > Finished 'gen0_rand_8' (1/4) | Qual: 0.2036 | Cost: 1.4 | R@20: 0.2852 | H@1: 0.1067 | H@5: 0.2600 | MRR: 0.1775
+2026-01-06 18:46:30,092 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 40/130 queries
+2026-01-06 18:46:43,691 - INFO -     [Retriever] [gen0_rand_6_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:46:44,265 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 30/130 queries
+2026-01-06 18:47:01,338 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 50/130 queries
+2026-01-06 18:47:22,956 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 60/130 queries
+2026-01-06 18:47:31,738 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 40/130 queries
+2026-01-06 18:47:46,652 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 70/130 queries
+2026-01-06 18:47:59,831 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 10/130 queries
+2026-01-06 18:48:07,039 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 80/130 queries
+2026-01-06 18:48:16,667 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 90/130 queries
+2026-01-06 18:48:19,231 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 50/130 queries
+2026-01-06 18:48:38,562 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 100/130 queries
+2026-01-06 18:48:51,150 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 110/130 queries
+2026-01-06 18:49:02,497 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 60/130 queries
+2026-01-06 18:49:03,775 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 20/130 queries
+2026-01-06 18:49:29,157 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 120/130 queries
+2026-01-06 18:49:39,621 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 70/130 queries
+2026-01-06 18:50:01,719 - INFO -     [Retriever] [gen0_rand_7] Parallel Progress: 130/130 queries
+2026-01-06 18:50:01,723 - INFO -   > Finished 'gen0_rand_7' (2/4) | Qual: 0.2239 | Cost: 2.9 | R@20: 0.3812 | H@1: 0.1133 | H@5: 0.2667 | MRR: 0.1962
+2026-01-06 18:50:03,091 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 80/130 queries
+2026-01-06 18:50:13,387 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 30/130 queries
+2026-01-06 18:50:26,354 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 90/130 queries
+2026-01-06 18:50:44,380 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 100/130 queries
+2026-01-06 18:50:58,692 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 110/130 queries
+2026-01-06 18:51:18,559 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 40/130 queries
+2026-01-06 18:51:30,693 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 120/130 queries
+2026-01-06 18:51:51,060 - INFO -     [Retriever] [gen0_rand_5] Parallel Progress: 130/130 queries
+2026-01-06 18:51:51,067 - INFO -   > Finished 'gen0_rand_5' (3/4) | Qual: 0.2309 | Cost: 3.6 | R@20: 0.3310 | H@1: 0.1533 | H@5: 0.2533 | MRR: 0.2052
+2026-01-06 18:52:04,102 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 50/130 queries
+2026-01-06 18:52:30,356 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 60/130 queries
+2026-01-06 18:52:56,833 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 70/130 queries
+2026-01-06 18:53:13,638 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 80/130 queries
+2026-01-06 18:53:34,569 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 90/130 queries
+2026-01-06 18:53:55,521 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 100/130 queries
+2026-01-06 18:54:08,620 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 110/130 queries
+2026-01-06 18:54:36,192 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 120/130 queries
+2026-01-06 18:54:59,226 - INFO -     [Retriever] [gen0_rand_6] Parallel Progress: 130/130 queries
+2026-01-06 18:54:59,234 - INFO -   > Finished 'gen0_rand_6' (4/4) | Qual: 0.2489 | Cost: 4.9 | R@20: 0.3544 | H@1: 0.1267 | H@5: 0.3267 | MRR: 0.2192
+2026-01-06 18:54:59,235 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 18:55:04,628 - INFO -     [Retriever] [gen0_rand_12_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:55:22,570 - INFO -     [Retriever] [gen0_rand_12_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:55:27,248 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 10/130 queries
+2026-01-06 18:55:30,887 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 20/130 queries
+2026-01-06 18:55:33,383 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 30/130 queries
+2026-01-06 18:55:43,008 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 40/130 queries
+2026-01-06 18:55:46,684 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 50/130 queries
+2026-01-06 18:55:50,970 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 60/130 queries
+2026-01-06 18:55:55,944 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 70/130 queries
+2026-01-06 18:56:00,713 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 80/130 queries
+2026-01-06 18:56:06,755 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 90/130 queries
+2026-01-06 18:56:13,009 - INFO -     [Retriever] [gen0_rand_9_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:56:16,288 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 100/130 queries
+2026-01-06 18:56:23,157 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 110/130 queries
+2026-01-06 18:56:30,975 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 120/130 queries
+2026-01-06 18:56:48,819 - INFO -     [Retriever] [gen0_rand_12] Parallel Progress: 130/130 queries
+2026-01-06 18:56:48,823 - INFO -   > Finished 'gen0_rand_12' (1/4) | Qual: 0.2465 | Cost: 0.7 | R@20: 0.3869 | H@1: 0.1133 | H@5: 0.3000 | MRR: 0.1998
+2026-01-06 18:56:54,721 - INFO -     [Retriever] [gen0_rand_9_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:56:54,723 - INFO -   > [Short-Circuit] gen0_rand_9 aborted. Probe Quality: 0.0761
+2026-01-06 18:56:54,725 - INFO -   > Finished 'gen0_rand_9' (2/4) | Qual: 0.0761 | Cost: 5.8 | R@20: 0.1250 | H@1: 0.0000 | H@5: 0.1500 | MRR: 0.0788
+2026-01-06 18:57:45,818 - INFO -     [Retriever] [gen0_rand_10_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:58:09,231 - INFO -     [Retriever] [gen0_rand_11_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:58:46,422 - INFO -     [Retriever] [gen0_rand_10_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:58:46,424 - INFO -   > [Short-Circuit] gen0_rand_10 aborted. Probe Quality: 0.0239
+2026-01-06 18:58:46,424 - INFO -   > Finished 'gen0_rand_10' (3/4) | Qual: 0.0239 | Cost: 11.4 | R@20: 0.1125 | H@1: 0.0000 | H@5: 0.0500 | MRR: 0.0230
+2026-01-06 18:58:50,877 - INFO -     [Retriever] [gen0_rand_11_probe] Parallel Progress: 20/20 queries
+2026-01-06 18:58:50,879 - INFO -   > [Short-Circuit] gen0_rand_11 aborted. Probe Quality: -0.0129
+2026-01-06 18:58:50,881 - INFO -   > Finished 'gen0_rand_11' (4/4) | Qual: -0.0129 | Cost: 11.6 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 18:58:50,881 - INFO -   > Starting batch of 4 genomes...
+2026-01-06 18:59:12,076 - INFO -     [Retriever] [gen0_rand_16_probe] Parallel Progress: 10/20 queries
+2026-01-06 18:59:48,999 - INFO -     [Retriever] [gen0_rand_16_probe] Parallel Progress: 20/20 queries
+2026-01-06 19:00:07,944 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 10/130 queries
+2026-01-06 19:00:32,842 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 20/130 queries
+2026-01-06 19:00:54,198 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 30/130 queries
+2026-01-06 19:01:30,023 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 40/130 queries
+2026-01-06 19:01:39,802 - INFO -     [Retriever] [gen0_rand_14_probe] Parallel Progress: 10/20 queries
+2026-01-06 19:02:08,327 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 50/130 queries
+2026-01-06 19:02:31,207 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 60/130 queries
+2026-01-06 19:02:31,678 - INFO -     [Retriever] [gen0_rand_13_probe] Parallel Progress: 10/20 queries
+2026-01-06 19:02:48,526 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 70/130 queries
+2026-01-06 19:03:07,040 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 80/130 queries
+2026-01-06 19:03:15,193 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 90/130 queries
+2026-01-06 19:03:35,660 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 100/130 queries
+2026-01-06 19:03:47,283 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 110/130 queries
+2026-01-06 19:04:14,992 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 120/130 queries
+2026-01-06 19:04:18,095 - INFO -     [Retriever] [gen0_rand_13_probe] Parallel Progress: 20/20 queries
+2026-01-06 19:04:39,761 - INFO -     [Retriever] [gen0_rand_15_probe] Parallel Progress: 10/20 queries
+2026-01-06 19:04:50,145 - INFO -     [Retriever] [gen0_rand_16] Parallel Progress: 130/130 queries
+2026-01-06 19:04:50,151 - INFO -   > Finished 'gen0_rand_16' (1/4) | Qual: 0.2570 | Cost: 2.4 | R@20: 0.3965 | H@1: 0.1067 | H@5: 0.3333 | MRR: 0.2035
+2026-01-06 19:06:07,610 - INFO -     [Retriever] [gen0_rand_13] Parallel Progress: 10/130 queries
+2026-01-06 19:06:24,794 - INFO -     [Retriever] [gen0_rand_15_probe] Parallel Progress: 20/20 queries
+2026-01-06 19:06:24,798 - INFO -   > [Short-Circuit] gen0_rand_15 aborted. Probe Quality: 0.0884
+2026-01-06 19:06:24,799 - INFO -   > Finished 'gen0_rand_15' (2/4) | Qual: 0.0884 | Cost: 22.7 | R@20: 0.0679 | H@1: 0.0500 | H@5: 0.1500 | MRR: 0.1018
+2026-01-06 19:06:27,184 - INFO -     [Retriever] [gen0_rand_14_probe] Parallel Progress: 20/20 queries
+2026-01-06 19:07:14,049 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 10/130 queries
+2026-01-06 19:07:43,039 - INFO -     [Retriever] [gen0_rand_13] Parallel Progress: 20/130 queries
+2026-01-06 19:08:22,739 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 20/130 queries
+2026-01-06 19:08:46,998 - INFO -     [Retriever] [gen0_rand_13] Parallel Progress: 30/130 queries
+2026-01-06 19:09:36,184 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 30/130 queries
+2026-01-06 19:10:49,430 - INFO -     [Retriever] [gen0_rand_13] Parallel Progress: 40/130 queries
+2026-01-06 19:12:28,179 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 40/130 queries
+2026-01-06 19:13:19,390 - INFO -     [Retriever] [gen0_rand_13] Parallel Progress: 50/130 queries
+2026-01-06 19:14:31,788 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 50/130 queries

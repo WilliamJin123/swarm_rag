@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Union, Callable
 import numpy as np
+from ..ops import xp
 import math
 from dataclasses import dataclass, field
 
@@ -119,42 +120,42 @@ class Heuristics:
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY)
-    def semantic_similarity(ctx: HeuristicContext) -> Union[float, np.ndarray]:
+    def semantic_similarity(ctx: HeuristicContext) -> Union[float, Any]:
         """
         NORMALIZED Cosine Similarity: Maps [-1, 1] to [0, 1].
         - 0.0 = completely opposite direction (cosine = -1)
         - 0.5 = orthogonal/unrelated (cosine = 0)
         - 1.0 = perfect match (cosine = 1)
         """
-        scores = np.dot(ctx.target_vecs, ctx.query_vec)
+        scores = xp.dot(ctx.target_vecs, ctx.query_vec)
         # Normalize from [-1, 1] to [0, 1]
         return (scores + 1.0) / 2.0
 
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY_UNNORMALIZED)
-    def semantic_similarity_unnormalized(ctx: HeuristicContext) -> Union[float, np.ndarray]:
+    def semantic_similarity_unnormalized(ctx: HeuristicContext) -> Union[float, Any]:
         """
         RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
         """
-        return np.dot(ctx.target_vecs, ctx.query_vec)
+        return xp.dot(ctx.target_vecs, ctx.query_vec)
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.NODE_CENTRALITY)
-    def node_centrality(ctx: HeuristicContext) -> np.ndarray:
+    def node_centrality(ctx: HeuristicContext) -> Any:
         """
         Normalized centrality that works with any GraphStore.
         Requires ctx.graph.degree and ctx.graph.avg_degree
         
         Range: [0, 1] (sigmoid normalization)
         """
-        log_degree = np.log(1 + ctx.node_degrees)
+        log_degree = xp.log(1 + ctx.node_degrees)
         log_avg = math.log(1 + ctx.avg_degree)
         # Sigmoid normalization
         return log_degree / (log_degree + log_avg + 1e-8)
 
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.PHEROMONE_REPULSION)
-    def pheromone_repulsion(ctx: HeuristicContext) -> np.ndarray:
+    def pheromone_repulsion(ctx: HeuristicContext) -> Any:
         """
         Inverse Pheromone frequency. 
         Returns 1.0 if no one has been there, approaches 0.0 as traffic increases.
@@ -164,10 +165,10 @@ class Heuristics:
 
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.RANDOM_JITTER)
-    def random_jitter(ctx: HeuristicContext) -> np.ndarray:
+    def random_jitter(ctx: HeuristicContext) -> Any:
         """Adds pure chaos to break loops."""
         count = len(ctx.target_ids) if ctx.target_ids is not None else 1
-        return np.random.random(count)
+        return xp.random.random(count)
 
     # --- RANKING HEURISTICS (Final Consensus) ---
 
@@ -186,35 +187,35 @@ class Heuristics:
         Uses full [-1, 1] range since we want to distinguish good from bad.
         """
         val = Heuristics.semantic_similarity_unnormalized(ctx)
-        return val.item() if isinstance(val, np.ndarray) else val
+        return val.item() if isinstance(val, (np.ndarray, xp.ndarray)) else val
 
     # --- DEPOSIT HEURISTICS ---
 
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.FLAT)
-    def deposit_flat(ctx: HeuristicContext) -> np.ndarray:
+    def deposit_flat(ctx: HeuristicContext) -> Any:
         """Returns array of 1.0s matching input size."""
-        return np.ones_like(ctx.pheromone_values)
+        return xp.ones_like(ctx.pheromone_values)
 
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.HUB)
-    def deposit_hub(ctx: HeuristicContext) -> np.ndarray:
+    def deposit_hub(ctx: HeuristicContext) -> Any:
         """Hubs get more pheromones."""
         return Heuristics.node_centrality(ctx)
     
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.SEMANTIC)
-    def deposit_semantic(ctx: HeuristicContext) -> np.ndarray:
+    def deposit_semantic(ctx: HeuristicContext) -> Any:
         """
         Semantic-weighted deposit using NORMALIZED similarity.
         Only deposits on positive matches (similarity > 0.5 in normalized space) with range 0-1.
         """
         normalized_sim = Heuristics.semantic_similarity(ctx)
-        return np.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0, 0.0)
+        return xp.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0, 0.0)
 
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.SEMANTIC_UNNORMALIZED)
-    def deposit_semantic_unnormalized(ctx: HeuristicContext) -> np.ndarray:
+    def deposit_semantic_unnormalized(ctx: HeuristicContext) -> Any:
         """
         Alternative: Uses unnormalized similarity and clamps to [0, 1].
         Deposits on any positive match.
@@ -222,7 +223,7 @@ class Heuristics:
         Range: [0, 1]
         """
         sim = Heuristics.semantic_similarity_unnormalized(ctx)
-        return np.maximum(0.0, sim)
+        return xp.maximum(0.0, sim)
     
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.EXPLORATION_BONUS)
@@ -231,7 +232,7 @@ class Heuristics:
         base_deposit: float = 1.0,
         fresh_multiplier: float = 2.0,
         high_traffic_multiplier: float = 0.5
-    ) -> np.ndarray:
+    ) -> Any:
         """
         Encourages visiting new nodes (Exploration).
         
@@ -245,7 +246,7 @@ class Heuristics:
         max_p = max(ctx.max_pheromone, 0.0001)
         
         traffic_ratio = ctx.pheromone_values / max_p
-        traffic_ratio = np.clip(traffic_ratio, 0.0, 1.0)
+        traffic_ratio = xp.clip(traffic_ratio, 0.0, 1.0)
             
         multiplier = fresh_multiplier - (fresh_multiplier - high_traffic_multiplier) * traffic_ratio
         return base_deposit * multiplier
@@ -263,5 +264,5 @@ class Heuristics:
         This creates a "rich get richer" effect.
         """
         multiplier = 1.0 + (amplification_factor * ctx.pheromone_values)
-        return base_deposit * np.minimum(multiplier, max_multiplier)
+        return base_deposit * xp.minimum(multiplier, max_multiplier)
     
