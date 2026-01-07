@@ -51,10 +51,10 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
 
 def run_evolution(
     dataset_name="prime", 
-    n_gens=20, 
-    pop_size=30, 
-    train_sample_size=100,
-    val_sample_size=50,
+    n_gens=30, 
+    pop_size=60, 
+    train_sample_size=150,
+    val_sample_size=75,
     start_from_scratch=False
 ):
     # Load
@@ -97,7 +97,7 @@ def run_evolution(
             "Recall@5": 0.07, 
             "Hit@20": 0.05,     
             "Recall@10": 0.06,
-            "complexity": -0.0001,
+            "complexity": -0.00005,
             # "variance": -0.1, 
             # "latency": -0.00005, 
             # Don't penalize these because we are using lexicographic fitness (these are accounted for in the secondary / tertiary scores) 
@@ -121,13 +121,14 @@ def run_evolution(
         "population_size": pop_size,
         "concurrent_evaluations": 4,
         "creation_strategy": "seeded_initialization", # Inject known good strategies
+        "crossover_strategy": "subtree_crossover", # Use the new GP-style crossover
         "base_mutation_rate": 0.3,
         
         # Constraints
         "expr_max_depth": 5,
         "param_ranges": {
-            "n_agents": (5, 50),
-            "steps": (2, 10),
+            "n_agents": (5, 60),
+            "steps": (2, 15),
             "decay": (0.1, 0.9),
             "initial_pool_size": (10, 50),
         },
@@ -223,10 +224,10 @@ def run_evolution(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="prime")
-    parser.add_argument("--gens", type=int, default=20)
-    parser.add_argument("--pop", type=int, default=50)
-    parser.add_argument("--train_ss", type=int, default=100, help="Number of training samples to use for evolution.")
-    parser.add_argument("--val_ss", type=int, default=50, help="Number of validation samples to use for evolution.")
+    parser.add_argument("--gens", type=int, default=30)
+    parser.add_argument("--pop", type=int, default=60)
+    parser.add_argument("--train_ss", type=int, default=150, help="Number of training samples to use for evolution.")
+    parser.add_argument("--val_ss", type=int, default=75, help="Number of validation samples to use for evolution.")
     parser.add_argument("--scratch", action="store_true", dest="start_from_scratch", help="If set, clears previous checkpoints/logs to start fresh.")
     args = parser.parse_args()
     

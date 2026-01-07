@@ -206,6 +206,70 @@ class GeneticStrategies:
 
         child.clear_cache()
         return child
+
+    @staticmethod
+    @GeneticRegistry.register_crossover(GeneticKey.SUBTREE_CROSSOVER)
+    def subtree_crossover(parent1: Genome, parent2: Genome, ctx: EvolutionContext) -> Genome:
+        """
+        GP-style Subtree Crossover.
+        1. Mixes scalar parameters uniformly.
+        2. For strategy trees, attempts to swap random subtrees between parents.
+        """
+        child = parent1.copy()
+        child.mutation_rate = (parent1.mutation_rate + parent2.mutation_rate) / 2.0
+
+        # 1. Uniform Parameter Mix
+        for key in child.params:
+            if random.random() > 0.5:
+                child.params[key] = parent2.params[key]
+        
+        for key in child.group_ratios:
+            if key in parent2.group_ratios and random.random() > 0.5:
+                child.group_ratios[key] = parent2.group_ratios[key]
+
+        # 2. Subtree Crossover for Expressions
+        for key in child.strategies:
+            p1_tree = parent1.strategies[key]
+            p2_tree = parent2.strategies[key]
+            
+            # Chance to perform subtree swap vs just inheriting whole tree
+            if random.random() < 0.7: # 70% chance to try mixing
+                try:
+                    # We need deep copies to avoid modifying parents
+                    new_tree = p1_tree.copy()
+                    donor_tree = p2_tree.copy()
+                    
+                    # Get all nodes (flatten)
+                    p1_nodes = ExpressionEvolution.get_all_nodes(new_tree)
+                    p2_nodes = ExpressionEvolution.get_all_nodes(donor_tree)
+                    
+                    if p1_nodes and p2_nodes:
+                        # Pick crossover points
+                        target_node = random.choice(p1_nodes)
+                        source_node = random.choice(p2_nodes)
+                        
+                        # Swap content (type, value, children)
+                        # We do this by modifying target_node in-place to become source_node
+                        target_node.type = source_node.type
+                        target_node.value = source_node.value
+                        target_node.children = [c.copy() for c in source_node.children]
+                        
+                        child.strategies[key] = new_tree
+                    else:
+                        # Fallback
+                        child.strategies[key] = p1_tree.copy()
+                except Exception:
+                    # Safety fallback
+                    child.strategies[key] = p1_tree.copy()
+            else:
+                 # Just pick one parent's tree
+                 if random.random() > 0.5:
+                     child.strategies[key] = p2_tree.copy()
+                 else:
+                     child.strategies[key] = p1_tree.copy()
+
+        child.clear_cache()
+        return child
     
     # --- CREATION ---
 

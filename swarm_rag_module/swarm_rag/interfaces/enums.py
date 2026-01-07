@@ -37,6 +37,7 @@ class GeneticKey(Enum):
 
     # --- CROSSOVER ---
     UNIFORM_PARAMETER_MIX = "uniform_parameter_mix"
+    SUBTREE_CROSSOVER = "subtree_crossover"
 
     # --- MUTATION ---
     EXPRESSION_TREE_MUTATION = "expression_tree_mutation"
