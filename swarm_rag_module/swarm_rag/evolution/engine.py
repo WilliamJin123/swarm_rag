@@ -20,6 +20,12 @@ from .execution.loop import EvolutionLoop
 from .execution.fitness import FitnessCalculator
 from .execution.tracker import ProgressTracker
 from .execution.factory import GenomeFactory
+from .execution.fitness_strategies import (
+    FitnessStrategy, 
+    LexicographicStrategy, 
+    ParetoStrategy, 
+    PhasedStrategy
+)
 from .extensions.base import EvolutionExtension
 
 from ..utils import TqdmLoggingHandler
@@ -82,6 +88,19 @@ class EvolutionEngine:
             plot_title=self.config["plot_title"],
             overwrite=overwrite_logs
         )
+
+        # Initialize Fitness Strategy
+        strategy_name = self.config.get("fitness_strategy", "lexicographic")
+        if strategy_name == "pareto":
+            self.fitness_strategy = ParetoStrategy()
+        elif strategy_name == "phased":
+            switch_gen = self.config.get("phased_switch_gen", 10)
+            self.fitness_strategy = PhasedStrategy(switch_gen=switch_gen)
+        else:
+            self.fitness_strategy = LexicographicStrategy()
+            
+        logger = logging.getLogger(__name__)
+        logger.info(f"Using Fitness Strategy: {self.fitness_strategy.__class__.__name__}")
 
         self.extensions = extensions or []
         for ext in self.extensions:
@@ -150,6 +169,9 @@ class EvolutionEngine:
             
             # Posthook
             for ext in self.extensions: ext.on_after_evaluation(self.evo_context)
+
+            # ASSIGN FITNESS / RANKING
+            self.fitness_strategy.assign_fitness(population, generation=gen)
 
             # ELITISM
             population.sort(key=lambda g: g.fitness, reverse=True)

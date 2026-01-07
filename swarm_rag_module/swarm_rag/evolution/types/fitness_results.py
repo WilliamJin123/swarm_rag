@@ -15,19 +15,33 @@ class FitnessResult:
     quality_score: float = field(default=-math.inf, compare=True)   # maximise
     stability_score: float = field(default=-math.inf, compare=True) # maximise
     cost_score: float = field(default=math.inf, compare=True)      # minimise
+    
+    # Custom sort key for flexible strategies (Lexicographic, Pareto, etc.)
+    # Defaults to None, which triggers lazy computation of Lexicographic key
+    sort_key: tuple = field(default=None, compare=False)
+
+    def update_sort_key(self, mode="lexicographic"):
+        """Explicitly updates the sort key based on the mode."""
+        if mode == "lexicographic":
+            quality_prec = FitnessResult._precision_from_tolerance(QUALITY_TOLERANCE)
+            stability_prec = FitnessResult._precision_from_tolerance(STABILITY_TOLERANCE)
+            quality = round(self.quality_score, quality_prec)
+            stability = round(self.stability_score, stability_prec)
+            self.sort_key = (quality, stability, -self.cost_score)
+        else:
+            # Other modes should set sort_key directly via strategy
+            pass
 
     def _get_sort_key(self):
         """
-        Creates a key for comparison that incorporates tolerance.
-        We round the scores to a precision that reflects our tolerance.
-        This ensures that values within the tolerance are treated as equal,
-        creating a proper total ordering.
+        Returns the cached sort key or computes default lexicographic key.
         """
-        quality_prec = FitnessResult._precision_from_tolerance(QUALITY_TOLERANCE)
-        stability_prec = FitnessResult._precision_from_tolerance(STABILITY_TOLERANCE)
-        quality = round(self.quality_score, quality_prec)
-        stability = round(self.stability_score, stability_prec)
-        return (quality, stability, -self.cost_score)
+        if self.sort_key is not None:
+            return self.sort_key
+            
+        # Fallback (Legacy/Default)
+        self.update_sort_key("lexicographic")
+        return self.sort_key
     
     def __lt__(self, other: 'FitnessResult') -> bool:
         """Compares based on the sort key."""
@@ -56,6 +70,7 @@ class FitnessResult:
             "quality_score": self.quality_score,
             "stability_score": self.stability_score,
             "cost_score": self.cost_score,
+            "sort_key": self.sort_key
         }
 
     @staticmethod

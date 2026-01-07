@@ -26,6 +26,8 @@ class EvolutionConfigDict(TypedDict):
     selection_strategy: str
     crossover_strategy: str
     mutation_strategy: str
+    fitness_strategy: str
+    phased_switch_gen: int
     
     # Strategy-Specific Settings
     selection_k: int
@@ -58,6 +60,8 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "selection_strategy": "tournament",
     "crossover_strategy": "uniform_parameter_mix",
     "mutation_strategy": "expression_tree_mutation",
+    "fitness_strategy": "lexicographic",
+    "phased_switch_gen": 10,
     "selection_k": 3,
     "mutation_max_expr_size": 25,
     "expr_max_depth": 5,
