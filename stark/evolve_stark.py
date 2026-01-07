@@ -92,19 +92,22 @@ def run_evolution(
     # Balance: High Recall is king, but we penalize excessive cost (visited nodes)
     fitness_calc = FitnessCalculator(
         weights={
-            "Hit@1": 0.30,     
+            "Hit@1": 0.25,     
             "Hit@5": 0.15,     
-            "MRR": 0.15,        
-            "Recall@20": 0.15, 
-            # Others (not benchmarkmaxxed) 
-            "Hit@10": 0.07,    
-            "Recall@5": 0.07, 
-            "Hit@20": 0.05,     
-            "Recall@10": 0.06,
+            "MRR": 0.20,        
+            "Recall@20": 0.20, 
+            "Hit@10": 0.10,    
+            "Recall@5": 0.10, 
             "complexity": -0.0001,
-            # "variance": -0.1, 
-            # "latency": -0.00005, 
-            # Don't penalize these because we are using lexicographic fitness (these are accounted for in the secondary / tertiary scores) 
+            # Old Weights:
+            # "Hit@1": 0.30,     
+            # "Hit@5": 0.15,     
+            # "MRR": 0.15,        
+            # "Recall@20": 0.15, 
+            # "Hit@10": 0.07,    
+            # "Recall@5": 0.07, 
+            # "Hit@20": 0.05,     
+            # "Recall@10": 0.06,
         },
     )
     
@@ -125,16 +128,19 @@ def run_evolution(
         "population_size": pop_size,
         "concurrent_evaluations": concurrent_evals,
         "creation_strategy": "seeded_initialization", # Inject known good strategies
-        "crossover_strategy": "subtree_crossover", # Use the new GP-style crossover
-        "base_mutation_rate": 0.3,
+        "crossover_strategy": "root_mix_crossover",  # Less destructive than subtree swap
+        "mutation_strategy": "guided_mutation",      # Knowledge-infused mutation
+        "base_mutation_rate": 0.2,                   # Lowered for more refinement
+        "elite_fraction": 0.15,                      # Increased pressure to keep best traits
         
         # Constraints
         "expr_max_depth": 5,
         "param_ranges": {
-            "n_agents": (5, 60),
-            "steps": (2, 15),
-            "decay": (0.1, 0.9),
-            "initial_pool_size": (10, 50),
+            "n_agents": (10, 80),                    # Expanded range for more swarm capacity
+            "steps": (4, 15),                       # Minimum steps for enough exploration
+            "decay": (0.3, 0.95),
+            "initial_pool_size": (15, 60),
+            "start_subset": (5, 20),
         },
         
         # PATHS

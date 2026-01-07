@@ -389,6 +389,11 @@ class ExpressionEvolution:
         return tree
     
     @staticmethod
+    def get_all_nodes(node: ExpressionNode) -> List[ExpressionNode]:
+        """Returns a list of all nodes in the tree."""
+        return [node] + sum([ExpressionEvolution.get_all_nodes(c) for c in node.children], [])
+
+    @staticmethod
     def crossover_trees(tree1: ExpressionNode, tree2: ExpressionNode) -> Tuple[ExpressionNode, ExpressionNode]:
         """
         Subtree crossover between two expression trees.
@@ -396,12 +401,8 @@ class ExpressionEvolution:
         t1 = tree1.copy()
         t2 = tree2.copy()
         
-        def get_all_nodes(node: ExpressionNode):
-            """Returns a list of all nodes in the tree."""
-            return [node] + sum([get_all_nodes(c) for c in node.children], [])
-        
-        nodes1 = get_all_nodes(t1)
-        nodes2 = get_all_nodes(t2)
+        nodes1 = ExpressionEvolution.get_all_nodes(t1)
+        nodes2 = ExpressionEvolution.get_all_nodes(t2)
         
         if len(nodes1) > 1 and len(nodes2) > 1:
             # Pick random nodes to swap (avoid root to maintain structure)

@@ -270,6 +270,63 @@ class GeneticStrategies:
 
         child.clear_cache()
         return child
+
+    @staticmethod
+    @GeneticRegistry.register_crossover(GeneticKey.ROOT_MIX_CROSSOVER)
+    def root_mix_crossover(parent1: Genome, parent2: Genome, ctx: EvolutionContext) -> Genome:
+        """
+        Swaps top-level branches of strategy trees.
+        This is less destructive than random subtree crossover as it preserves
+        the high-level logic (the operator) if both share it, or swaps whole approaches.
+        """
+        child = parent1.copy()
+        child.mutation_rate = (parent1.mutation_rate + parent2.mutation_rate) / 2.0
+
+        # 1. Uniform Parameter Mix
+        for key in child.params:
+            if random.random() > 0.5:
+                child.params[key] = parent2.params[key]
+        
+        for key in child.group_ratios:
+            if key in parent2.group_ratios and random.random() > 0.5:
+                child.group_ratios[key] = parent2.group_ratios[key]
+
+        # 2. Root Mix Crossover
+        for key in child.strategies:
+            p1_tree = parent1.strategies[key]
+            p2_tree = parent2.strategies[key]
+
+            # 70% chance to mix, 30% chance to clone one parent
+            if random.random() < 0.7:
+                # If both are operators with children (e.g. A * B, C + D)
+                if p1_tree.type == 'op' and p2_tree.type == 'op' and p1_tree.children and p2_tree.children:
+                     # Create new root using Parent 1's operator
+                     new_tree = ExpressionNode(type='op', value=p1_tree.value, children=[])
+                     
+                     # Take one child from P1 and one from P2
+                     # (Assumes binary operators for simplicity, or takes first child)
+                     c1 = p1_tree.children[0].copy()
+                     # If P2 has children, take one, otherwise take P2 itself
+                     c2 = p2_tree.children[-1].copy() if len(p2_tree.children) > 1 else p2_tree.children[0].copy()
+                     
+                     # Randomly swap order
+                     if random.random() > 0.5:
+                         new_tree.children = [c1, c2]
+                     else:
+                         new_tree.children = [c2, c1]
+                     
+                     child.strategies[key] = new_tree
+                else:
+                    # If structures don't match well, just swap the whole tree
+                    child.strategies[key] = p2_tree.copy()
+            else:
+                 if random.random() > 0.5:
+                     child.strategies[key] = p2_tree.copy()
+                 else:
+                     child.strategies[key] = p1_tree.copy()
+
+        child.clear_cache()
+        return child
     
     # --- CREATION ---
 
@@ -625,6 +682,101 @@ class GeneticStrategies:
                      genome.strategies[key] = ExpressionEvolution.mutate_tree(
                          tree, features=feature_list, mutation_rate=1.0, inplace=True
                      )
+
+        genome.clear_cache()
+        return genome
+
+    @staticmethod
+    @GeneticRegistry.register_mutation(GeneticKey.GUIDED_MUTATION)
+    def guided_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
+        """
+        Smart mutation that encourages known good patterns:
+        - Ensures 'semantic_similarity' is present in movement.
+        - Ensures 'pheromone_repulsion' (diversity) is occasionally injected.
+        - Prevents 'destructive' loss of key features.
+        """
+        tau = 0.2
+        genome.mutation_rate = genome.mutation_rate * np.exp(tau * np.random.normal(0, 1))
+        genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
+        rate = genome.mutation_rate * ctx.global_mutation_multiplier
+
+        # 1. Standard Parameter Jitter (Same as expression_tree_mutation)
+        for key, val in genome.params.items():
+            if random.random() < rate:
+                if random.random() < 0.8: # Fine tuning
+                    if isinstance(val, int):
+                        delta = int(round(random.gauss(0, 1.5)))
+                        genome.params[key] = max(1, val + delta)
+                    elif isinstance(val, float):
+                        genome.params[key] = max(0.001, min(0.999, val * random.gauss(1.0, 0.1)))
+                else: # Resample
+                     ranges = ctx.config.get('param_ranges', {})
+                     if key in ranges:
+                         min_v, max_v = ranges[key]
+                         if isinstance(min_v, int):
+                             genome.params[key] = random.randint(min_v, max_v)
+                         else:
+                             genome.params[key] = random.uniform(min_v, max_v)
+
+        # 2. Guided Tree Mutation
+        for key, tree in genome.strategies.items():
+            if random.random() < rate:
+                feature_list = ctx.expression_features.get(key)
+                if not feature_list:
+                    if "movement" in key: feature_list = ctx.expression_features.get("movement")
+                    elif "deposit" in key: feature_list = ctx.expression_features.get("deposit")
+                    elif "ranking" in key: feature_list = ctx.expression_features.get("ranking")
+                
+                # Check for critical features
+                all_nodes = ExpressionEvolution.get_all_nodes(tree)
+                has_semantic = any(n.value == 'semantic_similarity' for n in all_nodes)
+                has_pheromone = any(n.value == 'pheromone_repulsion' for n in all_nodes)
+                
+                # A) Injection Logic (If missing, strong chance to add)
+                injected = False
+                if "movement" in key:
+                    # If missing semantic, 50% chance to force inject it
+                    if not has_semantic and random.random() < 0.5:
+                        # Wrap: (Current + semantic_similarity) / 2
+                        new_node = ExpressionNode("op", "+", [
+                            tree.copy(), 
+                            ExpressionNode("feature", "semantic_similarity")
+                        ])
+                        genome.strategies[key] = ExpressionNode("op", "/", [
+                             new_node,
+                             ExpressionNode("const", 2.0)
+                        ])
+                        injected = True
+                    
+                    # If missing diversity, 30% chance to inject
+                    elif not has_pheromone and random.random() < 0.3:
+                         # Wrap: Current * pheromone_repulsion
+                        genome.strategies[key] = ExpressionNode("op", "*", [
+                            tree.copy(),
+                            ExpressionNode("feature", "pheromone_repulsion")
+                        ])
+                        injected = True
+                
+                # B) Standard Mutation (if not injected)
+                if not injected:
+                    # If we have critical features, we want to be CAREFUL not to delete them.
+                    # We use standard mutation but might revert if it loses the critical feature.
+                    original_tree = tree.copy()
+                    
+                    mutated_tree = ExpressionEvolution.mutate_tree(
+                        tree, features=feature_list, mutation_rate=rate, inplace=True
+                    )
+                    
+                    # Verification check
+                    if has_semantic:
+                         new_nodes = ExpressionEvolution.get_all_nodes(mutated_tree)
+                         if not any(n.value == 'semantic_similarity' for n in new_nodes):
+                             # Revert! We lost the most important signal.
+                             if random.random() < 0.8: # 80% chance to revert
+                                 genome.strategies[key] = original_tree
+                                 continue
+                    
+                    genome.strategies[key] = mutated_tree
 
         genome.clear_cache()
         return genome

@@ -38,10 +38,12 @@ class GeneticKey(Enum):
     # --- CROSSOVER ---
     UNIFORM_PARAMETER_MIX = "uniform_parameter_mix"
     SUBTREE_CROSSOVER = "subtree_crossover"
+    ROOT_MIX_CROSSOVER = "root_mix_crossover"
 
     # --- MUTATION ---
     EXPRESSION_TREE_MUTATION = "expression_tree_mutation"
     AGGRESSIVE_MUTATION = "aggressive_mutation"
+    GUIDED_MUTATION = "guided_mutation"
 
     # --- CREATION ---
     STANDARD_INITIALIZATION = "standard_initialization"
