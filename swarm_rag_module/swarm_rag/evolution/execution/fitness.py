@@ -36,7 +36,7 @@ class FitnessCalculator:
         stability = 1.0 - metrics.get("variance", 0.0)
 
         # Cost (Latency or Steps)
-        cost = metrics.get("latency_ms", 0.0)
+        cost = metrics.get("latency", 0.0)
         
         return FitnessResult(
             quality_score=quality_score,

@@ -60,7 +60,7 @@ class Genome:
 
     # Recall@20, Hit@1, Hit@5, MRR, etc.
     metrics: Dict[str, float] = field(default_factory=dict)
-    latency_ms: float = 0.0
+    latency: float = 0.0
     evaluated: bool = False
 
     _compiled_cache: CompiledStrategies = field(default_factory=dict, repr=False)
@@ -155,7 +155,7 @@ class Genome:
             strategies={k: v.copy() for k, v in self.strategies.items()},
             fitness=new_fitness, 
             metrics=self.metrics.copy(),
-            latency_ms=self.latency_ms,
+            latency=self.latency,
             evaluated=self.evaluated,
             _compiled_cache={} 
         )

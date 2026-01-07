@@ -165,12 +165,11 @@ def test_evolution_solves_toy_problem():
             if retrieved_nodes and retrieved_nodes[0]['id'] == ground_truth_ids[0]:
                 hit = 1.0
             return {
-                "Recall@10": hit, 
-                "Hit@10": hit, 
+                "Recall@10": hit,
+                "Hit@10": hit,
                 "MRR": hit,
-                "latency_ms": 10.0
+                "latency": 10.0
             }
-
     evaluator = IntEvaluator(index_name="toy_sim")
     
     # Fitness: Prioritize Recall heavily
@@ -181,13 +180,12 @@ def test_evolution_solves_toy_problem():
         retriever=retriever,
         fitness_calculator=fitness_calculator,
         evaluator=evaluator,
-        train_queries=train_queries,
+        train_query_ids=train_queries,
         train_ground_truth=train_gt,
-        val_queries=val_queries,
+        val_query_ids=val_queries,
         val_ground_truth=val_gt,
         config=config
     )
-
     # 5. RUN EVOLUTION
     print("  > Starting optimization...")
     best_genome = engine.optimize()
@@ -234,8 +232,8 @@ def test_resume_simulation():
         retriever=retriever,
         fitness_calculator=fitness_calc,
         evaluator=evaluator,
-        train_queries=["10"], train_ground_truth=[[10]], # Dummy data
-        val_queries=["10"], val_ground_truth=[[10]],
+        train_query_ids=["10"], train_ground_truth=[[10]], # Dummy data
+        val_query_ids=["10"], val_ground_truth=[[10]],
         config=config
     )
     

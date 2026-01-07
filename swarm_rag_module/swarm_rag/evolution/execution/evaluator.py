@@ -138,7 +138,7 @@ class PopulationEvaluator:
             probe_metrics.append(m)
         
         avg_probe_metrics = self._mean_metrics(probe_metrics)
-        avg_probe_metrics['latency_ms'] = (time.time() - start_time) / probe_size
+        avg_probe_metrics['latency'] = (time.time() - start_time) / probe_size
 
         probe_fitness = self.fitness_calc.calculate(avg_probe_metrics, genome)
 
@@ -177,7 +177,7 @@ class PopulationEvaluator:
             all_metrics.append(m)
         
         avg_metrics = self._mean_metrics(all_metrics)
-        avg_metrics['latency_ms'] = total_latency / max(1, len(queries))
+        avg_metrics['latency'] = total_latency / max(1, len(queries))
 
         # Assign to Genome
         genome.metrics = avg_metrics

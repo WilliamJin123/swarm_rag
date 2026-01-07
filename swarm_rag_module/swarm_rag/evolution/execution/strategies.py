@@ -365,7 +365,7 @@ class GeneticStrategies:
             
             def make_node(val):
                 if val in ["*", "+", "-", "/"]: return ExpressionNode("op", val)
-                if val in ["semantic_similarity", "pheromone_repulsion", "flat", "deposit_semantic", "semantic_rank", "percentage_visited"]:
+                if val in ["semantic_similarity", "pheromone_repulsion", "flat", "semantic", "semantic_rank", "percentage_visited"]:
                      return ExpressionNode("feature", val)
                 return ExpressionNode("const", float(val))
 
@@ -392,7 +392,7 @@ class GeneticStrategies:
         # 1. Pure Vector
         population.append(create_seed(
             "gen0_seed_vector", 
-            "semantic_similarity", "deposit_semantic", "semantic_rank",
+            "semantic_similarity", "semantic", "semantic_rank",
             {"steps": 4}
         ))
         
@@ -400,7 +400,7 @@ class GeneticStrategies:
         if count > 1:
             population.append(create_seed(
                 "gen0_seed_hybrid", 
-                "semantic_similarity * pheromone_repulsion", "deposit_semantic", "semantic_rank",
+                "semantic_similarity * pheromone_repulsion", "semantic", "semantic_rank",
                 {"steps": 5}
             ))
 
