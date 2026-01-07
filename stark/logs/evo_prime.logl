@@ -1345,3 +1345,55 @@
 2026-01-06 19:12:28,179 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 40/130 queries
 2026-01-06 19:13:19,390 - INFO -     [Retriever] [gen0_rand_13] Parallel Progress: 50/130 queries
 2026-01-06 19:14:31,788 - INFO -     [Retriever] [gen0_rand_14] Parallel Progress: 50/130 queries
+2026-01-06 19:26:25,634 - INFO - Evaluating 4 genomes...
+2026-01-06 19:26:25,635 - INFO -   > Concurrency: 1 genomes parallel
+2026-01-06 19:26:25,635 - INFO -   > max_workers: 1 workers
+2026-01-06 19:26:25,636 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:26:27,332 - INFO - Unlinked shm_matrix
+2026-01-06 19:26:27,333 - INFO - Unlinked shm_ids
+2026-01-06 19:26:27,395 - INFO - Unlinked shm_matrix
+2026-01-06 19:26:27,395 - INFO - Unlinked shm_ids
+2026-01-06 19:35:19,778 - INFO - Evaluating 4 genomes...
+2026-01-06 19:35:19,778 - INFO -   > Concurrency: 1 genomes parallel
+2026-01-06 19:35:19,779 - INFO -   > max_workers: 1 workers
+2026-01-06 19:35:19,779 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:35:26,099 - INFO - Unlinked shm_matrix
+2026-01-06 19:35:26,100 - INFO - Unlinked shm_ids
+2026-01-06 19:35:26,105 - INFO - Unlinked shm_matrix
+2026-01-06 19:35:26,105 - INFO - Unlinked shm_ids
+2026-01-06 19:36:43,887 - INFO - Evaluating 4 genomes...
+2026-01-06 19:36:43,889 - INFO -   > Concurrency: 1 genomes parallel
+2026-01-06 19:36:43,889 - INFO -   > max_workers: 1 workers
+2026-01-06 19:36:43,890 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:37:06,693 - INFO -     [Retriever] [gen0_seed_vector_probe] Sequential Progress: 5/5 queries
+2026-01-06 19:37:09,131 - INFO -   > [Short-Circuit] gen0_seed_vector aborted. Probe Quality: 0.0154
+2026-01-06 19:37:09,132 - INFO -   > Finished 'gen0_seed_vector' (1/1) | Qual: 0.0154 | Cost: 1.3 | R@20: 0.0250 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0143
+2026-01-06 19:37:09,133 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:37:19,061 - INFO -     [Retriever] [gen0_seed_hybrid_probe] Sequential Progress: 5/5 queries
+2026-01-06 19:37:22,132 - INFO -   > [Short-Circuit] gen0_seed_hybrid aborted. Probe Quality: -0.0009
+2026-01-06 19:37:22,132 - INFO -   > Finished 'gen0_seed_hybrid' (1/1) | Qual: -0.0009 | Cost: 0.6 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 19:37:22,133 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:37:40,178 - INFO -     [Retriever] [gen0_seed_ant_probe] Sequential Progress: 5/5 queries
+2026-01-06 19:37:46,609 - INFO -   > [Short-Circuit] gen0_seed_ant aborted. Probe Quality: -0.0005
+2026-01-06 19:37:46,609 - INFO -   > Finished 'gen0_seed_ant' (1/1) | Qual: -0.0005 | Cost: 1.2 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 19:37:46,610 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:38:07,551 - INFO -     [Retriever] [gen0_rand_0_probe] Sequential Progress: 5/5 queries
+2026-01-06 19:38:17,087 - INFO -   > [Short-Circuit] gen0_rand_0 aborted. Probe Quality: 0.0473
+2026-01-06 19:38:17,088 - INFO -   > Finished 'gen0_rand_0' (1/1) | Qual: 0.0473 | Cost: 1.5 | R@20: 0.2250 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0284
+2026-01-06 19:38:17,089 - INFO - Gen 0: New Best Found! Score: 0.0473
+2026-01-06 19:38:17,089 - INFO - Evaluating 1 genomes...
+2026-01-06 19:38:17,090 - INFO -   > Concurrency: 1 genomes parallel
+2026-01-06 19:38:17,090 - INFO -   > max_workers: 1 workers
+2026-01-06 19:38:17,090 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:38:21,092 - INFO -     [Retriever] [gen0_rand_0_copy_probe] Sequential Progress: 2/2 queries
+2026-01-06 19:38:24,875 - INFO -   > [Short-Circuit] gen0_rand_0_copy aborted. Probe Quality: -0.0107
+2026-01-06 19:38:24,875 - INFO -   > Finished 'gen0_rand_0_copy' (1/1) | Qual: -0.0107 | Cost: 0.4 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 19:38:24,877 - INFO - --> Validation Gen 0: Recall 0.0000
+2026-01-06 19:38:24,903 - INFO - Evaluating 1 genomes...
+2026-01-06 19:38:24,903 - INFO -   > Concurrency: 1 genomes parallel
+2026-01-06 19:38:24,903 - INFO -   > max_workers: 1 workers
+2026-01-06 19:38:24,903 - INFO -   > Starting batch of 1 genomes...
+2026-01-06 19:38:27,243 - INFO -     [Retriever] [gen0_rand_0_copy_copy_probe] Sequential Progress: 2/2 queries
+2026-01-06 19:38:30,612 - INFO -   > [Short-Circuit] gen0_rand_0_copy_copy aborted. Probe Quality: -0.0095
+2026-01-06 19:38:30,612 - INFO -   > Finished 'gen0_rand_0_copy_copy' (1/1) | Qual: -0.0095 | Cost: 0.3 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-06 19:38:30,613 - INFO - --> Validation Gen 1: Recall 0.0000

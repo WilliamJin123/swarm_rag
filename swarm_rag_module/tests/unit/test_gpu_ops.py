@@ -5,7 +5,8 @@ from swarm_rag.ops import init_backend, xp, to_device, to_cpu
 def test_backend_initialization_cpu():
     """Verify that the CPU backend initializes correctly and uses NumPy."""
     init_backend(use_gpu=False)
-    assert xp is np, "xp should be numpy when GPU is disabled"
+    # With Proxy, xp will not be np itself, but it should behave like it
+    assert xp.dot is np.dot
     
     data = [1.0, 2.0, 3.0]
     arr = to_device(data)
@@ -30,10 +31,26 @@ def test_gpu_fallback_behavior():
     
     try:
         import cupy as cp
-        assert xp is cp, "xp should be cupy if cupy is installed and use_gpu=True"
+        # xp is a proxy, its dot should now be cupy's dot
+        assert xp.dot is cp.dot
         assert hasattr(xp, 'ndarray'), "xp should have ndarray attribute"
     except ImportError:
-        assert xp is np, "xp should fallback to numpy if cupy is not installed"
+        assert xp.dot is np.dot, "xp should fallback to numpy if cupy is not installed"
+
+def test_proxy_ndarray_isinstance():
+    """Verify that isinstance works with xp.ndarray through the proxy."""
+    init_backend(use_gpu=False)
+    arr = np.array([1, 2, 3])
+    # xp.ndarray should resolve to np.ndarray
+    assert isinstance(arr, xp.ndarray)
+    
+    try:
+        import cupy as cp
+        init_backend(use_gpu=True)
+        c_arr = cp.array([1, 2, 3])
+        assert isinstance(c_arr, xp.ndarray)
+    except ImportError:
+        pass
 
 if __name__ == "__main__":
     test_backend_initialization_cpu()

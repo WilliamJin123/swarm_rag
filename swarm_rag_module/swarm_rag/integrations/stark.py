@@ -11,6 +11,7 @@ from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProv
 from ..interfaces.enums import HeuristicKey
 from ..utils import fail_on_missing_imports, LRUCache
 from ..core import HeuristicContext, HeuristicRegistry
+from ..ops import xp, to_cpu
 
 try:
     import torch
@@ -123,13 +124,13 @@ class StarkSKBAdapter(GraphStore):
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.STARK_CENTRALITY)
-    def centrality_heuristic(ctx :HeuristicContext) -> np.ndarray:
+    def centrality_heuristic(ctx :HeuristicContext) -> xp.ndarray:
         """
         Vectorized centrality heuristic. 
         Uses pre-fetched ctx.node_degrees for speed.
         """
         graph: StarkSKBAdapter = ctx.graph
-        log_degrees = np.log(1 + ctx.node_degrees)
+        log_degrees = xp.log(1 + ctx.node_degrees)
 
         #Sigmoid normalization
         normalized = log_degrees / (log_degrees + graph.avg_log_degree + 1e-8)
@@ -193,8 +194,10 @@ class StarkInMemoryVectorStore(VectorStore):
 
         atexit.register(self.close)
 
-    def search(self, query_vec: np.ndarray, limit: int):
-        q = query_vec.reshape(1, -1).astype('float32')
+    def search(self, query_vec: xp.ndarray, limit: int):
+        # FAISS requires numpy on CPU
+        query_vec_cpu = to_cpu(query_vec)
+        q = query_vec_cpu.reshape(1, -1).astype('float32')
         faiss.normalize_L2(q)
         scores, indices = self.index.search(q, min(limit, self.n_docs))
         

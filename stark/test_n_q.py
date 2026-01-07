@@ -2,6 +2,7 @@
 import random
 import time
 import argparse
+import os
 from typing import List, Optional
 import pandas as pd
 import logging
@@ -18,7 +19,8 @@ def test_stark_questions(
     dataset_names: List[str], 
     num_questions: int = 10, 
     seed: Optional[int] = None,
-    human_gen: bool = False
+    human_gen: bool = False,
+    use_gpu: bool = False
 ) -> None:
     # ... (function setup is the same) ...
     if seed is not None:
@@ -28,7 +30,7 @@ def test_stark_questions(
 
     for dataset_name in dataset_names:
         print(f"\n{'=' * 50}")
-        print(f"Testing dataset: {dataset_name}")
+        print(f"Testing dataset: {dataset_name} (GPU={use_gpu})")
         print(f"{'=' * 50}")
 
         # Load Data
@@ -44,9 +46,14 @@ def test_stark_questions(
         print("Precomputing Adjacency...")
         adjacency_dict = precompute_stark_adjacency(skb, dataset_name)
 
+        # Ensure cache directory exists
+        cache_dir = os.path.join("stark", "adjacency_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        graph_cache_path = os.path.join(cache_dir, f"graph_{dataset_name}.npz")
+
         # Initialize Components
         vector_store = StarkInMemoryVectorStore(doc_embs)
-        graph_store = StarkSKBAdapter(skb, dataset_name, adjacency_dict=adjacency_dict)
+        graph_store = StarkSKBAdapter(skb, dataset_name, adjacency_dict=adjacency_dict, cache_path=graph_cache_path)
         embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
 
         retriever = SwarmRetriever(
@@ -54,6 +61,7 @@ def test_stark_questions(
             graph_store=graph_store,
             embedding_provider=embedding_provider,
             cache_neighbors=False,
+            use_gpu=use_gpu
         )
 
         evaluator = Evaluator(k_values=[1, 5, 10, 20], index_name=dataset_name)
@@ -141,7 +149,8 @@ if __name__ == "__main__":
     parser.add_argument("--n", type=int, default=10, help="Number of questions to test")
     parser.add_argument("--seed", type=int, default=None, help="Seed for random sampling for reproducibility")
     parser.add_argument("--he", "--human-eval", action='store_true', help="Use human-generated QA data")
+    parser.add_argument("--gpu", action='store_true', help="Use GPU acceleration")
 
     args = parser.parse_args()
     
-    test_stark_questions(args.datasets, args.n, seed=args.seed, human_gen=args.he)
+    test_stark_questions(args.datasets, args.n, seed=args.seed, human_gen=args.he, use_gpu=args.gpu)

@@ -527,7 +527,7 @@ class SwarmRetriever:
 
         # Selection
         probs = total_scores / xp.sum(total_scores)
-        chosen_idx = int(xp_rng.choice(len(valid_ids), p=probs))
+        chosen_idx = int(xp_rng.choice(len(valid_ids), size=1, p=probs))
         next_node = valid_ids[chosen_idx]
         
         # Calculate deposit
