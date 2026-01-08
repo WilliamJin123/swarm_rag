@@ -94,7 +94,7 @@ def get_test_config():
         "plot_title": PLOT_TITLE,
         
         # Toy Problem Search Space
-        "param_ranges": {
+        "swarmrag_param_ranges": {
             "n_agents": (1, 5),
             "alpha": (0.1, 0.99),
             "decay": (0.1, 0.99)
@@ -137,7 +137,7 @@ def test_evolution_solves_toy_problem():
         "validation_frequency": 1,
         
         # Define the Search Space for our Toy Problem
-        "param_ranges": {
+        "swarmrag_param_ranges": {
             "n_agents": (1, 5),       # Try 1 to 5 agents
             "alpha": (0.1, 0.99),     # Step probability (we want high)
             "decay": (0.1, 0.99)      # Max steps (we need enough to reach target)

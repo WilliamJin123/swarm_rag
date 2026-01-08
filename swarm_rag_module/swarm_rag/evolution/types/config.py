@@ -7,6 +7,14 @@ try:
 except ImportError:
     from typing_extensions import NotRequired
 
+class SwarmRAGParamsRange(TypedDict):
+    n_agents: Tuple[int, int]
+    steps: Tuple[int, int]
+    decay: Tuple[float, float]
+    initial_pool_size: Tuple[int, int]
+    start_subset: Tuple[int, int]
+    drop_zone_inc: Tuple[float, float]
+
 class EvolutionConfigDict(TypedDict):
     """
     Configuration for the Evolutionary Engine itself.
@@ -46,7 +54,7 @@ class EvolutionConfigDict(TypedDict):
 
     # Ranges for Continuous/Integer SwarmParams
     # format: 'param_name': (min, max)
-    param_ranges: Dict[str, Tuple[float, float]]
+    swarmrag_param_ranges: SwarmRAGParamsRange
 
     # Validation & Logging
     validation_frequency: int
@@ -80,8 +88,8 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "boltzmann_diversity_threshold": 0.05,
     "mutation_max_expr_size": 25,
     "expr_max_depth": 5,
-    "n_agent_groups": 2,
-    "param_ranges": {
+    "n_agent_groups": 3,
+    "swarmrag_param_ranges": {
         "n_agents": (5, 30),
         "steps": (4, 12),
         "decay": (0.85, 0.99),

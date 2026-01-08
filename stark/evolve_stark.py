@@ -133,7 +133,7 @@ def run_evolution(
         
         # Constraints
         "expr_max_depth": 5,
-        "param_ranges": {
+        "swarmrag_param_ranges": {
             "n_agents": (10, 80),                    # Expanded range for more swarm capacity
             "steps": (4, 15),                       # Minimum steps for enough exploration
             "decay": (0.3, 0.95),

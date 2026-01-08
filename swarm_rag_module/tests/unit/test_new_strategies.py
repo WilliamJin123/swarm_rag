@@ -72,7 +72,7 @@ def test_aggressive_mutation():
     # 2. Setup Context
     config = DEFAULT_EVO_CONFIG.copy()
     # Define ranges to allow resampling
-    config['param_ranges'] = {
+    config['swarmrag_param_ranges'] = {
         'n_agents': (5, 30),
         'decay': (0.1, 0.9)
     }

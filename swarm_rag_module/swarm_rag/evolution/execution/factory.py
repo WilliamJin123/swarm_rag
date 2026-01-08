@@ -48,7 +48,7 @@ class GenomeFactory:
     def initialize_parameters(self) -> SwarmParams:
         """Randomizes global Swarm parameters based on config ranges."""
         params = DEFAULT_PARAMS.copy()
-        ranges = self.config['param_ranges']
+        ranges = self.config['swarmrag_param_ranges']
         for key in ["n_agents", "steps", "decay", "initial_pool_size", "start_subset", "drop_inc"]:
             if key in ranges:
                 min_v, max_v = ranges[key]

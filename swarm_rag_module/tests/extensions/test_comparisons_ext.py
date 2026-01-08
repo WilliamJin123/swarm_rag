@@ -50,7 +50,7 @@ def get_standard_config(seed=42, run_name="test"):
     config.update({
         "n_generations": 6,           
         "population_size": 15,        
-        "param_ranges": {
+        "swarmrag_param_ranges": {
             "n_agents": (5, 30),
             "steps": (4, 12),
             "decay": (0.85, 0.99)

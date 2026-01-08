@@ -397,7 +397,7 @@ class GeneticStrategies:
         - Ramped Half-and-Half for expression trees.
         - Uniform random sampling for scalar parameters.
         """
-        ranges = ctx.config['param_ranges']
+        ranges = ctx.config['swarmrag_param_ranges']
         max_d = ctx.config['expr_max_depth']
         n_groups = ctx.config["n_agent_groups"]
 
@@ -471,7 +471,7 @@ class GeneticStrategies:
         - Forces shallow trees (max_depth=2) using 'grow' method.
         - Useful for starting with simple, interpretable strategies.
         """
-        ranges = ctx.config['param_ranges']
+        ranges = ctx.config['swarmrag_param_ranges']
         n_groups = ctx.config["n_agent_groups"]
         base_rate = ctx.config['base_mutation_rate']
         
@@ -631,7 +631,7 @@ class GeneticStrategies:
                 
                 # 20% chance: Exploration (Re-sample or Large Jump)
                 else:
-                     ranges = ctx.config.get('param_ranges', {})
+                     ranges = ctx.config.get('swarmrag_param_ranges', {})
                      if key in ranges:
                          min_v, max_v = ranges[key]
                          if isinstance(min_v, int):
@@ -701,7 +701,7 @@ class GeneticStrategies:
         # 1. Boost rate
         genome.mutation_rate = 0.4 # Lock to high rate
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
-        ranges = ctx.config['param_ranges']
+        ranges = ctx.config['swarmrag_param_ranges']
 
         # 2. Aggressive Parameter Resampling
         for key in genome.params.keys():
@@ -769,7 +769,7 @@ class GeneticStrategies:
                     elif isinstance(val, float):
                         genome.params[key] = max(0.001, min(0.999, val * random.gauss(1.0, 0.1)))
                 else: # Resample
-                     ranges = ctx.config.get('param_ranges', {})
+                     ranges = ctx.config.get('swarmrag_param_ranges', {})
                      if key in ranges:
                          min_v, max_v = ranges[key]
                          if isinstance(min_v, int):
