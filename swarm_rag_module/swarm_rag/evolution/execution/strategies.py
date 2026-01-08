@@ -698,12 +698,12 @@ class GeneticStrategies:
         - Parameters are often re-sampled from global ranges instead of jittered.
         - Tree mutations prefer 'subtree' replacement.
         """
-        # 1. Boost rate
+        # Boost rate
         genome.mutation_rate = 0.4 # Lock to high rate
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
         ranges = ctx.config['swarmrag_param_ranges']
 
-        # 2. Aggressive Parameter Resampling
+        # Aggressive Parameter Resampling
         for key in genome.params.keys():
             if random.random() < rate:
                 if key in ranges:
@@ -722,7 +722,13 @@ class GeneticStrategies:
                         else:
                             genome.params[key] = max(0.01, val * random.uniform(0.7, 1.3))
 
-        # 3. Aggressive Tree Mutation
+        # Aggressive Group Ratio Mutation
+        for key, val in genome.group_ratios.items():
+            if random.random() < rate:
+                # Larger Jitter for aggressive
+                genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.6, 1.4)))
+
+        # Aggressive Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
                 feature_list = ctx.expression_features.get(key)
@@ -759,7 +765,7 @@ class GeneticStrategies:
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
-        # 1. Standard Parameter Jitter (Same as expression_tree_mutation)
+        # Standard Parameter Jitter (Same as expression_tree_mutation)
         for key, val in genome.params.items():
             if random.random() < rate:
                 if random.random() < 0.8: # Fine tuning
@@ -777,7 +783,12 @@ class GeneticStrategies:
                          else:
                              genome.params[key] = random.uniform(min_v, max_v)
 
-        # 2. Guided Tree Mutation
+        # Group Ratio Mutation (Standard Jitter)
+        for key, val in genome.group_ratios.items():
+            if random.random() < rate:
+                genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.8, 1.2)))
+
+        # Guided Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
                 feature_list = ctx.expression_features.get(key)
