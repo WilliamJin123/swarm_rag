@@ -34,6 +34,7 @@ class GeneticKey(Enum):
     STOCHASTIC_UNIVERSAL_SAMPLING="stochastic_universal_sampling"
     TRUNCATION = "truncation"
     DIVERSITY_TRUNCATION = "diversity_truncation"
+    BOLTZMANN = "boltzmann"
 
     # --- CROSSOVER ---
     UNIFORM_PARAMETER_MIX = "uniform_parameter_mix"
