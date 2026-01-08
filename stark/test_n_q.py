@@ -11,6 +11,7 @@ import logging
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from swarm_rag.core import Heuristics, SwarmRetriever, HeuristicRegistry
+from swarm_rag.interfaces.enums import HeuristicKey
 from swarm_rag.integrations.stark import StarkInMemoryVectorStore, StarkPreComputedEmbeddingHandler, StarkSKBAdapter
 from swarm_rag.eval import Evaluator, EvalReporter
 from load_stark import load_and_download_embeddings, load_and_download_skb, load_and_download_qa, precompute_stark_adjacency
@@ -62,7 +63,11 @@ def test_stark_questions(
             cache_neighbors=False
         )
 
-        evaluator = Evaluator(k_values=[1, 5, 10, 20], index_name=dataset_name)
+        evaluator = Evaluator(
+            k_values=[1, 5, 10, 20], 
+            index_name=dataset_name,
+            stats=['mean', 'std']    
+        )
         total_questions = len(qa_data)
 
         if num_questions >= total_questions:
@@ -88,19 +93,19 @@ def test_stark_questions(
                 initial_pool_size=30,
                 start_subset=10,
                 top_k=20,
-                # movement_strategies={
-                #     "semantic": (Heuristics.semantic_similarity_unnormalized, 0.35),
-                #     "centrality": (HeuristicRegistry.get_movement("stark_centrality"), 0.2),
-                #     "diversity": (Heuristics.pheromone_repulsion, 0.4),
-                #     "jitter": (Heuristics.random_jitter, 0.05),
-                # },
-                # deposit_strategies={
-                #     "semantic_deposit": (Heuristics.deposit_semantic_unnormalized, 1.0)
-                # },
-                # ranking_strategies={
-                #     "visited": (Heuristics.percentage_visited, 0.2),
-                #     "semantic": (Heuristics.semantic_rank, 0.8),
-                # },
+                movement_strategies={
+                    "semantic": (Heuristics.semantic_similarity_unnormalized, 0.35),
+                    "centrality": (HeuristicRegistry.get_movement("stark_centrality"), 0.2),
+                    "diversity": (Heuristics.pheromone_repulsion, 0.4),
+                    "jitter": (Heuristics.random_jitter, 0.05),
+                },
+                deposit_strategies={
+                    "f": (HeuristicRegistry.get(HeuristicKey.FLAT), 1.0)
+                },
+                ranking_strategies={
+                    "visited": (Heuristics.percentage_visited, 0.2),
+                    "semantic": (Heuristics.semantic_rank, 0.8),
+                },
             )
             latency = time.time() - start_time
 

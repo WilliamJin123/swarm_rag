@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 import pandas as pd
 import matplotlib.pyplot as plt
+import re
 
 from .metrics import Evaluator
 
@@ -30,6 +31,14 @@ class EvalReporter:
     def plot_comparison(self, aggregated_results: Dict[str, pd.DataFrame], metrics: Optional[list] = None):
         plot_comparison(aggregated_results, metrics or self.metrics)
 
+def _extract_metric_value(val_str: str) -> float:
+    """Extracts the primary metric value (mean) from the formatted string."""
+    # Look for the first number (float or int) at the start of the string
+    match = re.match(r"^([\d\.]+)", str(val_str))
+    if match:
+        return float(match.group(1))
+    return 0.0
+
 def plot_metrics(df: pd.DataFrame, dataset_name: str, metrics: list):
     """Generate bar plots for evaluation metrics of a single dataset."""
     # Extract values from formatted strings
@@ -37,7 +46,7 @@ def plot_metrics(df: pd.DataFrame, dataset_name: str, metrics: list):
     for metric in metrics:
         if metric in df.columns:
             val_str = df[metric].iloc[0]
-            values.append(float(val_str.split(' ± ')[0]))
+            values.append(_extract_metric_value(val_str))
         else:
             values.append(0.0)
     
@@ -72,7 +81,7 @@ def plot_comparison(all_results: Dict[str, pd.DataFrame], metrics: list):
         for dataset, df in all_results.items():
             if metric in df.columns:
                 val_str = df[metric].iloc[0]
-                values.append(float(val_str.split(' ± ')[0]))
+                values.append(_extract_metric_value(val_str))
                 labels.append(dataset)
         plot_data[metric] = (labels, values)
     

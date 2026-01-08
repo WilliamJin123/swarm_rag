@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Any, TypedDict, Union
 from .metric_functions import MetricFunctions
 
@@ -26,16 +27,26 @@ Metrics = TypedDict('Metrics', {
 }, total=False)
 
 class Evaluator:
-    def __init__(self, k_values=[1, 5, 10, 20], diversity_cutoff=20, index_name="Swarm_RAG"):
+    def __init__(
+        self, 
+        k_values=[1, 5, 10, 20], 
+        diversity_cutoff=20, 
+        index_name="Swarm_RAG",
+        stats: List[str] = None
+    ):
         """
         Args:
             k_values: List of k values for Hit@K and Recall@K
             diversity_cutoff: Number of top results to consider for diversity metrics
             index_name: Name to use in the final results DataFrame
+            stats: List of statistics to aggregate. Options: 
+                   ['mean', 'std', 'var', 'min', 'max', 'range', 'median', 'iqr'].
+                   Defaults to ['mean', 'std'].
         """
         self.k_values = k_values
         self.diversity_cutoff = diversity_cutoff
         self.index_name = index_name
+        self.stats = stats if stats is not None else ['mean', 'std']
         
 
     def calculate_metrics(
@@ -95,7 +106,8 @@ class Evaluator:
 
     def aggregate_results(self, results: List[Metrics]) -> pd.DataFrame:
         """
-        Averages the metrics across all queries to produce the final table.
+        Aggregates the metrics across all queries to produce the final table
+        based on the configured stats.
         """
         if not results:
             return pd.DataFrame()
@@ -106,16 +118,72 @@ class Evaluator:
         if len(numeric_cols) == 0:
             return pd.DataFrame()
         
-        # Calculate mean and std for all numeric columns
-        summary = df[numeric_cols].agg(['mean', 'std']).T
+        # Define custom aggregations
+        agg_funcs = {}
         
-        # Format for readability - include both mean and std
+        def iqr(x):
+            return np.percentile(x, 75) - np.percentile(x, 25)
+        
+        def rng(x): # range
+            return np.max(x) - np.min(x)
+
+        # Map string stats to pandas/numpy compatible functions
+        valid_stats = {
+            'mean': 'mean',
+            'std': 'std',
+            'var': 'var',
+            'min': 'min',
+            'max': 'max',
+            'median': 'median',
+            'sum': 'sum',
+            'count': 'count',
+            'iqr': iqr,
+            'range': rng
+        }
+
+        # Filter valid stats
+        selected_stats = [s for s in self.stats if s in valid_stats]
+        if not selected_stats:
+            selected_stats = ['mean', 'std'] # Fallback
+
+        # We use a list of functions for aggregation
+        aggs_to_run = [valid_stats[s] for s in selected_stats]
+        
+        summary = df[numeric_cols].agg(aggs_to_run).T
+        
+        summary.columns = selected_stats
+
         formatted = {}
         for metric in summary.index:
-            mean_val = summary.loc[metric, 'mean']
-            std_val = summary.loc[metric, 'std']
-            formatted[metric] = (
-                f"{mean_val:.4f}" if pd.isna(std_val) else f"{mean_val:.4f} ± {std_val:.4f}"
-            )
+            parts = []
+            # We prioritize mean and std/var at the front
+            
+            val_mean = summary.loc[metric, 'mean'] if 'mean' in selected_stats else None
+            val_std = summary.loc[metric, 'std'] if 'std' in selected_stats else None
+            
+            # Primary part
+            if val_mean is not None:
+                if val_std is not None:
+                    # Check for NaN std (single sample)
+                    if pd.isna(val_std):
+                        parts.append(f"{val_mean:.4f}")
+                    else:
+                        parts.append(f"{val_mean:.4f} σ {val_std:.4f}")
+                else:
+                    parts.append(f"{val_mean:.4f}")
+            
+            extras = []
+            for stat in selected_stats:
+                if stat in ['mean', 'std']: continue # Already handled
+                
+                val = summary.loc[metric, stat]
+                if pd.isna(val): continue
+                
+                extras.append(f"{stat}: {val:.4f}")
+            
+            if extras:
+                parts.append(f"[{' | '.join(extras)}]")
+            
+            formatted[metric] = " ".join(parts)
 
         return pd.DataFrame([formatted], index=[self.index_name])
