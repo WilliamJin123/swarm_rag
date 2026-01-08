@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Optional, Union, Callable
 import numpy as np
-from ..ops import xp
 import math
 from dataclasses import dataclass, field
 
@@ -127,7 +126,7 @@ class Heuristics:
         - 0.5 = orthogonal/unrelated (cosine = 0)
         - 1.0 = perfect match (cosine = 1)
         """
-        scores = xp.dot(ctx.target_vecs, ctx.query_vec)
+        scores = np.dot(ctx.target_vecs, ctx.query_vec)
         # Normalize from [-1, 1] to [0, 1]
         return (scores + 1.0) / 2.0
 
@@ -137,7 +136,7 @@ class Heuristics:
         """
         RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
         """
-        return xp.dot(ctx.target_vecs, ctx.query_vec)
+        return np.dot(ctx.target_vecs, ctx.query_vec)
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.NODE_CENTRALITY)
@@ -148,7 +147,7 @@ class Heuristics:
         
         Range: [0, 1] (sigmoid normalization)
         """
-        log_degree = xp.log(1 + ctx.node_degrees)
+        log_degree = np.log(1 + ctx.node_degrees)
         log_avg = math.log(1 + ctx.avg_degree)
         # Sigmoid normalization
         return log_degree / (log_degree + log_avg + 1e-8)
@@ -168,7 +167,7 @@ class Heuristics:
     def random_jitter(ctx: HeuristicContext) -> Any:
         """Adds pure chaos to break loops."""
         count = len(ctx.target_ids) if ctx.target_ids is not None else 1
-        return xp.random.random(count)
+        return np.random.random(count)
 
     # --- RANKING HEURISTICS (Final Consensus) ---
 
@@ -187,7 +186,7 @@ class Heuristics:
         Uses full [-1, 1] range since we want to distinguish good from bad.
         """
         val = Heuristics.semantic_similarity_unnormalized(ctx)
-        return val.item() if isinstance(val, (np.ndarray, xp.ndarray)) else val
+        return val.item() if isinstance(val, (np.ndarray, np.ndarray)) else val
 
     # --- DEPOSIT HEURISTICS ---
 
@@ -195,7 +194,7 @@ class Heuristics:
     @HeuristicRegistry.register_deposit(HeuristicKey.FLAT)
     def deposit_flat(ctx: HeuristicContext) -> Any:
         """Returns array of 1.0s matching input size."""
-        return xp.ones_like(ctx.pheromone_values)
+        return np.ones_like(ctx.pheromone_values)
 
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.HUB)
@@ -211,7 +210,7 @@ class Heuristics:
         Only deposits on positive matches (similarity > 0.5 in normalized space) with range 0-1.
         """
         normalized_sim = Heuristics.semantic_similarity(ctx)
-        return xp.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0, 0.0)
+        return np.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0, 0.0)
 
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.SEMANTIC_UNNORMALIZED)
@@ -223,7 +222,7 @@ class Heuristics:
         Range: [0, 1]
         """
         sim = Heuristics.semantic_similarity_unnormalized(ctx)
-        return xp.maximum(0.0, sim)
+        return np.maximum(0.0, sim)
     
     @staticmethod
     @HeuristicRegistry.register_deposit(HeuristicKey.EXPLORATION_BONUS)
@@ -246,7 +245,7 @@ class Heuristics:
         max_p = max(ctx.max_pheromone, 0.0001)
         
         traffic_ratio = ctx.pheromone_values / max_p
-        traffic_ratio = xp.clip(traffic_ratio, 0.0, 1.0)
+        traffic_ratio = np.clip(traffic_ratio, 0.0, 1.0)
             
         multiplier = fresh_multiplier - (fresh_multiplier - high_traffic_multiplier) * traffic_ratio
         return base_deposit * multiplier
@@ -264,5 +263,5 @@ class Heuristics:
         This creates a "rich get richer" effect.
         """
         multiplier = 1.0 + (amplification_factor * ctx.pheromone_values)
-        return base_deposit * xp.minimum(multiplier, max_multiplier)
+        return base_deposit * np.minimum(multiplier, max_multiplier)
     

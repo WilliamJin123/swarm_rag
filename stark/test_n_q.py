@@ -19,8 +19,7 @@ def test_stark_questions(
     dataset_names: List[str], 
     num_questions: int = 10, 
     seed: Optional[int] = None,
-    human_gen: bool = False,
-    use_gpu: bool = False
+    human_gen: bool = False
 ) -> None:
     # ... (function setup is the same) ...
     if seed is not None:
@@ -30,7 +29,7 @@ def test_stark_questions(
 
     for dataset_name in dataset_names:
         print(f"\n{'=' * 50}")
-        print(f"Testing dataset: {dataset_name} (GPU={use_gpu})")
+        print(f"Testing dataset: {dataset_name}")
         print(f"{'=' * 50}")
 
         # Load Data
@@ -60,8 +59,7 @@ def test_stark_questions(
             vector_store=vector_store,
             graph_store=graph_store,
             embedding_provider=embedding_provider,
-            cache_neighbors=False,
-            use_gpu=use_gpu
+            cache_neighbors=False
         )
 
         evaluator = Evaluator(k_values=[1, 5, 10, 20], index_name=dataset_name)
@@ -90,19 +88,19 @@ def test_stark_questions(
                 initial_pool_size=30,
                 start_subset=10,
                 top_k=20,
-                movement_strategies={
-                    "semantic": (Heuristics.semantic_similarity_unnormalized, 0.35),
-                    "centrality": (HeuristicRegistry.get_movement("stark_centrality"), 0.2),
-                    "diversity": (Heuristics.pheromone_repulsion, 0.4),
-                    "jitter": (Heuristics.random_jitter, 0.05),
-                },
-                deposit_strategies={
-                    "semantic_deposit": (Heuristics.deposit_semantic_unnormalized, 1.0)
-                },
-                ranking_strategies={
-                    "visited": (Heuristics.percentage_visited, 0.5),
-                    "semantic": (Heuristics.semantic_rank, 0.5),
-                },
+                # movement_strategies={
+                #     "semantic": (Heuristics.semantic_similarity_unnormalized, 0.35),
+                #     "centrality": (HeuristicRegistry.get_movement("stark_centrality"), 0.2),
+                #     "diversity": (Heuristics.pheromone_repulsion, 0.4),
+                #     "jitter": (Heuristics.random_jitter, 0.05),
+                # },
+                # deposit_strategies={
+                #     "semantic_deposit": (Heuristics.deposit_semantic_unnormalized, 1.0)
+                # },
+                # ranking_strategies={
+                #     "visited": (Heuristics.percentage_visited, 0.2),
+                #     "semantic": (Heuristics.semantic_rank, 0.8),
+                # },
             )
             latency = time.time() - start_time
 
@@ -149,8 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--n", type=int, default=10, help="Number of questions to test")
     parser.add_argument("--seed", type=int, default=None, help="Seed for random sampling for reproducibility")
     parser.add_argument("--he", "--human-eval", action='store_true', help="Use human-generated QA data")
-    parser.add_argument("--gpu", action='store_true', help="Use GPU acceleration")
 
     args = parser.parse_args()
     
-    test_stark_questions(args.datasets, args.n, seed=args.seed, human_gen=args.he, use_gpu=args.gpu)
+    test_stark_questions(args.datasets, args.n, seed=args.seed, human_gen=args.he)

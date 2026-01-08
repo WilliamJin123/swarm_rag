@@ -11,7 +11,6 @@ from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProv
 from ..interfaces.enums import HeuristicKey
 from ..utils import fail_on_missing_imports, LRUCache
 from ..core import HeuristicContext, HeuristicRegistry
-from ..ops import xp, to_cpu
 
 try:
     import torch
@@ -43,7 +42,10 @@ class StarkSKBAdapter(GraphStore):
         self, 
         skb_data: 'SKB', 
         dataset: str, 
-        cache_size: int = 10000,
+        cache_neighbors: bool = True,
+        cache_degrees: bool = True,
+        neighbor_cache_size: int = 10000,
+        degree_cache_size: int = 10000,
         adjacency_dict: Optional[Dict[int, List[int]]] = None,
         cache_path=None
     ):
@@ -57,6 +59,9 @@ class StarkSKBAdapter(GraphStore):
         self.dataset = dataset
         self.cache_path = cache_path or f"./adjacency_cache/graph_{dataset}.npz"
         self.avg_log_degree = AVG_LOG_DEGREE_BY_DATASET[dataset]
+        
+        self.cache_neighbors = cache_neighbors
+        self.cache_degrees = cache_degrees
 
         if os.path.exists(self.cache_path):
             logger.info(f"Loading CSR graph from {self.cache_path}...")
@@ -69,8 +74,12 @@ class StarkSKBAdapter(GraphStore):
             self.use_precomputed = True
         else:
             logger.warning("No pre-computed adjacency provided. Falling back to LRU cache (Slow).")
-            self.neighbor_cache = LRUCache(cache_size)
             self.use_precomputed = False
+            
+            if self.cache_neighbors:
+                self.neighbor_cache = LRUCache(neighbor_cache_size)
+            if self.cache_degrees:
+                self.degree_cache = LRUCache(degree_cache_size)
 
     def _dict_to_csr(self, adj_dict: Dict[int, List[int]]) -> sp.csr_matrix:
         """Converts adjacency dictionary to a memory-efficient CSR matrix."""
@@ -91,25 +100,40 @@ class StarkSKBAdapter(GraphStore):
 
     def get_neighbors(self, node_id: int) -> np.ndarray:
         if self.use_precomputed:
-            if node_id >= self.adj_matrix.shape[0]: return []
+            if node_id >= self.adj_matrix.shape[0]: return np.array([])
             start = self.adj_matrix.indptr[node_id]
             end = self.adj_matrix.indptr[node_id+1]
             # Treat as READ-ONLY.
             return self.adj_matrix.indices[start:end]
         
-        cached = self.neighbor_cache.get(node_id)
-        if cached is not None: return np.array(cached)
+        if self.cache_neighbors:
+            cached = self.neighbor_cache.get(node_id)
+            if cached is not None: return np.array(cached)
         
         neighbors = self.skb.get_neighbor_nodes(node_id)
         np_neighbors = np.array(neighbors)
-        self.neighbor_cache.set(node_id, np_neighbors)
+        
+        if self.cache_neighbors:
+            self.neighbor_cache.set(node_id, np_neighbors)
+            
         return np_neighbors
             
     def get_degree(self, node_id: int) -> int:
         if self.use_precomputed:
             if node_id >= self.adj_matrix.shape[0]: return 0
             return self.adj_matrix.indptr[node_id+1] - self.adj_matrix.indptr[node_id]
-        return len(self.get_neighbors(node_id))
+        
+        if self.cache_degrees:
+            cached = self.degree_cache.get(node_id)
+            if cached is not None: return cached
+
+        neighbors = self.get_neighbors(node_id)
+        deg = len(neighbors)
+        
+        if self.cache_degrees:
+            self.degree_cache.set(node_id, deg)
+            
+        return deg
 
     def contains(self, node_id: int) -> bool:
         if self.use_precomputed:
@@ -124,13 +148,13 @@ class StarkSKBAdapter(GraphStore):
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.STARK_CENTRALITY)
-    def centrality_heuristic(ctx :HeuristicContext) -> xp.ndarray:
+    def centrality_heuristic(ctx :HeuristicContext) -> np.ndarray:
         """
         Vectorized centrality heuristic. 
         Uses pre-fetched ctx.node_degrees for speed.
         """
         graph: StarkSKBAdapter = ctx.graph
-        log_degrees = xp.log(1 + ctx.node_degrees)
+        log_degrees = np.log(1 + ctx.node_degrees)
 
         #Sigmoid normalization
         normalized = log_degrees / (log_degrees + graph.avg_log_degree + 1e-8)
@@ -194,9 +218,9 @@ class StarkInMemoryVectorStore(VectorStore):
 
         atexit.register(self.close)
 
-    def search(self, query_vec: xp.ndarray, limit: int):
+    def search(self, query_vec: np.ndarray, limit: int):
         # FAISS requires numpy on CPU
-        query_vec_cpu = to_cpu(query_vec)
+        query_vec_cpu = np.asarray(query_vec)
         q = query_vec_cpu.reshape(1, -1).astype('float32')
         faiss.normalize_L2(q)
         scores, indices = self.index.search(q, min(limit, self.n_docs))

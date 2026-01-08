@@ -57,8 +57,7 @@ def run_evolution(
     val_sample_size=100,
     start_from_scratch=False,
     concurrent_evals=4,
-    max_workers=4,
-    use_gpu=False
+    max_workers=4
 ):
     # Load
     skb = load_and_download_skb(dataset_name)
@@ -77,8 +76,7 @@ def run_evolution(
         graph_store=graph_store,
         embedding_provider=embedding_provider,
         cache_neighbors=False, # Stark Extension Handles this
-        cache_vectors=True,
-        use_gpu=use_gpu
+        cache_vectors=True
     )
     
     # Prepare Data Subsets
@@ -241,7 +239,6 @@ if __name__ == "__main__":
     parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent genomes to evaluate.")
     parser.add_argument("--workers", type=int, default=4, help="Number of threads per retrieval.")
     parser.add_argument("--scratch", action="store_true", dest="start_from_scratch", help="If set, clears previous checkpoints/logs to start fresh.")
-    parser.add_argument("--gpu", action="store_true", help="Enable GPU acceleration (requires cupy).")
     args = parser.parse_args()
     
     run_evolution(
@@ -252,6 +249,5 @@ if __name__ == "__main__":
         args.val_ss,
         args.start_from_scratch,
         args.concurrent,
-        args.workers,
-        args.gpu
+        args.workers
     )
