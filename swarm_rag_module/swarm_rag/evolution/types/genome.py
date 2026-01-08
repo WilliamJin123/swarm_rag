@@ -1,5 +1,6 @@
 from typing import Dict, Callable, Any, List, Set, TypedDict
 from dataclasses import dataclass, field
+
 try:
     from typing import NotRequired
 except ImportError:
@@ -9,8 +10,10 @@ import numpy as np
 from .fitness_results import FitnessResult
 
 from .expressions import ExpressionNode
-from ...core.heuristics import HeuristicContext, HeuristicRegistry
 from .expressions import ExpressionNode
+
+from ...core.heuristics import HeuristicContext, HeuristicRegistry
+from ...core.swarm_retriever import AgentGroupConfig
 
 class CompiledStrategies(TypedDict, total=False):
     """
@@ -300,7 +303,7 @@ class GenomeCompiler:
                 mov_key = f"{group_key}_movement"
                 dep_key = f"{group_key}_deposit"
                 
-                group_config = {
+                group_config: AgentGroupConfig = {
                     "count": counts[i],
                     "movement_strategies": { f"evolved_mov_{idx_suffix}": (compiled_funcs.get(mov_key), 1.0) },
                     "deposit_strategies": { f"evolved_dep_{idx_suffix}": (compiled_funcs.get(dep_key), 1.0) },
