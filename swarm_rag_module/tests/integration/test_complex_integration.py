@@ -106,8 +106,8 @@ def test_checkpoint_resume():
         retriever=MockRetriever(),
         fitness_calculator=FitnessCalculator({'Recall@20': 1.0}),
         evaluator=MockBaseEvaluator("test"),
-        train_queries=["q1"], train_ground_truth=[[0]],
-        val_queries=["v1"], val_ground_truth=[[0]],
+        train_query_ids=["q1"], train_ground_truth=[[0]],
+        val_query_ids=["v1"], val_ground_truth=[[0]],
         config=config
     )
     
@@ -126,8 +126,8 @@ def test_checkpoint_resume():
         retriever=MockRetriever(), # Re-inject dependencies
         evaluator=MockBaseEvaluator("test"),
         fitness_calculator=FitnessCalculator({'Recall@20': 1.0}),
-        train_queries=["q1"], train_ground_truth=[[0]],
-        val_queries=["v1"], val_ground_truth=[[0]],
+        train_query_ids=["q1"], train_ground_truth=[[0]],
+        val_query_ids=["v1"], val_ground_truth=[[0]],
         config=new_config # Pass new config
     )
     

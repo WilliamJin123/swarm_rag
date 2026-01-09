@@ -1,0 +1,27 @@
+2026-01-08 14:17:51,990 - INFO - Evaluating 4 genomes...
+2026-01-08 14:17:51,991 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-08 14:17:51,991 - INFO -   > max_workers: 1 workers
+2026-01-08 14:17:51,991 - INFO -   > Starting batch of 4 genomes...
+2026-01-08 14:17:51,994 - INFO -   > Finished 'gen0_2' (1/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:51,995 - INFO -   > Finished 'gen0_0' (2/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:51,996 - INFO -   > Finished 'gen0_1' (3/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:51,996 - INFO -   > Finished 'gen0_3' (4/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:52,001 - INFO - Gen 0: New Best Found! Score: 1.0000
+2026-01-08 14:17:52,002 - INFO - Evaluating 1 genomes...
+2026-01-08 14:17:52,003 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-08 14:17:52,003 - INFO -   > max_workers: 1 workers
+2026-01-08 14:17:52,003 - INFO -   > Starting batch of 1 genomes...
+2026-01-08 14:17:52,005 - INFO -   > Finished 'gen0_0_copy' (1/1) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:52,005 - INFO - --> Validation Gen 0: Recall 1.0000
+2026-01-08 14:17:52,013 - INFO - Evaluating 1 genomes...
+2026-01-08 14:17:52,013 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-08 14:17:52,013 - INFO -   > max_workers: 1 workers
+2026-01-08 14:17:52,014 - INFO -   > Starting batch of 1 genomes...
+2026-01-08 14:17:52,016 - INFO -   > Finished 'gen0_2_copy_copy' (1/1) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:52,017 - INFO - --> Validation Gen 1: Recall 1.0000
+2026-01-08 14:17:53,011 - INFO - Evaluating 1 genomes...
+2026-01-08 14:17:53,012 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-08 14:17:53,012 - INFO -   > max_workers: 1 workers
+2026-01-08 14:17:53,012 - INFO -   > Starting batch of 1 genomes...
+2026-01-08 14:17:53,015 - INFO -   > Finished 'gen0_1_copy_copy_copy' (1/1) | Qual: 1.0000 | Cost: 0.0 | R@20: 1.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-08 14:17:53,015 - INFO - --> Validation Gen 3: Recall 1.0000

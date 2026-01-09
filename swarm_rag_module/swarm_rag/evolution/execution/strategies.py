@@ -123,6 +123,65 @@ class GeneticStrategies:
         return list(np.random.choice(ctx.population, size=k, p=probs))
 
     @staticmethod
+    @GeneticRegistry.register_selection(GeneticKey.BOLTZMANN)
+    def boltzmann_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
+        """
+        Boltzmann (Softmax) Selection with Adaptive Temperature.
+        - Probability P(i) ~ exp(Fitness(i) / T)
+        - Adapt T based on population diversity:
+            * Low diversity -> Increase T (Heat up to explore)
+            * High diversity -> Decrease T (Cool down to exploit)
+        """
+        # Initialize Temperature (if first run)
+        if ctx.generation == 0 and ctx.current_temperature == 1.0:
+            ctx.current_temperature = ctx.config.get('boltzmann_temperature', 1.0)
+
+        # Prepare Scores
+        # Use quality_score which is the aggregated fitness
+        scores = np.array([g.fitness.quality_score for g in ctx.population])
+        
+        # Numerical Stability: subtract max to avoid overflow in exp
+        # T controls the "pressure". 
+        # T -> inf: Uniform random
+        # T -> 0: Deterministic max
+        T = ctx.current_temperature
+        T = max(1e-4, T)
+        
+        # Exp scaled by T
+        exp_values = np.exp((scores - np.max(scores)) / T)
+        probs = exp_values / np.sum(exp_values)
+        
+        # Select
+        selection_indices = np.random.choice(len(ctx.population), size=k, p=probs, replace=True)
+        selected = [ctx.population[i] for i in selection_indices]
+        
+        # Update Temperature (Adaptive)
+        if ctx.config.get('boltzmann_adaptive', True):
+            mean_score = np.mean(scores)
+            if len(scores) > 1 and mean_score > 1e-6:
+                diversity_cv = np.std(scores) / mean_score
+            else:
+                diversity_cv = 0.0
+            cooling_factor = ctx.config.get('boltzmann_alpha', 0.95)
+            heating_factor = 1.0 / cooling_factor
+
+            min_T = ctx.config.get('boltzmann_min_temp', 0.1)
+            max_T = ctx.config.get('boltzmann_max_temp', 5.0)
+            # Use a relative threshold for diversity
+            diversity_threshold = ctx.config.get('boltzmann_diversity_threshold', 0.05)
+            # Heuristic: If relative diversity is low, we are stagnating -> Heat up
+            if diversity_cv < diversity_threshold:
+                ctx.current_temperature = ctx.current_temperature * heating_factor
+            else:
+                # Otherwise -> Cool down (Annealing)
+                ctx.current_temperature = ctx.current_temperature * cooling_factor
+                
+            # Clamp temperature within bounds
+            ctx.current_temperature = np.clip(ctx.current_temperature, min_T, max_T)
+    
+        return selected
+
+    @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.STOCHASTIC_UNIVERSAL_SAMPLING)
     def stochastic_universal_sampling(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
         """
@@ -182,65 +241,6 @@ class GeneticStrategies:
         cutoff = max(1, int(len(ctx.population) * current_k))
         pool = ctx.population[:cutoff]
         return random.choices(pool, k=k)
-
-    @staticmethod
-    @GeneticRegistry.register_selection(GeneticKey.BOLTZMANN)
-    def boltzmann_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
-        """
-        Boltzmann (Softmax) Selection with Adaptive Temperature.
-        - Probability P(i) ~ exp(Fitness(i) / T)
-        - Adapt T based on population diversity:
-            * Low diversity -> Increase T (Heat up to explore)
-            * High diversity -> Decrease T (Cool down to exploit)
-        """
-        # Initialize Temperature (if first run)
-        if ctx.generation == 0 and ctx.current_temperature == 1.0:
-            ctx.current_temperature = ctx.config.get('boltzmann_temperature', 1.0)
-
-        # Prepare Scores
-        # Use quality_score which is the aggregated fitness
-        scores = np.array([g.fitness.quality_score for g in ctx.population])
-        
-        # Numerical Stability: subtract max to avoid overflow in exp
-        # T controls the "pressure". 
-        # T -> inf: Uniform random
-        # T -> 0: Deterministic max
-        T = ctx.current_temperature
-        T = max(1e-4, T)
-        
-        # Exp scaled by T
-        exp_values = np.exp((scores - np.max(scores)) / T)
-        probs = exp_values / np.sum(exp_values)
-        
-        # Select
-        selection_indices = np.random.choice(len(ctx.population), size=k, p=probs, replace=True)
-        selected = [ctx.population[i] for i in selection_indices]
-        
-        # Update Temperature (Adaptive)
-        if ctx.config.get('boltzmann_adaptive', True):
-            mean_score = np.mean(scores)
-            if len(scores) > 1 and mean_score > 1e-6:
-                diversity_cv = np.std(scores) / mean_score
-            else:
-                diversity_cv = 0.0
-            cooling_factor = ctx.config.get('boltzmann_alpha', 0.95)
-            heating_factor = 1.0 / cooling_factor
-
-            min_T = ctx.config.get('boltzmann_min_temp', 0.1)
-            max_T = ctx.config.get('boltzmann_max_temp', 5.0)
-            # Use a relative threshold for diversity
-            diversity_threshold = ctx.config.get('boltzmann_diversity_threshold', 0.05)
-            # Heuristic: If relative diversity is low, we are stagnating -> Heat up
-            if diversity_cv < diversity_threshold:
-                ctx.current_temperature = ctx.current_temperature * heating_factor
-            else:
-                # Otherwise -> Cool down (Annealing)
-                ctx.current_temperature = ctx.current_temperature * cooling_factor
-                
-            # Clamp temperature within bounds
-            ctx.current_temperature = np.clip(ctx.current_temperature, min_T, max_T)
-    
-        return selected
 
     # --- CROSSOVER ---
 
