@@ -9,7 +9,7 @@ class ProgressTracker:
         self, 
         log_path: str, 
         plot_path: str,
-        plot_title: str,
+        plot_title: str = "Graph of Evolutionary Progress",
         overwrite: bool = True
     ):
         self.log_path = log_path

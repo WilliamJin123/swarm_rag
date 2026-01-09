@@ -12,7 +12,10 @@ PLOT_FILE = "test_data/test_advanced_plot.png"
 def test_dynamic_logging():
     print("\n--- Testing Dynamic Logging & JSONL Structure ---")
     
-    tracker = ProgressTracker(log_path=LOG_FILE)
+    tracker = ProgressTracker(
+        log_path=LOG_FILE,
+        plot_path=PLOT_FILE,
+    )
     
     # 1. Log mixed bag of metrics (some ints, floats, big numbers)
     train_stats = {
@@ -43,7 +46,10 @@ def test_dynamic_logging():
 def test_print_summary_formatting():
     print("\n--- Testing Summary Output Formatting ---")
     
-    tracker = ProgressTracker(log_path=LOG_FILE)
+    tracker = ProgressTracker(
+        log_path=LOG_FILE,
+        plot_path=PLOT_FILE,
+    )
     # Re-log simple data
     tracker.log(1, {"best_quality": 0.55555, "best_cost": 1500.2}, None)
     
@@ -69,7 +75,10 @@ def test_print_summary_formatting():
 def test_plotting_resilience():
     print("\n--- Testing Plotting Resilience ---")
     
-    tracker = ProgressTracker(log_path=LOG_FILE)
+    tracker = ProgressTracker(
+        log_path=LOG_FILE,
+        plot_path=PLOT_FILE,
+    )
     
     # Log 3 generations
     tracker.log(0, {"best_quality": 0.1, "avg_quality": 0.05, "best_cost": 100})

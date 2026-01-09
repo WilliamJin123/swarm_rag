@@ -1,5 +1,9 @@
 from typing import Any, Dict, TypedDict
+import logging
 from ..types.genome import Genome, SwarmParams
+from .parsers import ExpressionParser
+
+logger = logging.getLogger(__name__)
 
 class GenomePerformance(TypedDict):
     quality_score: float
@@ -54,3 +58,52 @@ def genome_to_json_context(genome: Genome) -> GenomeLLMContext:
         "performance": performance,
         "current_config": config
     }
+
+def apply_llm_edits(genome: Genome, edits: Dict[str, Any]) -> bool:
+    """
+    Parses the JSON response from an LLM and updates the Genome object in-place.
+    Returns True if any changes were made.
+    """
+    if "proposed_changes" not in edits:
+        return False
+
+    changes = edits["proposed_changes"]
+    modified = False
+    
+    # 1. Params
+    if "params" in changes:
+        for key, val in changes["params"].items():
+            if key in genome.params:
+                # Basic type check to prevent breaking schemas
+                current_type = type(genome.params[key])
+                try:
+                    if current_type == int:
+                        val = int(val)
+                    elif current_type == float:
+                        val = float(val)
+                    
+                    if genome.params[key] != val:
+                        genome.params[key] = val
+                        modified = True
+                except (ValueError, TypeError):
+                    pass # Ignore invalid types
+    
+    # 2. Strategies
+    if "strategies" in changes:
+        for key, expr_str in changes["strategies"].items():
+            if not expr_str: continue
+            
+            # Verify key exists
+            if key not in genome.strategies:
+                continue
+
+            try:
+                # Parse string -> ExpressionNode
+                new_tree = ExpressionParser.parse(expr_str)
+                genome.strategies[key] = new_tree
+                genome.clear_cache()
+                modified = True
+            except Exception as e:
+                logger.warning(f"Failed to parse strategy '{key}' for {genome.id}: {e}")
+    
+    return modified

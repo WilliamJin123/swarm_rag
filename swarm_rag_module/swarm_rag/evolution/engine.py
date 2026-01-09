@@ -6,6 +6,7 @@ from typing import List, Any
 from tqdm.auto import tqdm
 import logging
 
+from ..interfaces.enums import GeneticKey
 
 from ..core.swarm_retriever import SwarmRetriever
 from ..core.heuristics import HeuristicRegistry
@@ -89,22 +90,21 @@ class EvolutionEngine:
             max_workers_per_retrieval=self.config["max_workers_per_retrieval"]
         )
         
-        if self.config.get("use_llm_evolution", False):
-            from .llm.loop import LLMEvolutionLoop
+        self.loop = EvolutionLoop(self.evo_context)
+
+        # Initialize LLM Optimizer if using LLM Mutation
+        if self.config.get("mutation_strategy") == GeneticKey.LLM_MUTATION:
             from .llm.optimizer import LLMOptimizer
             model_name = self.config.get("llm_model", "zai-glm-4.7")
             provider = self.config.get("llm_provider", "cerebras")
             
-            optimizer = LLMOptimizer(
+            # Attach to context so the strategy function can access it
+            self.evo_context.llm_optimizer = LLMOptimizer(
                 provider=provider,
-                model=model_name
+                model=model_name,
+                env_path=self.config.get("llm_env_path", ".env")
             )
-
-            self.loop = LLMEvolutionLoop(self.evo_context, optimizer=optimizer)
-            logger.info("ENABLED: LLM-Guided Evolution Loop")
-        else:
-            self.loop = EvolutionLoop(self.evo_context)
-            
+            logger.info("ENABLED: LLM-Guided Mutation Strategy")            
         # Initialize MAP-Elites if enabled
         if self.config.get("map_elites_enabled", False):
             logger.info("ENABLED: MAP-Elites Mode")

@@ -66,10 +66,10 @@ class EvolutionConfigDict(TypedDict):
     resume_from_checkpoint: bool
 
     # LLM Evolution
-    use_llm_evolution: NotRequired[bool]
     llm_model: NotRequired[str]
     llm_provider: NotRequired[str]
     llm_concurrency: NotRequired[int]
+    llm_env_path: NotRequired[str]
 
     # MAP-Elites Configuration
     map_elites_enabled: NotRequired[bool]
@@ -119,10 +119,10 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "resume_from_checkpoint": True,
     
     # LLM Defaults
-    "use_llm_evolution": False,
     "llm_provider": "cerebras",
     "llm_model": "zai-glm-4.7",
     "llm_concurrency": 50,
+    "llm_env_path": ".env",
 
     # MAP-Elites Defaults
     "map_elites_enabled": False,
@@ -150,6 +150,9 @@ class EvolutionContext:
     
     # State for Adaptive Strategies
     current_temperature: float = 1.0
+    
+    # Optional LLM Optimizer instance
+    llm_optimizer = None
 
     
 

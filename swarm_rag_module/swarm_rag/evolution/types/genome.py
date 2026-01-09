@@ -70,7 +70,7 @@ class Genome:
 
     def __post_init__(self):
         """Ensure consistent state after initialization."""
-        self._normalize_ratios()
+        self.normalize_ratios()
 
     def __hash__(self):
         """Allows Genome to be used in sets or as dict keys."""
@@ -101,13 +101,13 @@ class Genome:
         # Ensure cache exists
         if '_compiled_cache' not in self.__dict__:
             self._compiled_cache = {}
-        self._normalize_ratios()
+        self.normalize_ratios()
 
     def complexity(self) -> int:
         """Sum of the size of all expression trees."""
         return sum(tree.size() for tree in self.strategies.values())
     
-    def _normalize_ratios(self):
+    def normalize_ratios(self):
         """Ensures group_ratios sum to 1.0."""
         if not self.group_ratios:
             return

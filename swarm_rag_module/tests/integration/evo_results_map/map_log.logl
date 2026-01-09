@@ -1,0 +1,35 @@
+2026-01-09 13:50:15,096 - INFO - Generating initial population of 20...
+2026-01-09 13:50:15,102 - INFO - Evaluating 20 initial agents...
+2026-01-09 13:50:15,102 - INFO - Evaluating 20 genomes...
+2026-01-09 13:50:15,102 - INFO -   > Concurrency: 4 genomes parallel
+2026-01-09 13:50:15,102 - INFO -   > max_workers: 1 workers
+2026-01-09 13:50:15,102 - INFO -   > Starting batch of 4 genomes...
+2026-01-09 13:50:15,105 - INFO -   > Finished 'gen0_2' (1/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,106 - INFO -   > [Short-Circuit] gen0_3 aborted. Probe Quality: 0.0000
+2026-01-09 13:50:15,106 - INFO -   > Finished 'gen0_0' (2/4) | Qual: 0.5000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.5000
+2026-01-09 13:50:15,111 - INFO -   > Finished 'gen0_1' (3/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,111 - INFO -   > Finished 'gen0_3' (4/4) | Qual: 0.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-09 13:50:15,111 - INFO -   > Starting batch of 4 genomes...
+2026-01-09 13:50:15,116 - INFO -   > Finished 'gen0_5' (1/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,117 - INFO -   > [Short-Circuit] gen0_7 aborted. Probe Quality: 0.0000
+2026-01-09 13:50:15,117 - INFO -   > Finished 'gen0_4' (2/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,118 - INFO -   > Finished 'gen0_6' (3/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,118 - INFO -   > Finished 'gen0_7' (4/4) | Qual: 0.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-09 13:50:15,118 - INFO -   > Starting batch of 4 genomes...
+2026-01-09 13:50:15,119 - INFO -   > [Short-Circuit] gen0_8 aborted. Probe Quality: 0.0000
+2026-01-09 13:50:15,121 - INFO -   > Finished 'gen0_8' (1/4) | Qual: 0.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-09 13:50:15,123 - INFO -   > Finished 'gen0_9' (2/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,123 - INFO -   > Finished 'gen0_10' (3/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,123 - INFO -   > Finished 'gen0_11' (4/4) | Qual: 0.5000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.5000
+2026-01-09 13:50:15,124 - INFO -   > Starting batch of 4 genomes...
+2026-01-09 13:50:15,125 - INFO -   > [Short-Circuit] gen0_12 aborted. Probe Quality: 0.0000
+2026-01-09 13:50:15,125 - INFO -   > Finished 'gen0_12' (1/4) | Qual: 0.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 0.0000
+2026-01-09 13:50:15,128 - INFO -   > Finished 'gen0_13' (2/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,128 - INFO -   > Finished 'gen0_14' (3/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,128 - INFO -   > Finished 'gen0_15' (4/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,128 - INFO -   > Starting batch of 4 genomes...
+2026-01-09 13:50:15,134 - INFO -   > Finished 'gen0_17' (1/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,136 - INFO -   > Finished 'gen0_18' (2/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,136 - INFO -   > Finished 'gen0_16' (3/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,136 - INFO -   > Finished 'gen0_19' (4/4) | Qual: 1.0000 | Cost: 0.0 | R@20: 0.0000 | H@1: 0.0000 | H@5: 0.0000 | MRR: 1.0000
+2026-01-09 13:50:15,136 - INFO - Seeding archive...

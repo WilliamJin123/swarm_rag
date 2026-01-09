@@ -114,7 +114,7 @@ def test_immigration_replaces_worst():
     
     engine = MockEngine()
     # Replace bottom 20% (2 agents)
-    ext = RandomImmigrationExtension(rate=0.2, engine_ref=engine)
+    ext = RandomImmigrationExtension(rate=0.2)
     
     # Verify pre-condition
     assert ctx.population[-1].id != "immigrant"

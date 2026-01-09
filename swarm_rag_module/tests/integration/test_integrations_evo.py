@@ -73,9 +73,9 @@ def test_full_evolution_loop():
         retriever=retriever,
         fitness_calculator=fitness_calc,
         evaluator=evaluator,
-        train_queries=train_q,
+        train_query_ids=train_q,
         train_ground_truth=train_gt,
-        val_queries=val_q,
+        val_query_ids=val_q,
         val_ground_truth=val_gt,
         config=config
     )
