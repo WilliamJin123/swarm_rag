@@ -30,6 +30,7 @@ from .extensions.base import EvolutionExtension
 
 from ..utils import TqdmLoggingHandler
 
+
 class EvolutionEngine:
     def __init__(
         self,
@@ -45,6 +46,7 @@ class EvolutionEngine:
         extensions: List['EvolutionExtension'] = None,
         overwrite_logs: bool = True
     ):
+        logger = logging.getLogger(__name__)
         config = config or DEFAULT_EVO_CONFIG.copy()
         
         self.train_query_ids = train_query_ids
@@ -84,10 +86,16 @@ class EvolutionEngine:
         
         if self.config.get("use_llm_evolution", False):
             from .llm.loop import LLMEvolutionLoop
-            # Note: We can inject a specific optimizer here if needed, 
-            # for now it defaults to Mock inside LLMEvolutionLoop
-            self.loop = LLMEvolutionLoop(self.evo_context)
-            logger = logging.getLogger(__name__)
+            from .llm.optimizer import LLMOptimizer
+            model_name = self.config.get("llm_model", "zai-glm-4.7")
+            provider = self.config.get("llm_provider", "cerebras")
+            
+            optimizer = LLMOptimizer(
+                provider=provider,
+                model=model_name
+            )
+
+            self.loop = LLMEvolutionLoop(self.evo_context, optimizer=optimizer)
             logger.info("ENABLED: LLM-Guided Evolution Loop")
         else:
             self.loop = EvolutionLoop(self.evo_context)
@@ -109,7 +117,6 @@ class EvolutionEngine:
         else:
             self.fitness_strategy = LexicographicStrategy()
             
-        logger = logging.getLogger(__name__)
         logger.info(f"Using Fitness Strategy: {self.fitness_strategy.__class__.__name__}")
 
         self.extensions = extensions or []

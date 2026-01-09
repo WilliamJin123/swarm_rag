@@ -65,6 +65,12 @@ class EvolutionConfigDict(TypedDict):
     checkpoint_path: str
     resume_from_checkpoint: bool
 
+    # LLM Evolution
+    use_llm_evolution: NotRequired[bool]
+    llm_model: NotRequired[str]
+    llm_provider: NotRequired[str]
+    llm_concurrency: NotRequired[int]
+
 DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "concurrent_evaluations": 4,
     "max_workers_per_retrieval": 1,
@@ -103,7 +109,13 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "plot_title": "Evolutionary Progress",
     "checkpoint_frequency": 5,
     "checkpoint_path": "evolution_run/evo_checkpoint.pkl",
-    "resume_from_checkpoint": True
+    "resume_from_checkpoint": True,
+    
+    # LLM Defaults
+    "use_llm_evolution": False,
+    "llm_provider": "cerebras",
+    "llm_model": "zai-glm-4.7",
+    "llm_concurrency": 50
 }
 
 @dataclass
