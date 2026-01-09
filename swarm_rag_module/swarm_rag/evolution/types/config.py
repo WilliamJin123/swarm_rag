@@ -71,6 +71,13 @@ class EvolutionConfigDict(TypedDict):
     llm_provider: NotRequired[str]
     llm_concurrency: NotRequired[int]
 
+    # MAP-Elites Configuration
+    map_elites_enabled: NotRequired[bool]
+    map_elites_dims: NotRequired[List[str]] # Names of descriptors
+    map_elites_bins: NotRequired[List[int]] # Number of bins per dimension
+    map_elites_ranges: NotRequired[List[Tuple[float, float]]] # Min/Max for each dim
+    map_elites_initial_fill: NotRequired[int] # Initial random population to seed archive
+
 DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "concurrent_evaluations": 4,
     "max_workers_per_retrieval": 1,
@@ -115,7 +122,14 @@ DEFAULT_EVO_CONFIG: EvolutionConfigDict = {
     "use_llm_evolution": False,
     "llm_provider": "cerebras",
     "llm_model": "zai-glm-4.7",
-    "llm_concurrency": 50
+    "llm_concurrency": 50,
+
+    # MAP-Elites Defaults
+    "map_elites_enabled": False,
+    "map_elites_dims": ["complexity", "n_agents"],
+    "map_elites_bins": [10, 10],
+    "map_elites_ranges": [(0, 100), (5, 30)],
+    "map_elites_initial_fill": 100
 }
 
 @dataclass

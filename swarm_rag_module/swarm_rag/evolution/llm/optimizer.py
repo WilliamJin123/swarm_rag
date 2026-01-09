@@ -10,7 +10,7 @@ except ImportError:
 
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
-from .utils import genome_to_json_context
+from .utils import genome_to_json_context, GenomeLLMContext
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,7 @@ class LLMOptimizer:
         history: List[str] = None
     ) -> Dict[str, Any]:
         
-        # 1. Construct Prompt
-        context_data = genome_to_json_context(genome)
+        context_data: GenomeLLMContext = genome_to_json_context(genome)
         
         system_prompt = (
             "You are an expert AI Geneticist. Your job is to optimize individual Retrieval Agents.\n"

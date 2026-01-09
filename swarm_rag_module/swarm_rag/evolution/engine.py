@@ -28,6 +28,11 @@ from .execution.fitness_strategies import (
 )
 from .extensions.base import EvolutionExtension
 
+# MAP-Elites Imports
+from .map_elites.archive import MapElitesArchive
+from .map_elites.descriptors import DescriptorCalculator
+from .map_elites.loop import MapElitesLoop
+
 from ..utils import TqdmLoggingHandler
 
 
@@ -100,6 +105,20 @@ class EvolutionEngine:
         else:
             self.loop = EvolutionLoop(self.evo_context)
             
+        # Initialize MAP-Elites if enabled
+        if self.config.get("map_elites_enabled", False):
+            logger.info("ENABLED: MAP-Elites Mode")
+            descriptor_calc = DescriptorCalculator(
+                dimensions=self.config["map_elites_dims"],
+                ranges=self.config["map_elites_ranges"]
+            )
+            self.map_elites_archive = MapElitesArchive(
+                descriptor_calc=descriptor_calc,
+                bins=self.config["map_elites_bins"],
+                ranges=self.config["map_elites_ranges"]
+            )
+            self.map_elites_loop = MapElitesLoop(self.evo_context)
+
         self.tracker = ProgressTracker(
             log_path=self.config["log_path"], 
             plot_path=self.config["plot_path"],
@@ -127,6 +146,8 @@ class EvolutionEngine:
             ext.on_init(self.evo_context)
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
+        if self.config.get("map_elites_enabled", False):
+            return self._optimize_map_elites(initial_population)
 
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
@@ -264,6 +285,126 @@ class EvolutionEngine:
                 logger.removeHandler(handler)
 
         self.save_checkpoint(population, best_genome, n_gen - 1)
+        self.tracker.plot(save_path=self.config["plot_path"], title=self.config["plot_title"])
+        
+        return best_genome
+
+    def _optimize_map_elites(self, initial_population: List[Genome] = None) -> Genome:
+        """
+        Specialized optimization loop for MAP-Elites.
+        """
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        if root_logger.hasHandlers(): root_logger.handlers.clear()
+        
+        fh = logging.FileHandler(self.config["log_path"].replace(".json", ".log"))
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        root_logger.addHandler(fh)
+        
+        th = TqdmLoggingHandler()
+        th.setFormatter(logging.Formatter('%(message)s'))
+        root_logger.addHandler(th)
+        
+        logger = logging.getLogger("evolution")
+        
+        # 1. Initialization
+        # If resuming, initial_population will be populated from checkpoint
+        population = initial_population 
+        if not population:
+            logger.info(f"Generating initial population of {self.config['map_elites_initial_fill']}...")
+            population = self.genome_factory.create_population(
+                self.config['map_elites_initial_fill']
+            )
+        
+        best_genome = getattr(self, 'restored_best_genome', None)
+        n_gen = self.config["n_generations"]
+        start_gen = self.evo_context.generation
+        
+        if start_gen > 0:
+            logger.info(f"Resuming MAP-Elites from Gen {start_gen}")
+
+        pbar = tqdm(range(start_gen, n_gen), desc="MAP-Elites", unit="gen", position=0)
+        
+        # Initial Evaluation & Archive Fill
+        if population:
+            # Only evaluate if needed (resumed pops are evaluated)
+            to_eval = [g for g in population if not g.evaluated]
+            if to_eval:
+                logger.info(f"Evaluating {len(to_eval)} initial agents...")
+                self.population_evaluator.evaluate(to_eval)
+            
+            # Assign fitness
+            self.fitness_strategy.assign_fitness(population, generation=start_gen)
+            
+            # Fill Archive
+            logger.info("Seeding archive...")
+            for g in population:
+                self.map_elites_archive.add(g)
+                if best_genome is None or g.fitness > best_genome.fitness:
+                    best_genome = g.copy()
+
+        for gen in pbar:
+            self.evo_context.generation = gen
+            
+            # BREED
+            # We generate a batch of offspring from the archive
+            offspring = self.map_elites_loop.step(self.map_elites_archive)
+            
+            if not offspring:
+                logger.warning("Archive empty or no offspring produced. Stopping.")
+                break
+
+            # EVALUATE
+            self.population_evaluator.evaluate(offspring)
+            self.fitness_strategy.assign_fitness(offspring, generation=gen)
+            
+            # ARCHIVE ADDITION
+            added_count = 0
+            for child in offspring:
+                if self.map_elites_archive.add(child):
+                    added_count += 1
+                
+                if best_genome is None or child.fitness > best_genome.fitness:
+                    best_genome = child.copy()
+                    logger.info(f"Gen {gen}: New Global Best! {best_genome.fitness.quality_score:.4f}")
+            
+            # STATS
+            stats = self.map_elites_archive.stats()
+            
+            pbar.set_postfix({
+                "Cover": f"{stats['coverage']:.2%}",
+                "Best": f"{stats['max_fitness']:.4f}",
+                "Added": added_count
+            })
+
+            # LOGGING
+            # Hijacking standard fields for MAP-Elites metrics
+            log_stats = {
+                "best_quality": stats['max_fitness'],
+                "avg_quality": stats['qd_score'], # QD Score
+                "best_stability": 0.0,
+                "best_cost": 0.0,
+                "best_complexity": 0.0,
+                "coverage": stats['coverage'],
+                "filled_cells": stats['filled_cells']
+            }
+            
+            self.tracker.log(gen, log_stats, None)
+            
+            # CHECKPOINTING
+            if (gen % self.config["checkpoint_frequency"] == 0):
+                # We save the archive as the population
+                self.save_checkpoint(self.map_elites_archive.as_population(), best_genome, gen)
+
+        # Cleanup
+        pbar.close()
+        logger = logging.getLogger()
+        for handler in list(logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+                logger.removeHandler(handler)
+        
+        self.save_checkpoint(self.map_elites_archive.as_population(), best_genome, n_gen - 1)
         self.tracker.plot(save_path=self.config["plot_path"], title=self.config["plot_title"])
         
         return best_genome

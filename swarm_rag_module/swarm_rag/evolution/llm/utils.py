@@ -1,14 +1,33 @@
-from typing import Any, Dict
-from ..types.genome import Genome
+from typing import Any, Dict, TypedDict
+from ..types.genome import Genome, SwarmParams
 
-def genome_to_json_context(genome: Genome) -> Dict[str, Any]:
+class GenomePerformance(TypedDict):
+    quality_score: float
+    cost_score: float
+    stability_score: float
+    recall_at_20: float
+    hit_at_1: float
+    latency: float
+    complexity: int
+
+class GenomeConfig(TypedDict):
+    params: SwarmParams
+    strategies: Dict[str, str]
+    group_ratios: Dict[str, float]
+
+class GenomeLLMContext(TypedDict):
+    id: str
+    performance: GenomePerformance
+    current_config: GenomeConfig
+
+def genome_to_json_context(genome: Genome) -> GenomeLLMContext:
     """
     Serializes a Genome into the format expected by the LLM.
     Focuses on Performance Metrics and Configuration (Params + Strategies).
     """
     
     # 1. Performance
-    performance = {
+    performance: GenomePerformance = {
         "quality_score": genome.fitness.quality_score,
         "cost_score": genome.fitness.cost_score,
         "stability_score": genome.fitness.stability_score,
@@ -20,11 +39,11 @@ def genome_to_json_context(genome: Genome) -> Dict[str, Any]:
     
     # 2. Configuration
     # Convert expression trees to their string representation
-    strategy_strings = {}
+    strategy_strings: Dict[str, str] = {}
     for name, tree in genome.strategies.items():
         strategy_strings[name] = tree.to_string()
         
-    config = {
+    config: GenomeConfig = {
         "params": genome.params,
         "strategies": strategy_strings,
         "group_ratios": genome.group_ratios
