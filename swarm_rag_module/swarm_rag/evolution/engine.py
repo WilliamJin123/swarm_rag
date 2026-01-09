@@ -81,7 +81,17 @@ class EvolutionEngine:
             concurrent_evaluations=self.config["concurrent_evaluations"],
             max_workers_per_retrieval=self.config["max_workers_per_retrieval"]
         )
-        self.loop = EvolutionLoop(self.evo_context)
+        
+        if self.config.get("use_llm_evolution", False):
+            from .llm.loop import LLMEvolutionLoop
+            # Note: We can inject a specific optimizer here if needed, 
+            # for now it defaults to Mock inside LLMEvolutionLoop
+            self.loop = LLMEvolutionLoop(self.evo_context)
+            logger = logging.getLogger(__name__)
+            logger.info("ENABLED: LLM-Guided Evolution Loop")
+        else:
+            self.loop = EvolutionLoop(self.evo_context)
+            
         self.tracker = ProgressTracker(
             log_path=self.config["log_path"], 
             plot_path=self.config["plot_path"],
