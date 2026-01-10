@@ -1,8 +1,8 @@
 **/*.env
-**/stark/embeddings/
-**/stark/skb/
-**/stark/qa/
-**/stark/adjacency_cache/
+stark/embeddings/
+stark/qa/
+stark/skb/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
