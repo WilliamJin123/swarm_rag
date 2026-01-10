@@ -1,6 +1,7 @@
 
 # test_integration_complex.py
 import os
+from pathlib import Path
 import shutil
 import pickle
 import numpy as np
@@ -39,7 +40,7 @@ class MockBaseEvaluator(BaseEvaluator):
 # --- TESTS ---
 
 # Create results directory if it doesn't exist
-RESULTS_DIR = "evo_results"
+RESULTS_DIR = Path(__file__).resolve().parent / "evo_results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 CKPT_FILE = os.path.join(RESULTS_DIR, "complex_test.pkl")

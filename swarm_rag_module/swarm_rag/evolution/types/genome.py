@@ -343,7 +343,7 @@ class GenomeCompiler:
                 try:
                     func = HeuristicRegistry.get(name) 
                     getters.append(func)
-                except ValueError:
+                except KeyError:
                     print(f"Warning: Feature '{name}' not in registry. Assuming raw data.")
                     getters.append(lambda ctx, n=name: 0.0)
         

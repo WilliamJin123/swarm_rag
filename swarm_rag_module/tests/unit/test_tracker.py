@@ -2,12 +2,14 @@
 import os
 import json
 import io
+from pathlib import Path
 import sys
 from contextlib import redirect_stdout
 from swarm_rag.evolution.execution.tracker import ProgressTracker
 
-LOG_FILE = "test_data/test_advanced_log.jsonl"
-PLOT_FILE = "test_data/test_advanced_plot.png"
+ROOT = Path(__file__).parent
+LOG_FILE = ROOT / "test_data/test_advanced_log.jsonl"
+PLOT_FILE = ROOT / "test_data/test_advanced_plot.png"
 
 def test_dynamic_logging():
     print("\n--- Testing Dynamic Logging & JSONL Structure ---")

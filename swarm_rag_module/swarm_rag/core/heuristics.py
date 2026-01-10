@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List, Optional, Union, Callable, Literal
 import numpy as np
 import math
 from dataclasses import dataclass, field
@@ -19,7 +19,20 @@ class HeuristicRegistry:
     ranking  = _RankingRegistry
     deposit  = _DepositRegistry
 
-    # Registration helpers – keep the original method names.
+    _REGISTRY_MAP = {
+        "movement": _MovementRegistry,
+        "ranking": _RankingRegistry,
+        "deposit": _DepositRegistry
+    }
+
+    @classmethod
+    def register(cls, strategy_type: Literal["movement", "ranking", "deposit"], name: Union["HeuristicKey", str]):
+        """Generic registration helper."""
+        registry = cls._REGISTRY_MAP.get(strategy_type)
+        if not registry:
+            raise ValueError(f"Unknown strategy type: {strategy_type}")
+        return registry.register(name)
+
     @classmethod
     def register_movement(cls, name: "HeuristicKey"):
         """Decorator (or direct call) for a movement heuristic."""
@@ -48,29 +61,27 @@ class HeuristicRegistry:
         return cls.deposit.get(name)
 
     @classmethod
+    def get_by_type(cls, strategy_type: Literal["movement", "ranking", "deposit"], name: Union["HeuristicKey", str]) -> Callable:
+        """Type-specific lookup."""
+        registry = cls._REGISTRY_MAP.get(strategy_type)
+        if not registry:
+            raise ValueError(f"Unknown strategy type: {strategy_type}")
+        return registry.get(name)
+
+    @classmethod
     def get(cls, name: Union["HeuristicKey", str]) -> Callable:
         """
         Search all registries (movement, ranking, deposit) for name and
         return the first matching heuristic.
-
-        The lookup order is deterministic and mirrors the order of the
-        attributes defined above: movement → ranking → deposit.
         """
-        try:
-            return cls.movement.get(name)
-        except KeyError:
-            pass
-
-        try:
-            return cls.ranking.get(name)
-        except KeyError:
-            pass
-
-        try:
-            return cls.deposit.get(name)
-        except KeyError:
-            raise KeyError(f"Heuristic '{name}' is not registered "
-                           f"in movement, ranking, or deposit registries.") from None
+        for registry in cls._REGISTRY_MAP.values():
+            try:
+                return registry.get(name)
+            except KeyError:
+                continue
+        
+        raise KeyError(f"Heuristic '{name}' is not registered "
+                       f"in movement, ranking, or deposit registries.")
 
     @classmethod
     def all_movement(cls):
@@ -87,7 +98,10 @@ class HeuristicRegistry:
     @classmethod
     def all(cls):
         """Merge the three dictionaries into one view."""
-        return {**cls.movement.all(), **cls.ranking.all(), **cls.deposit.all()}
+        res = {}
+        for registry in cls._REGISTRY_MAP.values():
+            res.update(registry.all())
+        return res
 
 @dataclass(slots=True)
 class HeuristicContext:

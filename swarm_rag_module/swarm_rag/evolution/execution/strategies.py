@@ -7,7 +7,7 @@ from ..types.config import EvolutionContext
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry, _CreationRegistry
 from ...interfaces.enums import GeneticKey
-from ..types.genome import Genome, DEFAULT_PARAMS
+from ..types.genome import Genome, DEFAULT_PARAMS, SwarmParams
 
 class GeneticRegistry:
     selection = _SelectionRegistry
@@ -89,6 +89,75 @@ class GeneticStrategies:
     """
     Standard library of genetic operators.
     """
+
+    # --- HELPERS ---
+    @staticmethod
+    def _mix_params(child: Genome, parent2: Genome):
+        """Helper to mix scalar parameters and group ratios uniformly."""
+        for key in child.params:
+            if random.random() > 0.5:
+                child.params[key] = parent2.params[key]
+       
+        for key in child.group_ratios:
+            if key in parent2.group_ratios and random.random() > 0.5:
+                child.group_ratios[key] = parent2.group_ratios[key]
+
+    @staticmethod
+    def _mutate_params_standard(genome: Genome, ctx: EvolutionContext, rate: float):
+        """Standard parameter mutation (Smart Jitter)."""
+        for key, val in genome.params.items():
+            if random.random() < rate:
+                # 80% chance: Fine-tuning (Small Gaussian jitter)
+                if random.random() < 0.8:
+                    if isinstance(val, int):
+                        delta = int(round(random.gauss(0, 1.5))) # +/- 1 or 2 usually
+                        new_val = max(1, val + delta)
+                        genome.params[key] = new_val
+                    elif isinstance(val, float):
+                        # +/- 10% relative change
+                        factor = random.gauss(1.0, 0.1)
+                        new_val = val * factor
+                        # Clamp to 0.001 - 1.0 (typical for most floats here)
+                        genome.params[key] = max(0.001, min(0.999, new_val))
+                
+                # 20% chance: Exploration (Re-sample or Large Jump)
+                else:
+                     ranges = ctx.config.get('swarmrag_param_ranges', {})
+                     if key in ranges:
+                         min_v, max_v = ranges[key]
+                         if isinstance(min_v, int):
+                             genome.params[key] = random.randint(min_v, max_v)
+                         else:
+                             genome.params[key] = random.uniform(min_v, max_v)
+
+    @staticmethod
+    def _mutate_ratios_standard(genome: Genome, rate: float):
+        """Standard group ratio mutation (Smart Jitter)."""
+        for key, val in genome.group_ratios.items():
+            if random.random() < rate:
+                # Jitter ratio
+                genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.8, 1.2)))
+
+    @staticmethod
+    def _randomize_all_params(ctx: EvolutionContext) -> SwarmParams:
+        """Helper to fully randomize parameters within configured ranges."""
+        params = DEFAULT_PARAMS.copy()
+        ranges = ctx.config.get('swarmrag_param_ranges', {})
+        for key in params.keys():
+            if key in ranges:
+                min_v, max_v = ranges[key]
+                if isinstance(min_v, int):
+                    params[key] = random.randint(min_v, max_v)
+                else:
+                    params[key] = random.uniform(min_v, max_v)
+        return params
+
+    @staticmethod
+    def _randomize_ratios(ctx: EvolutionContext, n_groups: int) -> Dict[str, float]:
+        """Helper to fully randomize group ratios."""
+        ranges = ctx.config.get('swarmrag_param_ranges', {})
+        min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
+        return {f"g{i}": random.uniform(min_r, max_r) for i in range(n_groups)}
 
     # --- SELECTION ---
 
@@ -185,7 +254,7 @@ class GeneticStrategies:
     @GeneticRegistry.register_selection(GeneticKey.STOCHASTIC_UNIVERSAL_SAMPLING)
     def stochastic_universal_sampling(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
         """
-        TVectorized SUS (Stochastic Universal Sampling).
+        Vectorized SUS (Stochastic Universal Sampling).
         Uses searchsorted for O(log N) lookup instead of O(N) linear scan.
         """
         scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
@@ -250,14 +319,8 @@ class GeneticStrategies:
         """Mixes traits 50/50. """
         child = parent1.copy()
         child.mutation_rate = (parent1.mutation_rate + parent2.mutation_rate) / 2.0
-
-        for key in child.params:
-            if random.random() > 0.5:
-                child.params[key] = parent2.params[key]
-       
-        for key in child.group_ratios:
-            if key in parent2.group_ratios and random.random() > 0.5:
-                child.group_ratios[key] = parent2.group_ratios[key]
+        
+        GeneticStrategies._mix_params(child, parent2)
 
         for key in child.strategies:
             if random.random() > 0.5:
@@ -278,13 +341,7 @@ class GeneticStrategies:
         child.mutation_rate = (parent1.mutation_rate + parent2.mutation_rate) / 2.0
 
         # 1. Uniform Parameter Mix
-        for key in child.params:
-            if random.random() > 0.5:
-                child.params[key] = parent2.params[key]
-        
-        for key in child.group_ratios:
-            if key in parent2.group_ratios and random.random() > 0.5:
-                child.group_ratios[key] = parent2.group_ratios[key]
+        GeneticStrategies._mix_params(child, parent2)
 
         # 2. Subtree Crossover for Expressions
         for key in child.strategies:
@@ -342,13 +399,7 @@ class GeneticStrategies:
         child.mutation_rate = (parent1.mutation_rate + parent2.mutation_rate) / 2.0
 
         # 1. Uniform Parameter Mix
-        for key in child.params:
-            if random.random() > 0.5:
-                child.params[key] = parent2.params[key]
-        
-        for key in child.group_ratios:
-            if key in parent2.group_ratios and random.random() > 0.5:
-                child.group_ratios[key] = parent2.group_ratios[key]
+        GeneticStrategies._mix_params(child, parent2)
 
         # 2. Root Mix Crossover
         for key in child.strategies:
@@ -397,7 +448,6 @@ class GeneticStrategies:
         - Ramped Half-and-Half for expression trees.
         - Uniform random sampling for scalar parameters.
         """
-        ranges = ctx.config['swarmrag_param_ranges']
         max_d = ctx.config['expr_max_depth']
         n_groups = ctx.config["n_agent_groups"]
 
@@ -424,28 +474,17 @@ class GeneticStrategies:
 
         population = []
         for i in range(count):
-            # Randomize Global Params
-            params = DEFAULT_PARAMS.copy()
-            for key in params.keys():
-                if key in ranges:
-                    min_v, max_v = ranges[key]
-                    if isinstance(min_v, int):
-                        params[key] = random.randint(min_v, max_v)
-                    else:
-                        params[key] = random.uniform(min_v, max_v)
+            # Randomize Global Params using helper
+            params = GeneticStrategies._randomize_all_params(ctx)
 
-            # Randomize Group Ratios & Assign Trees
+            # Assign Trees
             strategies = {}
-            group_ratios = {}
-
             strategies["ranking"] = ranking_trees[i]
             
+            # Randomize Group Ratios using helper
+            group_ratios = GeneticStrategies._randomize_ratios(ctx, n_groups)
+            
             for g_idx in range(n_groups):
-                # Ratio
-                min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
-                group_ratios[f"g{g_idx}"] = random.uniform(min_r, max_r)
-                
-                # Strategies (Pop from pre-generated list)
                 strategies[f"g{g_idx}_movement"] = strat_trees["movement"].pop()
                 strategies[f"g{g_idx}_deposit"] = strat_trees["deposit"].pop()
             
@@ -471,25 +510,16 @@ class GeneticStrategies:
         - Forces shallow trees (max_depth=2) using 'grow' method.
         - Useful for starting with simple, interpretable strategies.
         """
-        ranges = ctx.config['swarmrag_param_ranges']
         n_groups = ctx.config["n_agent_groups"]
         base_rate = ctx.config['base_mutation_rate']
         
         population = []
         for i in range(count):
-            # 1. Params
-            params = DEFAULT_PARAMS.copy()
-            for key in params.keys():
-                if key in ranges:
-                    min_v, max_v = ranges[key]
-                    if isinstance(min_v, int):
-                        params[key] = random.randint(min_v, max_v)
-                    else:
-                        params[key] = random.uniform(min_v, max_v)
+            # 1. Params using helper
+            params = GeneticStrategies._randomize_all_params(ctx)
 
             # 2. Strategies (Generated on the fly per genome, shallow)
             strategies = {}
-            group_ratios = {}
             
             # Ranking (Depth 2, Grow)
             strategies["ranking"] = ExpressionEvolution.random_tree(
@@ -498,10 +528,8 @@ class GeneticStrategies:
                 method='grow'
             )
 
+            group_ratios = GeneticStrategies._randomize_ratios(ctx, n_groups)
             for g_idx in range(n_groups):
-                min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
-                group_ratios[f"g{g_idx}"] = random.uniform(min_r, max_r)
-                
                 strategies[f"g{g_idx}_movement"] = ExpressionEvolution.random_tree(
                     features=ctx.expression_features["movement"], 
                     max_depth=2, 
@@ -614,36 +642,10 @@ class GeneticStrategies:
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
         # 1. Parameter Mutation (Smart Jitter)
-        for key, val in genome.params.items():
-            if random.random() < rate:
-                # 80% chance: Fine-tuning (Small Gaussian jitter)
-                if random.random() < 0.8:
-                    if isinstance(val, int):
-                        delta = int(round(random.gauss(0, 1.5))) # +/- 1 or 2 usually
-                        new_val = max(1, val + delta)
-                        genome.params[key] = new_val
-                    elif isinstance(val, float):
-                        # +/- 10% relative change
-                        factor = random.gauss(1.0, 0.1)
-                        new_val = val * factor
-                        # Clamp to 0.001 - 1.0 (typical for most floats here)
-                        genome.params[key] = max(0.001, min(0.999, new_val))
-                
-                # 20% chance: Exploration (Re-sample or Large Jump)
-                else:
-                     ranges = ctx.config.get('swarmrag_param_ranges', {})
-                     if key in ranges:
-                         min_v, max_v = ranges[key]
-                         if isinstance(min_v, int):
-                             genome.params[key] = random.randint(min_v, max_v)
-                         else:
-                             genome.params[key] = random.uniform(min_v, max_v)
+        GeneticStrategies._mutate_params_standard(genome, ctx, rate)
 
         # 2. Group Ratio Mutation
-        for key, val in genome.group_ratios.items():
-            if random.random() < rate:
-                # Jitter ratio
-                genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.8, 1.2)))
+        GeneticStrategies._mutate_ratios_standard(genome, rate)
 
         # 3. Strategy Tree Mutation
         for key, tree in genome.strategies.items():
@@ -766,27 +768,10 @@ class GeneticStrategies:
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
         # Standard Parameter Jitter (Same as expression_tree_mutation)
-        for key, val in genome.params.items():
-            if random.random() < rate:
-                if random.random() < 0.8: # Fine tuning
-                    if isinstance(val, int):
-                        delta = int(round(random.gauss(0, 1.5)))
-                        genome.params[key] = max(1, val + delta)
-                    elif isinstance(val, float):
-                        genome.params[key] = max(0.001, min(0.999, val * random.gauss(1.0, 0.1)))
-                else: # Resample
-                     ranges = ctx.config.get('swarmrag_param_ranges', {})
-                     if key in ranges:
-                         min_v, max_v = ranges[key]
-                         if isinstance(min_v, int):
-                             genome.params[key] = random.randint(min_v, max_v)
-                         else:
-                             genome.params[key] = random.uniform(min_v, max_v)
+        GeneticStrategies._mutate_params_standard(genome, ctx, rate)
 
         # Group Ratio Mutation (Standard Jitter)
-        for key, val in genome.group_ratios.items():
-            if random.random() < rate:
-                genome.group_ratios[key] = max(0.05, min(1.0, val * random.uniform(0.8, 1.2)))
+        GeneticStrategies._mutate_ratios_standard(genome, rate)
 
         # Guided Tree Mutation
         for key, tree in genome.strategies.items():

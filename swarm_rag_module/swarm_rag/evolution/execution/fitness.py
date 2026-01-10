@@ -18,11 +18,7 @@ class FitnessCalculator:
     def calculate(self, metrics: Dict[str, float], genome: Genome) -> FitnessResult:
         quality_score = 0.0
         for metric_name, weight in self.weights.items():
-            if metric_name == 'complexity':
-                 metric_value = genome.complexity()
-            else:
-                metric_value = metrics.get(metric_name, 0.0)
-            
+            metric_value = metrics.get(metric_name, 0.0)
             quality_score += metric_value * weight
 
         # Normalize

@@ -178,6 +178,7 @@ class PopulationEvaluator:
         
         avg_metrics = self._mean_metrics(all_metrics)
         avg_metrics['latency'] = total_latency / max(1, len(queries))
+        avg_metrics['complexity'] = float(genome.complexity())
 
         # Assign to Genome
         genome.metrics = avg_metrics

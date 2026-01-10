@@ -26,6 +26,12 @@ Metrics = TypedDict('Metrics', {
     'Recall@20': float,
 }, total=False)
 
+def iqr(x):
+    return np.percentile(x, 75) - np.percentile(x, 25)
+
+def rng(x): # range
+    return np.max(x) - np.min(x)
+
 class Evaluator:
     def __init__(
         self, 
@@ -120,12 +126,6 @@ class Evaluator:
         
         # Define custom aggregations
         agg_funcs = {}
-        
-        def iqr(x):
-            return np.percentile(x, 75) - np.percentile(x, 25)
-        
-        def rng(x): # range
-            return np.max(x) - np.min(x)
 
         # Map string stats to pandas/numpy compatible functions
         valid_stats = {

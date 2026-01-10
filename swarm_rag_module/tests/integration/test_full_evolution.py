@@ -1,5 +1,6 @@
 
 import os
+from pathlib import Path
 import shutil
 import random
 import numpy as np
@@ -70,7 +71,7 @@ class ToyStochasticRetriever:
 # --- 2. THE TEST ---
 
 # Create results directory if it doesn't exist
-RESULTS_DIR = "evo_results"
+RESULTS_DIR = Path(__file__).resolve().parent / "evo_results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 CKPT_FILE = os.path.join(RESULTS_DIR, "sim_test.pkl")

@@ -1,5 +1,6 @@
 import json
 import time
+import os
 import matplotlib.pyplot as plt
 import pandas as pd
 from typing import Dict, List, Any, Optional
@@ -16,6 +17,12 @@ class ProgressTracker:
         self.plot_path = plot_path
         self.plot_title = plot_title
         self.history: List[Dict[str, Any]] = []
+        
+        # Ensure log directory exists
+        log_dir = os.path.dirname(self.log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+
         if overwrite:
             with open(self.log_path, "w") as f:
                 pass

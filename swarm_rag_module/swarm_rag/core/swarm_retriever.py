@@ -471,11 +471,15 @@ class SwarmRetriever:
                 total = 0.0
                 for func, w in components:
                     val = func(ctx)
-                    # Handle both scalar and 0-d array returns
-                    if hasattr(val, 'item'):
-                        total += val.item() * w
+                    # Optimize for common case: numpy array of size 1 or scalar
+                    if isinstance(val, np.ndarray):
+                        if val.size == 1:
+                            total += val.item() * w
+                        else:
+                            # Fallback if heuristic returns full array (rare for deposit on single node)
+                            total += np.sum(val) * w
                     else:
-                        total += val * w
+                         total += val * w
                 return total
             return combined_deposit
 
@@ -663,8 +667,7 @@ class SwarmRetriever:
                 return matrix, list(node_ids)
             
             filtered_matrix = matrix[valid_mask]
-            valid_mask_cpu = valid_mask
-            filtered_ids = [nid for i, nid in enumerate(node_ids) if valid_mask_cpu[i]]
+            filtered_ids = [nid for i, nid in enumerate(node_ids) if valid_mask[i]]
             return filtered_matrix, filtered_ids
         
         raw_vecs = [None] * len(node_ids)
@@ -686,11 +689,10 @@ class SwarmRetriever:
             fetched_matrix = self.vector_store.fetch_batch(missing_ids)
             fetched_matrix = np.asarray(fetched_matrix)
             valid_fetched_mask = ~np.isnan(fetched_matrix).any(axis=1)
-            valid_fetched_mask_cpu = valid_fetched_mask
             
             # Phase 3: Write-back (Locked)
             with self._doc_lock:
-                for i, is_valid in enumerate(valid_fetched_mask_cpu):
+                for i, is_valid in enumerate(valid_fetched_mask):
                     if is_valid:
                         original_idx = missing_indices[i]
                         vec = fetched_matrix[i]

@@ -145,10 +145,8 @@ class EvolutionEngine:
                 ext.genome_factory = self.genome_factory.create_population
             ext.on_init(self.evo_context)
 
-    def optimize(self, initial_population: List[Genome] = None) -> Genome:
-        if self.config.get("map_elites_enabled", False):
-            return self._optimize_map_elites(initial_population)
-
+    def _setup_logging(self) -> logging.Logger:
+        """Configures logging for the evolution run."""
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
 
@@ -163,7 +161,13 @@ class EvolutionEngine:
         th.setFormatter(logging.Formatter('%(message)s'))
         root_logger.addHandler(th)
 
-        logger = logging.getLogger("evolution")
+        return logging.getLogger("evolution")
+
+    def optimize(self, initial_population: List[Genome] = None) -> Genome:
+        if self.config.get("map_elites_enabled", False):
+            return self._optimize_map_elites(initial_population)
+
+        logger = self._setup_logging()
 
         if self.evo_context.population:
             population = self.evo_context.population
@@ -293,19 +297,7 @@ class EvolutionEngine:
         """
         Specialized optimization loop for MAP-Elites.
         """
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
-        if root_logger.hasHandlers(): root_logger.handlers.clear()
-        
-        fh = logging.FileHandler(self.config["log_path"].replace(".json", ".log"))
-        fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        root_logger.addHandler(fh)
-        
-        th = TqdmLoggingHandler()
-        th.setFormatter(logging.Formatter('%(message)s'))
-        root_logger.addHandler(th)
-        
-        logger = logging.getLogger("evolution")
+        logger = self._setup_logging()
         
         # 1. Initialization
         # If resuming, initial_population will be populated from checkpoint
