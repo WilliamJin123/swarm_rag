@@ -100,9 +100,12 @@ class PopulationEvaluator:
                     f"R@20: {r20:.4f} | H@1: {h1:.4f} | H@5: {h5:.4f} | MRR: {mrr:.4f}"
                 )
                 # except Exception as e:
-                #     print(f"Genome {genome.id} evaluation failed: {e}")
+                #     logger.error(f"Genome {genome.id} evaluation failed: {e}")
+                #     # Assign worst possible fitness so it dies out
                 #     from .fitness import FitnessResult
-                #     genome.fitness = FitnessResult(0.0, 0.0, 9999.0)
+                #     # Create a default bad result. 
+                #     # Note: fitness calculation might have failed, so we set manually.
+                #     genome.fitness = FitnessResult(quality_score=0.0, stability_score=0.0, cost_score=9999.0)
                 #     genome.evaluated = True
 
     def _evaluate_single(

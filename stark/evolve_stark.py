@@ -1,6 +1,6 @@
 import argparse
 import os
-import random
+import json
 
 # Import your existing engine components
 from swarm_rag.core import SwarmRetriever
@@ -51,15 +51,17 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
 
 def run_evolution(
     dataset_name="prime", 
-    n_gens=30, 
+    n_gens=100, 
     pop_size=60, 
-    train_sample_size=150,
+    initial_fill=120,
+    train_sample_size=200,
     val_sample_size=100,
     start_from_scratch=False,
     concurrent_evals=4,
-    max_workers=4
+    max_workers=4,
+    use_map_elites=True
 ):
-    # Load
+    # Load Data
     skb = load_and_download_skb(dataset_name)
     adj_dict = precompute_stark_adjacency(skb, dataset_name)
     query_embs, doc_embs = load_and_download_embeddings(dataset_name)
@@ -80,32 +82,20 @@ def run_evolution(
     )
     
     # Prepare Data Subsets
-    # We use a smaller subset for Training (Speed) and Validation (Reliability)
     train_q, train_q_ids, train_gt = prepare_stark_data(dataset_name, 'train', sample_size=train_sample_size)
     val_q, val_q_ids, val_gt = prepare_stark_data(dataset_name, 'val', sample_size=val_sample_size)
     
     print(f"Evolution Corpus: {len(train_q)} training queries, {len(val_q)} validation queries.")
 
     # Define Fitness Goals
-    # Balance: High Recall is king, but we penalize excessive cost (visited nodes)
+    # Heavily weight Hit@1 and MRR for precision, Recall@20 for broad search capabilities.
     fitness_calc = FitnessCalculator(
         weights={
-            "Hit@1": 0.25,     
-            "Hit@5": 0.15,     
-            "MRR": 0.20,        
-            "Recall@20": 0.20, 
-            "Hit@10": 0.10,    
-            "Recall@5": 0.10, 
-            "complexity": -0.0001,
-            # Old Weights:
-            # "Hit@1": 0.30,     
-            # "Hit@5": 0.15,     
-            # "MRR": 0.15,        
-            # "Recall@20": 0.15, 
-            # "Hit@10": 0.07,    
-            # "Recall@5": 0.07, 
-            # "Hit@20": 0.05,     
-            # "Recall@10": 0.06,
+            "Hit@1": 0.25,
+            "Hit@5": 0.25,
+            "MRR": 0.25,        
+            "Recall@20": 0.25, 
+            "complexity": -0.0001, # Slight penalty for bloat
         },
     )
     
@@ -120,34 +110,61 @@ def run_evolution(
     os.makedirs(best_params_dir, exist_ok=True)
 
     # Configure Engine
-    evo_config = DEFAULT_EVO_CONFIG.copy() # Create copy first
-    evo_config.update({                    # Then update
+    evo_config = DEFAULT_EVO_CONFIG.copy()
+    
+    # Common Config
+    evo_config.update({
         "n_generations": n_gens,
-        "population_size": pop_size,
         "concurrent_evaluations": concurrent_evals,
-        "creation_strategy": "seeded_initialization", # Inject known good strategies
-        "crossover_strategy": "root_mix_crossover",  # Less destructive than subtree swap
-        "mutation_strategy": "guided_mutation",      # Knowledge-infused mutation
-        "base_mutation_rate": 0.2,                   # Lowered for more refinement
-        "elite_fraction": 0.15,                      # Increased pressure to keep best traits
+        "max_workers_per_retrieval": max_workers,
         
-        # Constraints
-        "expr_max_depth": 5,
-        "swarmrag_param_ranges": {
-            "n_agents": (10, 80),                    # Expanded range for more swarm capacity
-            "steps": (4, 15),                       # Minimum steps for enough exploration
-            "decay": (0.3, 0.95),
-            "initial_pool_size": (15, 60),
-            "start_subset": (5, 20),
-        },
-        
-        # PATHS
+        # Paths
         "log_path": os.path.join(log_dir, f"evo_{dataset_name}.jsonl"),
         "plot_path": os.path.join(log_dir, f"plot_{dataset_name}.png"),
         "checkpoint_path": os.path.join(ckpt_dir, f"ckpt_{dataset_name}.pkl"),
         "validation_frequency": 5,
-        "max_workers_per_retrieval": max_workers
+        "checkpoint_frequency": 5,
+        
+        # Constraints & Search Space
+        "expr_max_depth": 5,
+        "swarmrag_param_ranges": {
+            "n_agents": (5, 30),
+            "steps": (2, 8),
+            "decay": (0.3, 0.95),
+            "initial_pool_size": (10, 30),
+            "start_subset": (5, 15),
+        },
     })
+    
+    if use_map_elites:
+        print(">> Mode: MAP-Elites Evolution")
+        evo_config.update({
+            "map_elites_enabled": True,
+            "population_size": pop_size, # This becomes the batch size for offspring generation
+            "map_elites_initial_fill": initial_fill,
+            # Dimensions: 
+            # 1. Aggressiveness (n_agents * steps): Measures "effort". Range ~10 to 240.
+            # 2. Complexity (Tree Size): Measures "sophistication". Range ~5 to 50.
+            "map_elites_dims": ["aggressiveness", "complexity"],
+            "map_elites_bins": [15, 12], 
+            "map_elites_ranges": [(10, 150), (5, 60)],
+            
+            # Genetic Operators
+            "crossover_strategy": "uniform_parameter_mix", # Simple mixing
+            "mutation_strategy": "guided_mutation",        # Smart mutation
+            "base_mutation_rate": 0.25,
+        })
+    else:
+        print(">> Mode: Standard Evolution (GA)")
+        evo_config.update({
+            "map_elites_enabled": False,
+            "population_size": pop_size,
+            "creation_strategy": "seeded_initialization",
+            "crossover_strategy": "root_mix_crossover",
+            "mutation_strategy": "guided_mutation",
+            "base_mutation_rate": 0.2,
+            "elite_fraction": 0.1,
+        })
     
     # CLEANUP IF START_FROM_SCRATCH
     if start_from_scratch:
@@ -159,7 +176,11 @@ def run_evolution(
             evo_config["checkpoint_path"],
             best_params_path
         ]
-        
+        # Also clean up intermediate checkpoints
+        for f in os.listdir(ckpt_dir):
+            if f.startswith(f"ckpt_{dataset_name}_gen_"):
+                files_to_remove.append(os.path.join(ckpt_dir, f))
+
         for fpath in files_to_remove:
             if os.path.exists(fpath):
                 try:
@@ -170,29 +191,44 @@ def run_evolution(
         print("[Scratch Mode] Cleanup complete.\n")
 
 
-    # Initialize Extensions
-    extensions = [
-        # Prevent population from converging to a single local optimum
-        NichingExtension(sigma_share=2.5, n_probes=8),
-        # Inject fresh random genomes to maintain diversity
-        RandomImmigrationExtension(rate=0.1) #factory is filled by engine
-    ]
+    # Initialize Extensions (Standard GA only)
+    extensions = []
+    if not use_map_elites:
+        extensions = [
+            NichingExtension(sigma_share=2.5, n_probes=8),
+            RandomImmigrationExtension(rate=0.1)
+        ]
 
     # Launch Engine
-    if os.path.exists(evo_config["checkpoint_path"]):
+    # Check for checkpoint resume
+    if os.path.exists(evo_config["checkpoint_path"]) and not start_from_scratch:
         print(f"Resuming from checkpoint: {evo_config['checkpoint_path']}")
-        engine = EvolutionEngine.load_checkpoint(
-            checkpoint_path=evo_config["checkpoint_path"],
-            retriever=retriever,
-            fitness_calculator=fitness_calc,
-            evaluator=evaluator,
-            train_query_ids=train_q_ids,
-            train_ground_truth=train_gt,
-            val_query_ids=val_q_ids,
-            val_ground_truth=val_gt,
-            config=evo_config,
-            extensions=extensions
-        )
+        try:
+            engine = EvolutionEngine.load_checkpoint(
+                checkpoint_path=evo_config["checkpoint_path"],
+                retriever=retriever,
+                fitness_calculator=fitness_calc,
+                evaluator=evaluator,
+                train_query_ids=train_q_ids,
+                train_ground_truth=train_gt,
+                val_query_ids=val_q_ids,
+                val_ground_truth=val_gt,
+                config=evo_config,
+                extensions=extensions
+            )
+        except Exception as e:
+            print(f"Failed to load checkpoint ({e}). Starting fresh.")
+            engine = EvolutionEngine(
+                retriever=retriever,
+                fitness_calculator=fitness_calc,
+                evaluator=evaluator,
+                train_query_ids=train_q_ids,
+                train_ground_truth=train_gt,
+                val_query_ids=val_q_ids,
+                val_ground_truth=val_gt,
+                config=evo_config,
+                extensions=extensions
+            )
     else:
         engine = EvolutionEngine(
             retriever=retriever,
@@ -212,42 +248,45 @@ def run_evolution(
     finally:
         print("Cleaning up shared memory...")
         vector_store.close()
+    
     print("\n" + "="*30)
     print("Evolution Complete. Best Genome:")
     if best_genome:
         best_genome.pretty_print()
+        
+        # Save specifically the best params for easy copy-pasting
+        best_params_path = os.path.join(best_params_dir, f"best_params_{dataset_name}.json")
+        with open(best_params_path, "w") as f:
+            json.dump(best_genome.to_dict(), f, indent=2)
+        print(f"Saved best genome to {best_params_path}")
     else:
         print("No best genome found.")
     print("="*30)
-    
-    # Save specifically the best params for easy copy-pasting
-    import json
-    # best_params_dir created above
-    best_params_path = os.path.join(best_params_dir, f"best_params_{dataset_name}.json")
-    
-    with open(best_params_path, "w") as f:
-        # Helper to dump the genome cleanly
-        json.dump(best_genome.to_dict(), f, indent=2)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="prime")
-    parser.add_argument("--gens", type=int, default=30)
-    parser.add_argument("--pop", type=int, default=60)
-    parser.add_argument("--train_ss", type=int, default=150, help="Number of training samples to use for evolution.")
-    parser.add_argument("--val_ss", type=int, default=100, help="Number of validation samples to use for evolution.")
+    parser.add_argument("--gens", type=int, default=100)
+    parser.add_argument("--pop", type=int, default=30, help="Batch size for MAP-Elites or Pop Size for GA")
+    parser.add_argument("--init_fill", type=int, default=100, help="Initial random population for MAP-Elites")
+    parser.add_argument("--train_ss", type=int, default=200, help="Number of training samples.")
+    parser.add_argument("--val_ss", type=int, default=100, help="Number of validation samples.")
     parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent genomes to evaluate.")
     parser.add_argument("--workers", type=int, default=4, help="Number of threads per retrieval.")
-    parser.add_argument("--scratch", action="store_true", dest="start_from_scratch", help="If set, clears previous checkpoints/logs to start fresh.")
+    parser.add_argument("--scratch", action="store_true", help="Clear previous checkpoints/logs.")
+    parser.add_argument("--standard-ga", action="store_true", help="Use Standard GA instead of MAP-Elites")
+    
     args = parser.parse_args()
     
     run_evolution(
-        args.dataset, 
-        args.gens, 
-        args.pop, 
-        args.train_ss, 
-        args.val_ss,
-        args.start_from_scratch,
-        args.concurrent,
-        args.workers
+        dataset_name=args.dataset, 
+        n_gens=args.gens, 
+        pop_size=args.pop, 
+        initial_fill=args.init_fill,
+        train_sample_size=args.train_ss, 
+        val_sample_size=args.val_ss,
+        start_from_scratch=args.scratch,
+        concurrent_evals=args.concurrent,
+        max_workers=args.workers,
+        use_map_elites=(not args.standard_ga)
     )
