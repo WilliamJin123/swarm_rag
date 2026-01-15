@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import logging
 import numpy as np
-from typing import List, Any
+from typing import List, Any, Optional
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
@@ -11,19 +11,27 @@ from ..types.genome import GenomeCompiler, Genome
 
 
 logger = logging.getLogger(__name__)
+
+
 class PopulationEvaluator:
     """
     Isolates the heavy lifting: Running the retriever and computing metrics.
+
+    Supports optional decision tracking for LLM-guided mutations.
+    When enabled, agent decision data is captured during evaluation and
+    stored on the genome for use by the LLM mutation operator.
     """
     def __init__(
-        self, 
-        retriever: RetrievalBackend, # SwarmRetriever conforms to this protocol
+        self,
+        retriever: RetrievalBackend,  # SwarmRetriever conforms to this protocol
         evaluator: Evaluator,
         fitness_calc: FitnessCalculator,
         concurrent_evaluations: int = 4,
         max_workers_per_retrieval: int = 1,
         queries: List[str] = None,
-        ground_truth: List[List[Any]] = None
+        ground_truth: List[List[Any]] = None,
+        track_decisions: bool = False,  # Enable decision tracking for LLM context
+        decision_sample_rate: float = 1.0,  # Fraction of queries to track (1.0 = all)
     ):
         self.retriever = retriever
         self.evaluator = evaluator
@@ -33,6 +41,8 @@ class PopulationEvaluator:
         self.compiler = GenomeCompiler()
         self.concurrent_evaluations = concurrent_evaluations
         self.max_workers_per_retrieval = max_workers_per_retrieval
+        self.track_decisions = track_decisions
+        self.decision_sample_rate = decision_sample_rate
 
     def evaluate(
         self, 
@@ -108,18 +118,37 @@ class PopulationEvaluator:
                 #     genome.fitness = FitnessResult(quality_score=0.0, stability_score=0.0, cost_score=9999.0)
                 #     genome.evaluated = True
 
+    def _create_decision_tracker(self) -> Optional[Any]:
+        """Create a DecisionTracker if decision tracking is enabled."""
+        if not self.track_decisions:
+            return None
+        try:
+            from ..llm.decision_tracker import DecisionTracker
+            return DecisionTracker(
+                enabled=True,
+                sample_rate=self.decision_sample_rate
+            )
+        except ImportError:
+            logger.warning("DecisionTracker not available, disabling decision tracking")
+            return None
+
     def _evaluate_single(
-        self, 
-        genome: Genome, 
+        self,
+        genome: Genome,
         queries: List[str],
         ground_truth: List[List[Any]]
     ):
         """
         Runs a single evaluation with a strict thread budget.
+
+        If decision tracking is enabled, captures agent decision data
+        and stores a summary on the genome for LLM mutation context.
         """
         # Compile
         retriever_kwargs = self.compiler.compile(genome)
 
+        # Create decision tracker if enabled
+        decision_tracker = self._create_decision_tracker()
 
         # --- STOCHASTIC FILTERING (PROBE PHASE) ---
         probe_size = 20  # Evaluate on first 20 queries
@@ -128,18 +157,31 @@ class PopulationEvaluator:
 
         start_time = time.time()
 
-        probe_results = self.retriever.retrieve_batch(
-            queries=probe_queries,
-            max_workers=self.max_workers_per_retrieval,
-            genome_id=f"{genome.id}_probe",
-            **retriever_kwargs
-        )
+        # Run probe with decision tracking on a few queries
+        probe_results = []
+        if decision_tracker is not None:
+            # Use single-query retrieval for probe to capture decisions
+            for q in probe_queries:
+                res = self.retriever.retrieve(
+                    query=q,
+                    decision_tracker=decision_tracker,
+                    **retriever_kwargs
+                )
+                probe_results.append(res)
+        else:
+            # Use batch retrieval for speed when not tracking
+            probe_results = self.retriever.retrieve_batch(
+                queries=probe_queries,
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=f"{genome.id}_probe",
+                **retriever_kwargs
+            )
 
         probe_metrics = []
         for i, res in enumerate(probe_results):
             m = self.evaluator.calculate_metrics(res, probe_gt[i], latency_sec=0)
             probe_metrics.append(m)
-        
+
         avg_probe_metrics = self._mean_metrics(probe_metrics)
         avg_probe_metrics['latency'] = (time.time() - start_time) / probe_size
 
@@ -153,6 +195,11 @@ class PopulationEvaluator:
             genome.metrics = avg_probe_metrics
             genome.fitness = probe_fitness
             genome.evaluated = True
+
+            # Store decision context even for short-circuited genomes
+            if decision_tracker is not None:
+                genome.decision_context = decision_tracker.to_summary_dict()
+
             return
 
         # Passed fitness probe on first 20 or queries
@@ -164,7 +211,7 @@ class PopulationEvaluator:
             genome_id=genome.id,
             **retriever_kwargs
         )
-        
+
         total_latency = time.time() - start_time
 
         batch_results = probe_results + remaining_results
@@ -173,12 +220,12 @@ class PopulationEvaluator:
         all_metrics = []
         for q_idx, retrieved_items in enumerate(batch_results):
             m = self.evaluator.calculate_metrics(
-                retrieved_nodes=retrieved_items, 
+                retrieved_nodes=retrieved_items,
                 ground_truth_ids=ground_truth[q_idx],
-                latency_sec=0 
+                latency_sec=0
             )
             all_metrics.append(m)
-        
+
         avg_metrics = self._mean_metrics(all_metrics)
         avg_metrics['latency'] = total_latency / max(1, len(queries))
         avg_metrics['complexity'] = float(genome.complexity())
@@ -187,6 +234,10 @@ class PopulationEvaluator:
         genome.metrics = avg_metrics
         genome.fitness = self.fitness_calc.calculate(avg_metrics, genome)
         genome.evaluated = True
+
+        # Store decision context for LLM mutations
+        if decision_tracker is not None:
+            genome.decision_context = decision_tracker.to_summary_dict()
 
     def _mean_metrics(self, all_metrics):
         if not all_metrics: return {}

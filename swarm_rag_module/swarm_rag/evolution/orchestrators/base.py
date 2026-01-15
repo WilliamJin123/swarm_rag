@@ -6,16 +6,15 @@ import random
 import pickle
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Union, Dict
 
 import numpy as np
 
 from ..types.genome import Genome
-from ..types.config import EvolutionContext, EvolutionConfigDict
+from ..types.config import EvolutionConfig, EvolutionContext
 from ..execution.evaluator import PopulationEvaluator
 from ..execution.tracker import ProgressTracker
 from ..execution.fitness_strategies import FitnessStrategy
-from ..extensions.base import EvolutionExtension
 from ...utils import TqdmLoggingHandler
 
 
@@ -27,7 +26,6 @@ class BaseOrchestrator(ABC):
     - Logging setup/cleanup
     - Checkpointing (save/load)
     - Validation runner
-    - Extension hook invocation
 
     Subclasses implement the specific optimization loop.
     """
@@ -40,7 +38,6 @@ class BaseOrchestrator(ABC):
         tracker: ProgressTracker,
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
-        extensions: List[EvolutionExtension] = None
     ):
         """
         Initialize base orchestrator.
@@ -52,19 +49,23 @@ class BaseOrchestrator(ABC):
             tracker: Progress tracker for logging
             val_query_ids: Validation query IDs
             val_ground_truth: Validation ground truth
-            extensions: List of evolution extensions (hooks)
         """
         self.context = context
-        self.config = context.config
+        self.evo_config = context.config
         self.evaluator = evaluator
         self.fitness_strategy = fitness_strategy
         self.tracker = tracker
         self.val_query_ids = val_query_ids
         self.val_gt = val_ground_truth
-        self.extensions = extensions or []
 
         self.logger: Optional[logging.Logger] = None
         self.restored_best_genome: Optional[Genome] = None
+
+    # Property for backwards compatibility
+    @property
+    def config(self) -> Dict[str, Any]:
+        """Get config as flat dict for backwards compatibility."""
+        return self.evo_config.to_flat_dict()
 
     def setup_logging(self) -> logging.Logger:
         """
@@ -81,18 +82,19 @@ class BaseOrchestrator(ABC):
             root_logger.handlers.clear()
 
         # File handler for detailed logs
-        log_file_path = self.config["log_path"].replace(".json", ".log")
+        log_path = self.evo_config.checkpoint.log_path
+        log_file_path = log_path.replace(".json", ".log").replace(".jsonl", ".log")
         log_dir = os.path.dirname(log_file_path)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
 
         fh = logging.FileHandler(log_file_path)
-        fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
         root_logger.addHandler(fh)
 
         # Tqdm-friendly console handler
         th = TqdmLoggingHandler()
-        th.setFormatter(logging.Formatter('%(message)s'))
+        th.setFormatter(logging.Formatter("%(message)s"))
         root_logger.addHandler(th)
 
         return logging.getLogger("evolution")
@@ -116,8 +118,8 @@ class BaseOrchestrator(ABC):
         Returns:
             Validation stats dict if validation was run, else None
         """
-        n_gen = self.config["n_generations"]
-        val_freq = self.config.get("validation_frequency", 5)
+        n_gen = self.evo_config.n_generations
+        val_freq = self.evo_config.checkpoint.validation_frequency
 
         if (generation % val_freq == 0) or (generation == n_gen - 1):
             # Create a copy to not mess up training metrics
@@ -126,14 +128,12 @@ class BaseOrchestrator(ABC):
 
             # Evaluate on validation set
             self.evaluator.evaluate(
-                [val_candidate],
-                queries=self.val_query_ids,
-                ground_truth=self.val_gt
+                [val_candidate], queries=self.val_query_ids, ground_truth=self.val_gt
             )
 
             return {
                 "best_quality": val_candidate.fitness.quality_score,
-                "recall": val_candidate.metrics.get("Recall@20", 0.0)
+                "recall": val_candidate.metrics.get("Recall@20", 0.0),
             }
 
         return None
@@ -143,7 +143,7 @@ class BaseOrchestrator(ABC):
         population: List[Genome],
         best_genome: Genome,
         generation: int,
-        extra_state: dict = None
+        extra_state: dict = None,
     ):
         """
         Saves evolution state to disk.
@@ -161,14 +161,14 @@ class BaseOrchestrator(ABC):
             "random_state": random.getstate(),
             "np_random_state": np.random.get_state(),
             "tracker_history": self.tracker.history,
-            "orchestrator_type": self.__class__.__name__
+            "orchestrator_type": self.__class__.__name__,
         }
 
         # Merge extra state if provided
         if extra_state:
             state.update(extra_state)
 
-        ckpt_path = self.config["checkpoint_path"]
+        ckpt_path = self.evo_config.checkpoint.checkpoint_path
         ckpt_dir = os.path.dirname(ckpt_path)
         if ckpt_dir:
             os.makedirs(ckpt_dir, exist_ok=True)
@@ -191,18 +191,6 @@ class BaseOrchestrator(ABC):
 
         print(f"--> Checkpoint saved: {numbered_path}")
 
-    def invoke_extension(self, hook_name: str):
-        """
-        Invokes a lifecycle hook on all extensions.
-
-        Args:
-            hook_name: Name of the hook method (e.g., "on_generation_start")
-        """
-        for ext in self.extensions:
-            method = getattr(ext, hook_name, None)
-            if method:
-                method(self.context)
-
     def _find_best_in_population(self, population: List[Genome]) -> Optional[Genome]:
         """
         Finds the best genome in a population.
@@ -216,7 +204,7 @@ class BaseOrchestrator(ABC):
         if not population:
             return None
 
-        evaluated = [g for g in population if g.fitness.quality_score > -float('inf')]
+        evaluated = [g for g in population if g.fitness.quality_score > -float("inf")]
         if not evaluated:
             return None
 

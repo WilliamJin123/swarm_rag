@@ -1,14 +1,21 @@
 import random
 import numpy as np
-from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict, Callable
+from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict, Callable, Union
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import logging
-from ..utils import LRUCache
+from ..utils import LRUCache, get_device, to_numpy
 
 from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
+
+# Optional torch import for GPU operations
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
 
 class AgentGroupConfig(TypedDict):
     """
@@ -48,9 +55,9 @@ class SwarmRetriever:
     PHEROMONE_EPSILON = 1e-6
 
     def __init__(
-        self, 
-        vector_store: VectorStore, 
-        graph_store: GraphStore, 
+        self,
+        vector_store: VectorStore,
+        graph_store: GraphStore,
         embedding_provider: EmbeddingProvider,
         seed: int = None,
         cache_neighbors: bool = False,
@@ -59,12 +66,13 @@ class SwarmRetriever:
         cache_vectors: bool = True,
         doc_cache_size: int = 50000,
         query_cache_size: int = 1000,
+        use_gpu: bool = True,
     ):
         self.vector_store = vector_store
         self.graph_store = graph_store
         self.embed_fn = embedding_provider
         self.base_pheromones = defaultdict(float)
-        
+
         self.py_rng = random.Random(seed) if seed else random
         self.np_rng = np.random.default_rng(seed) if seed else np.random
 
@@ -84,6 +92,19 @@ class SwarmRetriever:
             self.doc_cache = LRUCache(doc_cache_size)
             self.query_cache = LRUCache(query_cache_size)
 
+        # GPU support detection
+        self._use_gpu = use_gpu and _TORCH_AVAILABLE and get_device() == "cuda"
+        self._has_gpu_store = hasattr(vector_store, 'compute_similarities') and hasattr(vector_store, 'is_gpu')
+
+        if self._use_gpu and self._has_gpu_store and getattr(vector_store, 'is_gpu', False):
+            self._device = getattr(vector_store, 'device', 'cuda')
+            logger.info(f"SwarmRetriever: GPU acceleration enabled on {self._device}")
+        else:
+            self._device = "cpu"
+            self._use_gpu = False
+            if use_gpu:
+                logger.debug("SwarmRetriever: GPU not available, using CPU")
+
     def _resolve_params(self, **user_params) -> Dict:
         """Standard parameter resolution."""
         active_user_params = {k: v for k, v in user_params.items() if v is not None}
@@ -92,11 +113,11 @@ class SwarmRetriever:
         return resolved_params
     
     def retrieve(
-            self, 
+            self,
             query: Any,
             agent_groups: Optional[List[AgentGroupConfig]] = None,
             seed: Optional[int] = None,
-            n_agents: Optional[int] = None, 
+            n_agents: Optional[int] = None,
             steps: Optional[int] = None,
             decay: Optional[float] = None,
             drop_zone_inc: Optional[float] = None,
@@ -105,7 +126,8 @@ class SwarmRetriever:
             top_k: Optional[int] = None,
             movement_strategies: Optional[Dict] = None,
             ranking_strategies: Optional[Dict] = None,
-            deposit_strategies: Optional[Dict] = None
+            deposit_strategies: Optional[Dict] = None,
+            decision_tracker: Optional[Any] = None,  # DecisionTracker for LLM context
         ) -> List[Dict]:
             
         # Handle explicit seeding for this run
@@ -142,10 +164,11 @@ class SwarmRetriever:
         query_vec = self._get_cached_query_vector(query)
 
         return self._retrieve(
-            query_vec=query_vec, 
+            query_vec=query_vec,
             resolved_agents=resolved_agents,
             py_rng=py_rng,
             np_rng=np_rng,
+            decision_tracker=decision_tracker,
             **params)
 
     def retrieve_batch(
@@ -308,15 +331,16 @@ class SwarmRetriever:
         query_vec: np.ndarray,
         resolved_agents: List[Tuple[Callable, Callable]],
         steps: int,
-        decay: float,      
-        drop_zone_inc: float,   
+        decay: float,
+        drop_zone_inc: float,
         initial_pool_size: int,
         start_subset: int,
         top_k: int,
         ranking_strategies: Dict,
         py_rng: random.Random,
         np_rng: np.random.Generator,
-        **kwargs # Catch unused global params
+        decision_tracker: Optional[Any] = None,  # DecisionTracker for LLM context
+        **kwargs  # Catch unused global params
     ) -> List[Dict]:
         """
         Core retrieval logic shared between retrieve() and retrieve_batch().
@@ -351,6 +375,14 @@ class SwarmRetriever:
         agent_trajectories = [[loc] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
 
+        # Initialize decision tracking if provided
+        if decision_tracker is not None:
+            decision_tracker.start_query(
+                query_id=id(query_vec),  # Use object id as query identifier
+                n_agents=n_agents,
+                n_steps=steps
+            )
+
         # --- TRAVERSAL LOOP ---
         for step in range(steps):
             pheromone_updates = {}
@@ -366,11 +398,12 @@ class SwarmRetriever:
                     current_loc=current_loc,
                     query_vec=query_vec,
                     query_pheromones=query_pheromones,
-                    move_func=move_fn, 
-                    deposit_func=deposit_fn, 
+                    move_func=move_fn,
+                    deposit_func=deposit_fn,
                     step=step,
                     max_pheromone=max_pheromone,
-                    np_rng=np_rng
+                    np_rng=np_rng,
+                    decision_tracker=decision_tracker,
                 )
 
                 if result:
@@ -510,7 +543,7 @@ class SwarmRetriever:
         return lambda ctx: 0.0 # Fallback
 
     def _process_agent_step(
-        self, 
+        self,
         agent_id: int,
         current_loc: int,
         query_vec: np.ndarray,
@@ -520,22 +553,23 @@ class SwarmRetriever:
         step: int,
         max_pheromone: float,
         np_rng: np.random.Generator,
+        decision_tracker: Optional[Any] = None,  # DecisionTracker for LLM context
     ) -> Optional[Dict]:
         """Vectorized agent step processing using pre-composed heuristics."""
         neighbors = self._get_cached_neighbors(current_loc)
-        if len(neighbors) == 0:  
+        if len(neighbors) == 0:
             return None
         if step % 2 == 0:
             logger.debug(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
-        
+
         # Fetch Matrix & IDs (Two-phase fetch handled internally by _fetch_vectors_batch)
         candidate_matrix, valid_ids = self._fetch_vectors_batch(neighbors)
         if len(valid_ids) == 0:
             return None
-            
+
         # Prefetch Vectorization Metadata
         p_vals = np.array([query_pheromones.get(nid, 0.0) for nid in valid_ids])
-        
+
         # Safe degree fetching using Two-Phase Fetch for degrees
         degrees = self._fetch_degrees_batch(valid_ids)
 
@@ -554,12 +588,17 @@ class SwarmRetriever:
 
         # Calculate weighted scores via single call
         total_scores = move_func(ctx)
-        
+
+        # Capture individual heuristic scores if tracking decisions
+        heuristic_scores = {}
+        if decision_tracker is not None and decision_tracker.enabled:
+            heuristic_scores = self._capture_heuristic_scores(ctx)
+
         total_scores = np.maximum(total_scores, 0.001)
-        
+
         if len(valid_ids) > 5:
-             total_scores[total_scores < 0.01] = 0.0
-             
+            total_scores[total_scores < 0.01] = 0.0
+
         if np.sum(total_scores) == 0:
             return None
 
@@ -567,20 +606,57 @@ class SwarmRetriever:
         probs = total_scores / np.sum(total_scores)
         chosen_idx = int(np_rng.choice(len(valid_ids), p=probs))
         next_node = valid_ids[chosen_idx]
-        
+
         # Calculate deposit via single call
         ctx.target_vecs = candidate_matrix[chosen_idx : chosen_idx+1]
         ctx.target_ids = [next_node]
         ctx.pheromone_values = p_vals[chosen_idx : chosen_idx+1]
         ctx.node_degrees = degrees[chosen_idx : chosen_idx+1]
-        
+
         deposit_amount = deposit_func(ctx)
-        
+
+        # Record decision for LLM context
+        if decision_tracker is not None:
+            decision_tracker.record_decision(
+                agent_id=agent_id,
+                step=step,
+                current_node=current_loc,
+                candidates=valid_ids,
+                heuristic_scores=heuristic_scores,
+                final_scores=total_scores,
+                chosen_node=next_node,
+                chosen_index=chosen_idx,
+                deposit=deposit_amount
+            )
+
         return {
             'new_location': next_node,
             'node_id': next_node,
             'deposit': deposit_amount
         }
+
+    def _capture_heuristic_scores(self, ctx: HeuristicContext) -> Dict[str, np.ndarray]:
+        """
+        Capture individual heuristic scores for decision analysis.
+
+        This method computes individual heuristic contributions separately
+        to provide insight into agent decision-making. Used only when
+        decision tracking is enabled.
+        """
+        scores = {}
+        try:
+            scores["semantic_similarity"] = np.array(Heuristics.semantic_similarity(ctx))
+        except Exception:
+            pass
+        try:
+            scores["node_centrality"] = np.array(Heuristics.node_centrality(ctx))
+        except Exception:
+            pass
+        try:
+            scores["pheromone_repulsion"] = np.array(Heuristics.pheromone_repulsion(ctx))
+        except Exception:
+            pass
+        return scores
     
     def _ranking(
         self, 
@@ -811,3 +887,489 @@ class SwarmRetriever:
             final_embeddings[i, :] = results_by_index[i]
 
         return final_embeddings
+
+    def _compute_similarities_gpu(
+        self,
+        query_vec: np.ndarray,
+        candidate_ids: Sequence[int]
+    ) -> Tuple[np.ndarray, List[int]]:
+        """
+        Compute similarities using GPU when available.
+
+        Falls back to standard numpy computation if GPU not available.
+
+        Args:
+            query_vec: Query embedding (numpy array)
+            candidate_ids: List of candidate document IDs
+
+        Returns:
+            Tuple of (similarity scores array, valid_ids list)
+        """
+        # Try GPU path if available
+        if self._use_gpu and self._has_gpu_store:
+            try:
+                scores, valid_ids = self.vector_store.compute_similarities(
+                    query_vec, list(candidate_ids)
+                )
+                # Convert to numpy if tensor
+                if _TORCH_AVAILABLE and isinstance(scores, torch.Tensor):
+                    scores = scores.cpu().numpy()
+                return scores, valid_ids
+            except Exception as e:
+                logger.debug(f"GPU similarity computation failed, falling back to CPU: {e}")
+
+        # CPU fallback
+        candidate_matrix, valid_ids = self._fetch_vectors_batch(candidate_ids)
+        if len(valid_ids) == 0:
+            return np.array([]), []
+
+        # Normalize query
+        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+
+        # Compute cosine similarity
+        scores = np.dot(candidate_matrix, query_norm)
+        return scores, valid_ids
+
+    @property
+    def device(self) -> str:
+        """Return the device this retriever is using."""
+        return self._device
+
+    @property
+    def is_gpu_enabled(self) -> bool:
+        """Check if GPU acceleration is active."""
+        return self._use_gpu
+
+    # === BATCH OPTIMIZATION METHODS ===
+
+    def _fetch_vectors_batch_gpu(
+        self,
+        node_ids: Sequence[int]
+    ) -> Tuple[Any, List[int]]:
+        """
+        Fetch vectors as GPU tensors when available, with automatic fallback.
+
+        This method keeps data on GPU to avoid CPU-GPU transfers when possible.
+
+        Args:
+            node_ids: Sequence of node IDs to fetch
+
+        Returns:
+            Tuple of (vectors tensor/array, valid_ids list)
+        """
+        # Try GPU path if store supports it
+        if self._use_gpu and hasattr(self.vector_store, 'fetch_batch_gpu'):
+            try:
+                return self.vector_store.fetch_batch_gpu(list(node_ids))
+            except Exception as e:
+                logger.debug(f"GPU fetch failed, falling back to CPU: {e}")
+
+        # Fall back to standard numpy path
+        return self._fetch_vectors_batch(node_ids)
+
+    def _ranking_vectorized(
+        self,
+        agent_trajectories: List[List[int]],
+        query_vec: np.ndarray,
+        ranking_func: Callable,
+        top_k: int,
+        n_agents: int
+    ) -> List[Dict]:
+        """
+        Vectorized ranking that leverages GPU when available.
+
+        Optimizes ranking by:
+        1. Batch-fetching all vectors at once
+        2. Computing similarities in a single GPU operation
+        3. Vectorized score computation
+
+        Args:
+            agent_trajectories: List of paths taken by each agent
+            query_vec: Query embedding
+            ranking_func: Ranking function to apply
+            top_k: Number of top results to return
+            n_agents: Total number of agents
+
+        Returns:
+            List of top-k results with scores
+        """
+        # Count votes
+        all_visited = [node for path in agent_trajectories for node in path]
+        vote_counts = Counter(all_visited)
+        unique_visited = list(vote_counts.keys())
+
+        if not unique_visited:
+            return []
+
+        # Batch fetch vectors - use GPU if available
+        vectors_matrix, valid_ids = self._fetch_vectors_batch_gpu(unique_visited)
+
+        if len(valid_ids) == 0:
+            return []
+
+        # Convert to numpy for ranking if it's a tensor
+        if _TORCH_AVAILABLE and isinstance(vectors_matrix, torch.Tensor):
+            vectors_np = to_numpy(vectors_matrix)
+        else:
+            vectors_np = np.asarray(vectors_matrix)
+
+        # Compute base semantic scores vectorized
+        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+        base_scores = np.dot(vectors_np, query_norm)
+
+        # Build results with combined scores
+        results = []
+        for i, node_id in enumerate(valid_ids):
+            votes = vote_counts[node_id]
+            vote_score = votes / n_agents if n_agents > 0 else 0.0
+
+            # Create context for custom ranking
+            node_ctx = HeuristicContext(
+                query_vec=query_vec,
+                target_vecs=vectors_np[i:i+1],
+                target_ids=[node_id],
+                graph=self.graph_store,
+                votes=votes,
+                total_agents=n_agents
+            )
+
+            score = ranking_func(node_ctx)
+            results.append({'id': node_id, 'score': score})
+
+        # Sort and return top-k
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:top_k]
+
+    def _batch_initial_search(
+        self,
+        query_vecs: np.ndarray,
+        pool_size: int
+    ) -> List[List[int]]:
+        """
+        Perform batch initial search for multiple queries.
+
+        Uses GPU-accelerated batch search when available.
+
+        Args:
+            query_vecs: Query vectors of shape (n_queries, dim)
+            pool_size: Number of candidates per query
+
+        Returns:
+            List of candidate ID lists, one per query
+        """
+        # Check if vector store supports batch search
+        if hasattr(self.vector_store, 'search_batch'):
+            try:
+                results = self.vector_store.search_batch(query_vecs, pool_size)
+                return [
+                    [r['id'] for r in res if self.graph_store.contains(r['id'])]
+                    for res in results
+                ]
+            except Exception as e:
+                logger.debug(f"Batch search failed, falling back to sequential: {e}")
+
+        # Fall back to sequential
+        all_results = []
+        for vec in query_vecs:
+            search_res = self.vector_store.search(vec, limit=pool_size)
+            valid_ids = [r['id'] for r in search_res if self.graph_store.contains(r['id'])]
+            all_results.append(valid_ids)
+
+        return all_results
+
+    def _compute_batch_similarities_gpu(
+        self,
+        query_vecs: np.ndarray,
+        candidate_ids_per_query: List[List[int]]
+    ) -> List[Tuple[np.ndarray, List[int]]]:
+        """
+        Compute similarities for multiple queries in batch.
+
+        Optimizes by:
+        1. Gathering all unique candidates
+        2. Single fetch for all vectors
+        3. Batch matrix multiplication
+
+        Args:
+            query_vecs: Query vectors of shape (n_queries, dim)
+            candidate_ids_per_query: List of candidate ID lists
+
+        Returns:
+            List of (scores, valid_ids) tuples per query
+        """
+        if not self._use_gpu:
+            # Fall back to sequential
+            results = []
+            for i, (query_vec, candidate_ids) in enumerate(zip(query_vecs, candidate_ids_per_query)):
+                scores, valid_ids = self._compute_similarities_gpu(query_vec, candidate_ids)
+                results.append((scores, valid_ids))
+            return results
+
+        # Gather all unique candidates
+        all_candidates = set()
+        for candidates in candidate_ids_per_query:
+            all_candidates.update(candidates)
+        all_candidates = list(all_candidates)
+
+        if not all_candidates:
+            return [(np.array([]), []) for _ in query_vecs]
+
+        # Batch fetch all vectors
+        all_vectors, valid_all_ids = self._fetch_vectors_batch_gpu(all_candidates)
+
+        if len(valid_all_ids) == 0:
+            return [(np.array([]), []) for _ in query_vecs]
+
+        # Build ID to index mapping
+        id_to_idx = {vid: i for i, vid in enumerate(valid_all_ids)}
+
+        # Convert vectors for computation
+        if _TORCH_AVAILABLE and isinstance(all_vectors, torch.Tensor):
+            all_vectors_np = to_numpy(all_vectors)
+        else:
+            all_vectors_np = np.asarray(all_vectors)
+
+        # Normalize queries
+        query_norms = np.linalg.norm(query_vecs, axis=1, keepdims=True) + 1e-8
+        query_vecs_norm = query_vecs / query_norms
+
+        # Compute all similarities at once: (n_queries, dim) @ (dim, n_candidates) -> (n_queries, n_candidates)
+        all_similarities = np.dot(query_vecs_norm, all_vectors_np.T)
+
+        # Extract per-query results
+        results = []
+        for i, candidate_ids in enumerate(candidate_ids_per_query):
+            valid_ids = [cid for cid in candidate_ids if cid in id_to_idx]
+            if not valid_ids:
+                results.append((np.array([]), []))
+                continue
+
+            indices = [id_to_idx[vid] for vid in valid_ids]
+            scores = all_similarities[i, indices]
+            results.append((scores, valid_ids))
+
+        return results
+
+    def retrieve_batch_optimized(
+        self,
+        queries: List[Any],
+        agent_groups: Optional[List[AgentGroupConfig]] = None,
+        seed: Optional[int] = None,
+        n_agents: Optional[int] = None,
+        steps: Optional[int] = None,
+        decay: Optional[float] = None,
+        drop_zone_inc: Optional[float] = None,
+        initial_pool_size: Optional[int] = None,
+        start_subset: Optional[int] = None,
+        top_k: Optional[int] = None,
+        movement_strategies: Optional[Dict] = None,
+        ranking_strategies: Optional[Dict] = None,
+        deposit_strategies: Optional[Dict] = None,
+        max_workers: Optional[int] = 4,
+        use_vectorized_ranking: bool = True,
+        **kwargs
+    ) -> List[List[Dict]]:
+        """
+        Optimized batch retrieval with GPU acceleration.
+
+        This method provides additional optimizations over retrieve_batch:
+        1. Batch initial searches (single GPU operation for all queries)
+        2. Vectorized ranking when enabled
+        3. Better GPU memory utilization
+
+        Args:
+            queries: List of queries to retrieve for
+            agent_groups: Optional agent group configurations
+            seed: Random seed for reproducibility
+            n_agents: Number of agents per query
+            steps: Number of traversal steps
+            decay: Pheromone decay rate
+            drop_zone_inc: Drop zone increment
+            initial_pool_size: Size of initial candidate pool
+            start_subset: Size of starting subset
+            top_k: Number of results to return
+            movement_strategies: Movement strategy configuration
+            ranking_strategies: Ranking strategy configuration
+            deposit_strategies: Deposit strategy configuration
+            max_workers: Maximum parallel workers
+            use_vectorized_ranking: Whether to use vectorized ranking
+            **kwargs: Additional arguments
+
+        Returns:
+            List of result lists, one per query
+        """
+        if not queries:
+            return []
+
+        # Resolve parameters
+        params = self._resolve_params(
+            n_agents=n_agents,
+            steps=steps,
+            decay=decay,
+            drop_zone_inc=drop_zone_inc,
+            initial_pool_size=initial_pool_size,
+            start_subset=start_subset,
+            top_k=top_k,
+            ranking_strategies=ranking_strategies,
+            movement_strategies=movement_strategies,
+            deposit_strategies=deposit_strategies,
+            **kwargs
+        )
+
+        # Batch embed all queries
+        query_matrix = self._get_cached_query_embeddings_batch(queries)
+
+        # Batch initial search using GPU
+        logger.debug("Performing batch initial search...")
+        initial_pools = self._batch_initial_search(query_matrix, params['initial_pool_size'])
+
+        # Prepare agents
+        resolved_agents = self._prepare_agents(
+            agent_groups=agent_groups,
+            n_agents=params['n_agents'],
+            movement_strategies=params['movement_strategies'],
+            deposit_strategies=params['deposit_strategies'],
+        )
+
+        # Set up seed
+        base_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+
+        # Process each query
+        results = []
+        for i, (query_vec, initial_pool) in enumerate(zip(query_matrix, initial_pools)):
+            if not initial_pool:
+                results.append([])
+                continue
+
+            q_seed = base_seed + i
+            py_rng = random.Random(q_seed)
+            np_rng = np.random.default_rng(q_seed)
+
+            # Use the standard retrieval with pre-fetched pool
+            result = self._retrieve_with_pool(
+                query_vec=query_vec,
+                initial_pool=initial_pool,
+                resolved_agents=resolved_agents,
+                py_rng=py_rng,
+                np_rng=np_rng,
+                use_vectorized_ranking=use_vectorized_ranking,
+                **params
+            )
+            results.append(result)
+
+        return results
+
+    def _retrieve_with_pool(
+        self,
+        query_vec: np.ndarray,
+        initial_pool: List[int],
+        resolved_agents: List[Tuple[Callable, Callable]],
+        py_rng: random.Random,
+        np_rng: np.random.Generator,
+        steps: int,
+        decay: float,
+        drop_zone_inc: float,
+        start_subset: int,
+        top_k: int,
+        ranking_strategies: Dict,
+        use_vectorized_ranking: bool = True,
+        **kwargs
+    ) -> List[Dict]:
+        """
+        Internal retrieval using a pre-computed initial pool.
+
+        Args:
+            query_vec: Query embedding
+            initial_pool: Pre-computed initial candidate pool
+            resolved_agents: Prepared agent functions
+            py_rng: Python random generator
+            np_rng: NumPy random generator
+            steps: Number of traversal steps
+            decay: Pheromone decay rate
+            drop_zone_inc: Drop zone increment
+            start_subset: Starting subset size
+            top_k: Number of results
+            ranking_strategies: Ranking configuration
+            use_vectorized_ranking: Whether to use vectorized ranking
+            **kwargs: Additional arguments
+
+        Returns:
+            List of results with scores
+        """
+        n_agents = len(resolved_agents)
+
+        # Normalize query
+        query_vec = np.asarray(query_vec).flatten()
+        query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+
+        # Pre-compose ranking strategy
+        ranking_func = self._compose_strategy(ranking_strategies, "ranking")
+
+        if not initial_pool:
+            return []
+
+        drop_zone = initial_pool[:start_subset]
+        dz_len = len(drop_zone)
+
+        # Cache warming
+        if self.cache_neighbors:
+            with ThreadPoolExecutor(max_workers=min(4, dz_len)) as ex:
+                list(ex.map(self._get_cached_neighbors, drop_zone))
+
+        # Spawn agents
+        weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
+        agent_locations = np.array(py_rng.choices(drop_zone, weights=weights, k=n_agents))
+        agent_trajectories = [[loc] for loc in agent_locations]
+        query_pheromones = self.base_pheromones.copy()
+
+        # Traversal loop
+        for step in range(steps):
+            pheromone_updates = {}
+            max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
+
+            for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
+                current_loc = agent_locations[agent_idx]
+
+                result = self._process_agent_step(
+                    agent_id=agent_idx,
+                    current_loc=current_loc,
+                    query_vec=query_vec,
+                    query_pheromones=query_pheromones,
+                    move_func=move_fn,
+                    deposit_func=deposit_fn,
+                    step=step,
+                    max_pheromone=max_pheromone,
+                    np_rng=np_rng
+                )
+
+                if result:
+                    next_node = result['new_location']
+                    agent_locations[agent_idx] = next_node
+                    agent_trajectories[agent_idx].append(next_node)
+
+                    deposit = result['deposit']
+                    if deposit > self.PHEROMONE_EPSILON:
+                        pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
+
+            # Update pheromones
+            if query_pheromones:
+                existing_keys = list(query_pheromones.keys())
+                for k in existing_keys:
+                    new_val = query_pheromones[k] * decay
+                    if new_val < self.PHEROMONE_EPSILON:
+                        del query_pheromones[k]
+                    else:
+                        query_pheromones[k] = new_val
+
+            for node_id, amount in pheromone_updates.items():
+                query_pheromones[node_id] += amount
+
+        # Use vectorized ranking if enabled
+        if use_vectorized_ranking:
+            return self._ranking_vectorized(
+                agent_trajectories, query_vec, ranking_func, top_k, n_agents
+            )
+
+        return self._ranking(
+            agent_trajectories, query_vec, ranking_func, top_k, n_agents
+        )

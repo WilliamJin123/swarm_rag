@@ -1,14 +1,51 @@
+"""
+swarm_rag utilities - re-exports from submodules for backward compatibility.
+"""
+
 import importlib.util
 from threading import Lock
 from collections import OrderedDict
 import logging
 from tqdm.auto import tqdm
 
+# Re-export device utilities
+from .device import (
+    get_device, get_array_module, ensure_tensor, to_numpy,
+    clear_device_cache, get_gpu_memory_info,
+    # CuPy integration
+    is_cupy_available, to_cupy, cupy_to_numpy,
+    cupy_matmul, cupy_dot, cupy_norm, cupy_normalize,
+    cupy_cosine_similarity, cupy_topk, sync_device
+)
+
+# Re-export benchmark utilities
+from .benchmark import (
+    Benchmarker,
+    BenchmarkResult,
+    ComparisonResult,
+    benchmark_vector_search,
+    benchmark_batch_similarity,
+    benchmark_heuristics,
+    run_all_benchmarks,
+    print_benchmark_summary
+)
+
+# Re-export memory utilities
+from .memory import (
+    MemoryProfiler,
+    MemorySnapshot,
+    MemoryDelta,
+    get_gpu_memory_info as memory_get_gpu_info,
+    clear_gpu_cache,
+    memory_guard,
+    estimate_tensor_memory
+)
+
 def fail_on_missing_imports(modules: list[str], extra_name: str = None):
     """
-    Checks if a list of modules can be imported. 
+    Checks if a list of modules can be imported.
     If not, raises an ImportError with the specific pip command to fix it.
-    
+
     Args:
         modules: List of python import names (e.g. ['torch', 'stark_qa'])
         extra_name: The name of the extra in pyproject.toml (e.g. 'stark')
@@ -37,7 +74,7 @@ def fail_on_missing_imports(modules: list[str], extra_name: str = None):
 
 class LRUCache:
     __slots__ = ['maxsize', 'data', 'lock']
-    
+
     def __init__(self, maxsize):
         self.maxsize = maxsize
         self.data = OrderedDict()
@@ -65,3 +102,44 @@ class TqdmLoggingHandler(logging.Handler):
             raise
         except Exception:
             self.handleError(record)
+
+__all__ = [
+    # Core utilities
+    'fail_on_missing_imports',
+    'LRUCache',
+    'TqdmLoggingHandler',
+    # Device utilities
+    'get_device',
+    'get_array_module',
+    'ensure_tensor',
+    'to_numpy',
+    'clear_device_cache',
+    'get_gpu_memory_info',
+    # CuPy integration
+    'is_cupy_available',
+    'to_cupy',
+    'cupy_to_numpy',
+    'cupy_matmul',
+    'cupy_dot',
+    'cupy_norm',
+    'cupy_normalize',
+    'cupy_cosine_similarity',
+    'cupy_topk',
+    'sync_device',
+    # Benchmark utilities
+    'Benchmarker',
+    'BenchmarkResult',
+    'ComparisonResult',
+    'benchmark_vector_search',
+    'benchmark_batch_similarity',
+    'benchmark_heuristics',
+    'run_all_benchmarks',
+    'print_benchmark_summary',
+    # Memory utilities
+    'MemoryProfiler',
+    'MemorySnapshot',
+    'MemoryDelta',
+    'clear_gpu_cache',
+    'memory_guard',
+    'estimate_tensor_memory',
+]

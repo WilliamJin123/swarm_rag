@@ -15,11 +15,12 @@ class MapElitesLoop:
     """
     def __init__(self, context: EvolutionContext):
         self.context = context
-        self.mutation_fn = GeneticRegistry.get_mutation(context.config["mutation_strategy"])
-        self.crossover_fn = GeneticRegistry.get_crossover(context.config["crossover_strategy"])
-        
-        # Batch size is effectively population_size in the config
-        self.batch_size = context.config["population_size"]
+        # Access config via dataclass attributes
+        self.mutation_fn = GeneticRegistry.get_mutation(context.config.genetic.mutation_strategy)
+        self.crossover_fn = GeneticRegistry.get_crossover(context.config.genetic.crossover_strategy)
+
+        # Batch size from MAP-Elites config
+        self.batch_size = context.config.map_elites.batch_size
 
     def step(self, archive: MapElitesArchive) -> List[Genome]:
         """
@@ -28,27 +29,30 @@ class MapElitesLoop:
         Note: Generation counter is managed by the orchestrator, not here.
         """
         offspring: List[Genome] = []
-        
-        # If archive is empty, we can't breed. 
+
+        # If archive is empty, we can't breed.
         # (This should be handled by initialization, but safety check)
         if not archive.grid:
             return offspring
+
+        # Get crossover rate from config
+        crossover_rate = self.context.config.genetic.crossover_rate
 
         # Generate batch
         while len(offspring) < self.batch_size:
             # 1. Selection (Random Elite)
             p1 = archive.select_random()
-            
+
             # 2. Crossover (Optional)
-            if random.random() < self.context.config['crossover_rate']:
+            if random.random() < crossover_rate:
                 p2 = archive.select_random()
                 child = self.crossover_fn(p1, p2, self.context)
             else:
                 child = p1.copy()
-            
+
             # 3. Mutation
             child = self.mutation_fn(child, self.context)
-            
+
             offspring.append(child)
-            
+
         return offspring

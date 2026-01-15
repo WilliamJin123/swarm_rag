@@ -1,14 +1,14 @@
 """
-Evolution Engine - Facade for evolutionary optimization.
+Evolution Engine - MAP-Elites based evolutionary optimization.
 
-This module provides backwards-compatible access to evolution functionality
-while delegating to specialized orchestrators for different algorithms.
+This module provides the main interface for running evolution using MAP-Elites
+with optional LLM-guided mutations.
 """
 import os
 import random
 import pickle
 import numpy as np
-from typing import List, Any
+from typing import List, Any, Union, Dict
 import logging
 
 from ..interfaces.enums import GeneticKey
@@ -17,42 +17,53 @@ from ..core.swarm_retriever import SwarmRetriever
 from ..core.heuristics import HeuristicRegistry
 from ..eval.metrics import Evaluator
 
-from .types.genome import Genome, DEFAULT_PARAMS
-from .types.config import EvolutionContext, EvolutionConfigDict, DEFAULT_EVO_CONFIG
-from .types.expressions import ExpressionEvolution
+from .types.genome import Genome
+from .types.config import (
+    EvolutionConfig,
+    EvolutionContext,
+    DEFAULT_CONFIG,
+    DEFAULT_EVO_CONFIG,
+)
 
 from .execution.evaluator import PopulationEvaluator
-from .execution.loop import EvolutionLoop
 from .execution.fitness import FitnessCalculator
 from .execution.tracker import ProgressTracker
 from .execution.factory import GenomeFactory
 from .execution.fitness_strategies import (
-    FitnessStrategy,
     LexicographicStrategy,
     ParetoStrategy,
-    PhasedStrategy
+    PhasedStrategy,
 )
-from .extensions.base import EvolutionExtension
 
 # MAP-Elites Imports
 from .map_elites.archive import MapElitesArchive
 from .map_elites.descriptors import DescriptorCalculator
 from .map_elites.loop import MapElitesLoop
 
-# Orchestrators
-from .orchestrators.standard_ga import StandardGAOrchestrator
+# Orchestrator
 from .orchestrators.map_elites import MAPElitesOrchestrator
+
+logger = logging.getLogger(__name__)
 
 
 class EvolutionEngine:
     """
-    Facade for evolutionary optimization.
+    MAP-Elites based evolutionary optimization engine.
 
-    Provides backwards-compatible API while delegating to specialized orchestrators:
-    - StandardGAOrchestrator: Traditional genetic algorithm
-    - MAPElitesOrchestrator: Quality-Diversity optimization
+    Uses quality-diversity optimization to evolve a diverse population of
+    specialized retrieval strategies, with optional LLM-guided mutations.
 
     Example:
+        # Using new dataclass config
+        config = EvolutionConfig(
+            n_generations=100,
+            map_elites=MapElitesConfig(bins=[20, 15]),
+            llm=LLMConfig(enabled=True)
+        )
+
+        # Or using legacy flat dict
+        config = {"n_generations": 100, "map_elites_enabled": True, ...}
+
         engine = EvolutionEngine(
             retriever=retriever,
             fitness_calculator=fitness_calc,
@@ -75,10 +86,9 @@ class EvolutionEngine:
         train_ground_truth: List[List[Any]],
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
-        config: EvolutionConfigDict = None,
-        genome_factory: 'GenomeFactory' = None,
-        extensions: List['EvolutionExtension'] = None,
-        overwrite_logs: bool = True
+        config: Union[EvolutionConfig, Dict[str, Any]] = None,
+        genome_factory: "GenomeFactory" = None,
+        overwrite_logs: bool = True,
     ):
         """
         Initialize the evolution engine.
@@ -91,13 +101,15 @@ class EvolutionEngine:
             train_ground_truth: Training ground truth
             val_query_ids: Validation query IDs
             val_ground_truth: Validation ground truth
-            config: Evolution configuration (defaults to DEFAULT_EVO_CONFIG)
+            config: Evolution configuration (EvolutionConfig dataclass or legacy dict)
             genome_factory: Optional pre-configured genome factory
-            extensions: List of evolution extensions (hooks)
             overwrite_logs: Whether to overwrite existing log files
         """
-        logger = logging.getLogger(__name__)
-        config = config or DEFAULT_EVO_CONFIG.copy()
+        # Normalize config to EvolutionConfig dataclass
+        self.evo_config = self._normalize_config(config)
+
+        # Get flat dict for backwards compatibility with existing code
+        self._flat_config = self.evo_config.to_flat_dict()
 
         self.train_query_ids = train_query_ids
         self.train_gt = train_ground_truth
@@ -107,130 +119,123 @@ class EvolutionEngine:
         # Initialize context and factory
         if genome_factory is None:
             self.evo_context = EvolutionContext(
-                config=config,
+                config=self.evo_config,
                 generation=0,
                 available_features=list(HeuristicRegistry.all().keys()),
                 expression_features={
                     "movement": list(HeuristicRegistry.all_movement().keys()),
                     "ranking": list(HeuristicRegistry.all_ranking().keys()),
                     "deposit": list(HeuristicRegistry.all_deposit().keys()),
-                }
+                },
             )
             self.genome_factory = GenomeFactory(self.evo_context)
         else:
             self.genome_factory = genome_factory
             self.evo_context = genome_factory.context
 
-        self.config = self.evo_context.config
+        # Check if LLM mutations are enabled (auto-enable decision tracking)
+        mutation_strategy = self.evo_config.genetic.mutation_strategy
+        llm_enabled = mutation_strategy == GeneticKey.LLM_MUTATION or self.evo_config.llm.enabled
 
-        # Initialize population evaluator
+        # Initialize population evaluator with decision tracking if LLM enabled
         self.population_evaluator = PopulationEvaluator(
             retriever=retriever,
             evaluator=evaluator,
             fitness_calc=fitness_calculator,
             queries=train_query_ids,
             ground_truth=train_ground_truth,
-            concurrent_evaluations=self.config["concurrent_evaluations"],
-            max_workers_per_retrieval=self.config["max_workers_per_retrieval"]
+            concurrent_evaluations=self.evo_config.resources.concurrent_evaluations,
+            max_workers_per_retrieval=self.evo_config.resources.max_workers_per_retrieval,
+            track_decisions=llm_enabled,  # Auto-enable when LLM is used
+            decision_sample_rate=1.0,  # 100% sampling for full LLM context
         )
 
-        # Initialize evolution loop
-        self.loop = EvolutionLoop(self.evo_context)
-
         # Initialize LLM Provider if using LLM Mutation
-        if self.config.get("mutation_strategy") == GeneticKey.LLM_MUTATION:
-            from .llm.factory import LLMProviderFactory
-            llm_provider = LLMProviderFactory.create(self.config)
-            if llm_provider is not None:
-                self.evo_context.llm_provider = llm_provider
-                logger.info(
-                    f"ENABLED: LLM-Guided Mutation Strategy "
-                    f"(provider={self.config.get('llm_provider', 'cerebras')}, "
-                    f"model={self.config.get('llm_model', 'zai-glm-4.7')})"
-                )
+        if llm_enabled:
+            self._initialize_llm_provider()
 
         # Initialize progress tracker
         self.tracker = ProgressTracker(
-            log_path=self.config["log_path"],
-            plot_path=self.config["plot_path"],
-            plot_title=self.config["plot_title"],
-            overwrite=overwrite_logs
+            log_path=self.evo_config.checkpoint.log_path,
+            plot_path=self.evo_config.checkpoint.plot_path,
+            plot_title=self.evo_config.checkpoint.plot_title,
+            overwrite=overwrite_logs,
         )
 
         # Initialize fitness strategy
-        strategy_name = self.config.get("fitness_strategy", "lexicographic")
-        if strategy_name == "pareto":
-            self.fitness_strategy = ParetoStrategy()
-        elif strategy_name == "phased":
-            switch_gen = self.config.get("phased_switch_gen", 10)
-            self.fitness_strategy = PhasedStrategy(switch_gen=switch_gen)
-        else:
-            self.fitness_strategy = LexicographicStrategy()
-
+        self.fitness_strategy = self._create_fitness_strategy()
         logger.info(f"Using Fitness Strategy: {self.fitness_strategy.__class__.__name__}")
 
-        # Initialize extensions
-        self.extensions = extensions or []
-        for ext in self.extensions:
-            if hasattr(ext, 'genome_factory') and ext.genome_factory is None:
-                ext.genome_factory = self.genome_factory.create_population
-            ext.on_init(self.evo_context)
+        # Initialize MAP-Elites components (always enabled)
+        logger.info("Initializing MAP-Elites archive and breeding loop")
+        descriptor_calc = DescriptorCalculator(
+            dimensions=self.evo_config.map_elites.dimensions,
+            ranges=self.evo_config.map_elites.ranges,
+        )
+        self.map_elites_archive = MapElitesArchive(
+            descriptor_calc=descriptor_calc,
+            bins=self.evo_config.map_elites.bins,
+            ranges=self.evo_config.map_elites.ranges,
+        )
+        self.map_elites_loop = MapElitesLoop(self.evo_context)
 
-        # Initialize MAP-Elites components if enabled
-        self.map_elites_archive = None
-        self.map_elites_loop = None
-        if self.config.get("map_elites_enabled", False):
-            logger.info("ENABLED: MAP-Elites Mode")
-            descriptor_calc = DescriptorCalculator(
-                dimensions=self.config["map_elites_dims"],
-                ranges=self.config["map_elites_ranges"]
-            )
-            self.map_elites_archive = MapElitesArchive(
-                descriptor_calc=descriptor_calc,
-                bins=self.config["map_elites_bins"],
-                ranges=self.config["map_elites_ranges"]
-            )
-            self.map_elites_loop = MapElitesLoop(self.evo_context)
-
-        # Create appropriate orchestrator
-        self._orchestrator = self._create_orchestrator()
+        # Create orchestrator
+        self._orchestrator = MAPElitesOrchestrator(
+            context=self.evo_context,
+            evaluator=self.population_evaluator,
+            fitness_strategy=self.fitness_strategy,
+            tracker=self.tracker,
+            val_query_ids=self.val_query_ids,
+            val_ground_truth=self.val_gt,
+            archive=self.map_elites_archive,
+            me_loop=self.map_elites_loop,
+            genome_factory=self.genome_factory,
+        )
 
         # For checkpoint restoration
         self.restored_best_genome = None
 
-    def _create_orchestrator(self):
-        """Create the appropriate orchestrator based on configuration."""
-        if self.config.get("map_elites_enabled", False):
-            return MAPElitesOrchestrator(
-                context=self.evo_context,
-                evaluator=self.population_evaluator,
-                fitness_strategy=self.fitness_strategy,
-                tracker=self.tracker,
-                val_query_ids=self.val_query_ids,
-                val_ground_truth=self.val_gt,
-                archive=self.map_elites_archive,
-                me_loop=self.map_elites_loop,
-                genome_factory=self.genome_factory,
-                extensions=self.extensions
+    def _normalize_config(self, config) -> EvolutionConfig:
+        """Convert config to EvolutionConfig dataclass if needed."""
+        if config is None:
+            return DEFAULT_CONFIG
+
+        if isinstance(config, EvolutionConfig):
+            return config
+
+        # Legacy flat dict - convert to dataclass
+        if isinstance(config, dict):
+            return EvolutionConfig.from_flat_dict(config)
+
+        raise TypeError(f"config must be EvolutionConfig or dict, got {type(config)}")
+
+    def _initialize_llm_provider(self):
+        """Initialize LLM provider for LLM-guided mutations."""
+        from .llm.factory import LLMProviderFactory
+
+        llm_provider = LLMProviderFactory.create(self.evo_config)
+        if llm_provider is not None:
+            self.evo_context.llm_provider = llm_provider
+            logger.info(
+                f"ENABLED: LLM-Guided Mutation "
+                f"(provider={self.evo_config.llm.provider}, "
+                f"model={self.evo_config.llm.model})"
             )
+
+    def _create_fitness_strategy(self):
+        """Create the appropriate fitness strategy based on config."""
+        strategy_name = self.evo_config.fitness_strategy
+
+        if strategy_name == "pareto":
+            return ParetoStrategy()
+        elif strategy_name == "phased":
+            return PhasedStrategy(switch_gen=self.evo_config.phased_switch_gen)
         else:
-            return StandardGAOrchestrator(
-                context=self.evo_context,
-                evaluator=self.population_evaluator,
-                fitness_strategy=self.fitness_strategy,
-                tracker=self.tracker,
-                val_query_ids=self.val_query_ids,
-                val_ground_truth=self.val_gt,
-                loop=self.loop,
-                genome_factory=self.genome_factory,
-                extensions=self.extensions
-            )
+            return LexicographicStrategy()
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
         """
-        Run evolutionary optimization.
-
-        Delegates to the appropriate orchestrator based on configuration.
+        Run MAP-Elites evolutionary optimization.
 
         Args:
             initial_population: Optional starting population
@@ -245,11 +250,7 @@ class EvolutionEngine:
         return self._orchestrator.optimize(initial_population)
 
     def save_checkpoint(self, population: List[Genome], best_genome: Genome, generation: int):
-        """
-        Saves evolution state to disk.
-
-        Delegates to orchestrator for consistent checkpoint format.
-        """
+        """Saves evolution state to disk."""
         self._orchestrator.save_checkpoint(population, best_genome, generation)
 
     @classmethod
@@ -263,9 +264,8 @@ class EvolutionEngine:
         train_ground_truth: List[List[Any]],
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
-        config: EvolutionConfigDict,
-        extensions: List['EvolutionExtension'] = None,
-    ) -> 'EvolutionEngine':
+        config: Union[EvolutionConfig, Dict[str, Any]],
+    ) -> "EvolutionEngine":
         """
         Factory method: Creates a NEW engine instance and restores state from disk.
 
@@ -279,7 +279,6 @@ class EvolutionEngine:
             val_query_ids: Validation query IDs
             val_ground_truth: Validation ground truth
             config: Evolution configuration
-            extensions: Optional evolution extensions
 
         Returns:
             Initialized EvolutionEngine with restored state
@@ -301,26 +300,31 @@ class EvolutionEngine:
             val_query_ids=val_query_ids,
             val_ground_truth=val_ground_truth,
             config=config,
-            extensions=extensions,
-            overwrite_logs=False
+            overwrite_logs=False,
         )
 
         # Restore evolutionary state
-        engine.evo_context.population = state['population']
-        engine.evo_context.generation = state['generation']
+        engine.evo_context.population = state["population"]
+        engine.evo_context.generation = state["generation"]
 
         # Restore RNG states for reproducibility
-        if 'random_state' in state:
-            random.setstate(state['random_state'])
-        if 'np_random_state' in state:
-            np.random.set_state(state['np_random_state'])
+        if "random_state" in state:
+            random.setstate(state["random_state"])
+        if "np_random_state" in state:
+            np.random.set_state(state["np_random_state"])
 
         # Restore tracker history
-        if 'tracker_history' in state:
-            engine.tracker.history = state['tracker_history']
+        if "tracker_history" in state:
+            engine.tracker.history = state["tracker_history"]
 
         # Restore best genome
-        engine.restored_best_genome = state.get('best_genome')
+        engine.restored_best_genome = state.get("best_genome")
 
         print(f"  State restored. Resuming from Generation {state['generation']}")
         return engine
+
+    # Backwards compatibility property
+    @property
+    def config(self) -> Dict[str, Any]:
+        """Get flat config dict for backwards compatibility."""
+        return self._flat_config

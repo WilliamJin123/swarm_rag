@@ -5,8 +5,6 @@ Provides mutation strategies that utilize LLM guidance for genome refinement.
 """
 import logging
 
-
-
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
 from ...interfaces.enums import GeneticKey
@@ -14,7 +12,6 @@ from ...interfaces.enums import GeneticKey
 from .strategies import GeneticRegistry
 
 from ..llm.utils import apply_llm_edits
-from ..llm.optimizer import LLMOptimizer
 from ..llm.provider import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
@@ -24,10 +21,7 @@ class LLMStrategies:
     """
     Genetic operators that utilize an LLM.
 
-    Supports both:
-    - New provider interface: ctx.llm_provider (LLMProvider protocol)
-    - Legacy interface: ctx.llm_optimizer (LLMOptimizer class)
-
+    Uses the provider interface (ctx.llm_provider) for LLM communication.
     Falls back to standard mutation if LLM is unavailable or fails.
     """
 
@@ -38,7 +32,7 @@ class LLMStrategies:
         Mutates a genome by asking an LLM to refine it based on performance metrics.
 
         Falls back to standard mutation if:
-        - LLM provider/optimizer not available
+        - LLM provider not available
         - LLM call fails
         - LLM proposes no valid changes
 
@@ -49,43 +43,31 @@ class LLMStrategies:
         Returns:
             Mutated genome
         """
-        # Try new provider interface first, then legacy optimizer
-        provider: BaseLLMProvider = getattr(ctx, 'llm_provider', None)
-        optimizer: LLMOptimizer = getattr(ctx, 'llm_optimizer', None)
+        provider: BaseLLMProvider = ctx.llm_provider
 
-        if provider is None and optimizer is None:
+        if provider is None:
             logger.warning(
-                "LLM Mutation requested but no provider/optimizer found. "
+                "LLM Mutation requested but no provider found. "
                 "Falling back to expression_tree_mutation."
             )
             return _fallback_mutation(genome, ctx)
 
         try:
-            if provider is not None:
-                # Use new provider interface
-                response = provider.refine_genome(genome, ctx)
+            response = provider.refine_genome(genome, ctx)
 
-                if not response.success:
-                    logger.warning(
-                        f"LLM provider failed for {genome.id}: {response.error}. "
-                        "Falling back to standard mutation."
-                    )
-                    return _fallback_mutation(genome, ctx)
-
-                # Apply changes from provider response
-                edits = {
-                    "diagnosis": response.diagnosis,
-                    "proposed_changes": response.proposed_changes
-                }
-                applied = apply_llm_edits(genome, edits)
-
-            else:
-                # Use legacy optimizer interface
-                response = optimizer.refine_genome(
-                    genome=genome,
-                    evolution_context=ctx
+            if not response.success:
+                logger.warning(
+                    f"LLM provider failed for {genome.id}: {response.error}. "
+                    "Falling back to standard mutation."
                 )
-                applied = apply_llm_edits(genome, response)
+                return _fallback_mutation(genome, ctx)
+
+            # Apply changes from provider response
+            edits = {
+                "diagnosis": response.diagnosis,
+                "proposed_changes": response.proposed_changes,
+            }
+            applied = apply_llm_edits(genome, edits)
 
             if not applied:
                 logger.info(

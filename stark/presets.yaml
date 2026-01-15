@@ -15,6 +15,7 @@ toy:
   val_ss: 10
   concurrent: 2
   workers: 2
+  use_gpu: auto
 
 fast:
   # Fast iteration settings for development
@@ -27,6 +28,7 @@ fast:
   val_ss: 50
   concurrent: 4
   workers: 4
+  use_gpu: auto
 
 full:
   # Full training settings for production runs
@@ -38,8 +40,9 @@ full:
   val_ss: 100
   concurrent: 4
   workers: 4
+  use_gpu: auto
 
-llm_enabled:
+llm:
   # Settings with LLM-guided mutation enabled
   # Requires valid API keys in .env file
   dataset: prime
@@ -50,9 +53,11 @@ llm_enabled:
   val_ss: 75
   concurrent: 4
   workers: 4
+  llm_enabled: true
   mutation_strategy: llm_mutation
   llm_provider: cerebras
   llm_model: zai-glm-4.7
+  use_gpu: auto
 
 amazon:
   # Full training on Amazon dataset
@@ -64,6 +69,7 @@ amazon:
   val_ss: 100
   concurrent: 4
   workers: 4
+  use_gpu: auto
 
 mag:
   # Full training on MAG (Microsoft Academic Graph) dataset
@@ -75,3 +81,4 @@ mag:
   val_ss: 100
   concurrent: 4
   workers: 4
+  use_gpu: auto

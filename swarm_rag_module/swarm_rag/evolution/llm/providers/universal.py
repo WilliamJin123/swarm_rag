@@ -3,9 +3,12 @@ Universal LLM Provider - provider-agnostic implementation.
 
 Uses keycycle's MultiProviderWrapper to support any LLM provider
 (cerebras, openai, groq, anthropic, together, etc.) through a unified API.
+
+Enhanced with behavioral context for smarter mutations.
 """
 import json
 import logging
+from typing import Optional, Any
 
 from ..provider import BaseLLMProvider, LLMResponse
 from ..utils import genome_to_json_context
@@ -21,6 +24,8 @@ class UniversalLLMProvider(BaseLLMProvider):
 
     Supports any provider that keycycle supports (cerebras, openai, groq,
     anthropic, together, etc.) through the same interface.
+
+    Enhanced with behavioral analysis from decision tracking for smarter mutations.
 
     Args:
         provider: LLM provider name (e.g., "cerebras", "openai", "groq")
@@ -59,7 +64,11 @@ class UniversalLLMProvider(BaseLLMProvider):
         )
         logger.info(f"Initialized UniversalLLMProvider: {provider}/{model}")
 
-    def _call_llm(self, genome: Genome, context: EvolutionContext) -> LLMResponse:
+    def _call_llm(
+        self,
+        genome: Genome,
+        context: EvolutionContext,
+    ) -> LLMResponse:
         """
         Call the configured LLM provider to refine genome.
 
@@ -70,7 +79,15 @@ class UniversalLLMProvider(BaseLLMProvider):
         Returns:
             LLMResponse with diagnosis and proposed changes
         """
-        context_data = genome_to_json_context(genome)
+        # Get decision context from genome if available (set by PopulationEvaluator)
+        decision_context = getattr(genome, 'decision_context', None)
+
+        # Build enhanced context with behavioral data
+        context_data = genome_to_json_context(
+            genome,
+            decision_context=decision_context,
+            evolution_context=context
+        )
 
         system_prompt = self._build_system_prompt()
         user_prompt = self._build_user_prompt(context_data)
@@ -99,30 +116,198 @@ class UniversalLLMProvider(BaseLLMProvider):
         )
 
     def _build_system_prompt(self) -> str:
-        """Build the system prompt for genome refinement."""
-        return (
-            "You are an expert AI Geneticist. Your job is to optimize individual Retrieval Agents.\n"
-            "You will be given an agent's **Code** (parameters & logic) and its **Report Card** (metrics).\n"
-            "- **High Cost**: Reduce `steps`, `n_agents`, or make movement more focused (less random/exploration).\n"
-            "- **Low Recall**: Increase exploration (`pheromone_repulsion`), add `n_agents`, or relax thresholds.\n"
-            "You must output a valid JSON object representing the **refined** agent.\n"
-            "The JSON must have keys: 'diagnosis' (string) and 'proposed_changes' (nested object with 'params' and 'strategies')."
-        )
+        """Build enhanced system prompt for genome refinement."""
+        return """You are an expert AI Geneticist optimizing Swarm-based Retrieval Agents.
+
+## Your Role
+Analyze agent performance and behavior to propose targeted improvements. You receive:
+1. **Performance Metrics** - Quality, Cost, Recall, MRR, Latency
+2. **Behavioral Analysis** - How agents explore the graph (revisits, dead-ends, convergence, dispersion)
+3. **Heuristic Usage** - Which decision factors are influencing agent choices
+4. **Configuration** - Current parameters and strategy expressions
+
+## Diagnosis Guidelines
+
+### High Cost + Low Recall
+Problem: Agents explore too aggressively without finding relevant nodes
+Solutions:
+- Increase `semantic_similarity` weight in movement strategy
+- Decrease `pheromone_repulsion` weight (less forced exploration)
+- Reduce `n_agents` or `steps` to cut cost
+- Increase `decay` to make pheromone trails fade faster
+
+### High Revisit Rate (>15%)
+Problem: Agents getting stuck in loops, revisiting same nodes
+Solutions:
+- Increase `pheromone_repulsion` weight significantly
+- Add `random_jitter` to movement strategy for randomness
+- Decrease `decay` to make pheromone trails persist longer (stronger avoidance)
+
+### Early Convergence (convergence_step < 2)
+Problem: All agents clustering on same nodes too quickly
+Solutions:
+- Increase `pheromone_repulsion` weight
+- Add `random_jitter` for diversity
+- Increase `n_agents` for broader coverage
+- Decrease `semantic_similarity` to reduce herding
+
+### High Dead-End Rate (>10%)
+Problem: Agents reaching graph boundaries or isolated nodes
+Solutions:
+- Increase `initial_pool_size` for better starting points
+- Increase `node_centrality` weight to prefer connected nodes
+- Increase `start_subset` to diversify agent spawning
+
+### Low Dispersion (<0.3)
+Problem: Agents end up clustered, not covering enough ground
+Solutions:
+- Increase `pheromone_repulsion` significantly
+- Decrease `semantic_similarity` to reduce convergence
+- Increase `n_agents` and `steps`
+
+### Greedy Match Rate > 80%
+Problem: Agents always choosing highest-scored candidate (no exploration)
+Solutions:
+- Add `random_jitter` to movement
+- Increase `pheromone_repulsion`
+- This may be fine if quality is high
+
+## Available Heuristics (use exact names in strategies)
+
+Movement Heuristics:
+- `semantic_similarity`: Cosine similarity to query (exploitation)
+- `node_centrality`: Prefer highly-connected hub nodes
+- `pheromone_repulsion`: Avoid recently-visited nodes (exploration)
+- `random_jitter`: Pure random exploration
+
+Deposit Heuristics:
+- `flat`: Uniform pheromone deposit
+- `hub`: More pheromone on central nodes
+- `semantic`: Deposit proportional to similarity
+- `exploration_bonus`: Extra deposit on fresh nodes
+- `collaborative_amplification`: "Rich get richer" effect
+
+Ranking Heuristics:
+- `percentage_visited`: Weight by how many agents visited
+- `semantic_rank`: Final semantic similarity score
+
+## Output Format
+
+Return a JSON object with exactly these keys:
+{
+    "diagnosis": "Brief analysis explaining the root cause of poor performance",
+    "proposed_changes": {
+        "params": {
+            // Only include params you want to change
+            "n_agents": 15,
+            "steps": 6
+        },
+        "strategies": {
+            // Only include strategies you want to change
+            // Use format: "heuristic_name * weight + heuristic_name * weight"
+            "g0_movement": "semantic_similarity * 0.5 + node_centrality * 0.3 + pheromone_repulsion * 0.2"
+        }
+    }
+}
+
+## Critical Rules
+1. Only propose changes that directly address the diagnosed issue
+2. Respect parameter bounds provided in the context
+3. Keep strategy expressions simple (2-4 heuristics max)
+4. Don't over-correct - make incremental changes
+5. If behavioral data shows a specific problem, address THAT problem specifically"""
 
     def _build_user_prompt(self, context_data: dict) -> str:
-        """Build the user prompt with genome context."""
-        metrics_str = (
-            f"- Quality: {context_data['performance']['quality_score']:.4f} (Target: 1.0)\n"
-            f"- Cost: {context_data['performance']['cost_score']:.4f} (Target: 0.0 - Lower is better)\n"
-            f"- Latency: {context_data['performance']['latency']:.4f}s"
-        )
+        """Build user prompt with full context."""
+        # Performance metrics
+        perf = context_data['performance']
+        metrics_str = f"""- Quality Score: {perf['quality_score']:.4f} (Target: 1.0)
+- Cost Score: {perf['cost_score']:.4f} (Target: 0.0 - Lower is better)
+- Recall@20: {perf['recall_at_20']:.4f}
+- Hit@1: {perf['hit_at_1']:.4f}
+- Hit@5: {perf.get('hit_at_5', 0.0):.4f}
+- MRR: {perf.get('mrr', 0.0):.4f}
+- Latency: {perf['latency']:.4f}s
+- Complexity: {perf['complexity']}"""
 
-        return (
-            f"**Agent ID**: {context_data['id']}\n"
-            f"**Metrics**:\n{metrics_str}\n\n"
-            f"**Current Logic**:\n{json.dumps(context_data['current_config'], indent=2)}\n\n"
-            "**Task**: This agent is underperforming. Analyze the metrics above.\n"
-            "1. Diagnosis: Why is the score low?\n"
-            "2. Action: Edit the `params` or `strategies` to fix the specific weakness identified in the diagnosis.\n"
-            "Return JSON format."
-        )
+        # Behavioral analysis (if available)
+        behavioral_str = ""
+        if context_data.get('behavioral'):
+            b = context_data['behavioral']
+            behavioral_str = f"""
+
+**Behavioral Analysis** (from agent decision tracking):
+- Unique Nodes Ratio: {b.get('unique_nodes_ratio', 0):.2%} (higher = better coverage)
+- Revisit Rate: {b.get('revisit_rate', 0):.2%} (lower = less wasted steps)
+- Dead-End Rate: {b.get('dead_end_rate', 0):.2%} (lower = better navigation)
+- Avg Branching Factor: {b.get('avg_branching_factor', 0):.1f} (options per decision)
+- Convergence Step: {b.get('convergence_step', 'Never')} (earlier = faster but riskier)
+- Final Dispersion: {b.get('final_dispersion', 0):.2%} (higher = better spread)"""
+
+            # Heuristic usage stats
+            if b.get('heuristic_usage'):
+                behavioral_str += "\n\n**Heuristic Score Distributions**:"
+                for name, stats in b['heuristic_usage'].items():
+                    behavioral_str += f"\n  - {name}: mean={stats['mean']:.3f}, std={stats['std']:.3f}"
+
+            # Choice patterns
+            if b.get('choice_patterns'):
+                cp = b['choice_patterns']
+                behavioral_str += f"""
+
+**Choice Patterns**:
+- Greedy Match Rate: {cp.get('greedy_match_rate', 0):.1%} (how often agents pick top candidate)
+- Avg Chosen Rank: {cp.get('avg_chosen_rank', 0):.2f} (0 = always best, higher = more exploration)
+- Exploration Rate: {cp.get('exploration_rate', 0):.1%}"""
+
+        # Evolutionary context (if available)
+        evo_str = ""
+        if context_data.get('evolutionary'):
+            e = context_data['evolutionary']
+            evo_str = f"""
+
+**Evolutionary Context**:
+- Generation: {e.get('generation', 'N/A')}
+- Population Size: {e.get('population_size', 'N/A')}
+- Mutation Rate: {e.get('mutation_rate', 'N/A')}"""
+
+        # Parameter bounds
+        bounds_str = ""
+        if context_data.get('parameter_bounds'):
+            pb = context_data['parameter_bounds']
+            bounds_str = f"""
+
+**Parameter Bounds** (respect these limits):
+- n_agents: {pb.get('n_agents', (5, 30))}
+- steps: {pb.get('steps', (4, 12))}
+- decay: {pb.get('decay', (0.85, 0.99))}
+- initial_pool_size: {pb.get('initial_pool_size', (10, 50))}"""
+
+        # Available heuristics
+        heuristics_str = ""
+        if context_data.get('available_heuristics'):
+            ah = context_data['available_heuristics']
+            heuristics_str = f"""
+
+**Available Heuristics**:
+- Movement: {', '.join(ah.get('movement', []))}
+- Deposit: {', '.join(ah.get('deposit', []))}
+- Ranking: {', '.join(ah.get('ranking', []))}"""
+
+        return f"""**Agent ID**: {context_data['id']}
+
+**Performance Metrics**:
+{metrics_str}
+{behavioral_str}
+{evo_str}
+
+**Current Configuration**:
+{json.dumps(context_data['current_config'], indent=2)}
+{bounds_str}
+{heuristics_str}
+
+**Task**: This agent is underperforming. Based on the metrics and behavioral analysis above:
+1. Diagnose the root cause of poor performance
+2. Propose specific, targeted changes to fix the identified issue
+
+Return JSON with 'diagnosis' and 'proposed_changes' keys."""

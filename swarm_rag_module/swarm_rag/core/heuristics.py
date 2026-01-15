@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, Callable, Literal
+from typing import Any, Dict, List, Optional, Union, Callable, Literal, TYPE_CHECKING
 import numpy as np
 import math
 from dataclasses import dataclass, field
@@ -6,6 +6,42 @@ from dataclasses import dataclass, field
 from ..interfaces.enums import HeuristicKey
 from ..interfaces.registry import _MovementRegistry, _RankingRegistry, _DepositRegistry
 from ..interfaces.abstract_classes import GraphStore
+
+# Optional torch import for GPU operations
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
+
+if TYPE_CHECKING:
+    import torch
+
+
+def _to_numpy(arr: Union[np.ndarray, "torch.Tensor"]) -> np.ndarray:
+    """Convert tensor to numpy array if needed."""
+    if _TORCH_AVAILABLE and isinstance(arr, torch.Tensor):
+        return arr.detach().cpu().numpy()
+    return np.asarray(arr)
+
+
+def _dot_product(a: Union[np.ndarray, "torch.Tensor"], b: Union[np.ndarray, "torch.Tensor"]) -> Union[np.ndarray, "torch.Tensor"]:
+    """
+    Compute dot product that works with both numpy and torch tensors.
+    Keeps computation on GPU if inputs are GPU tensors.
+    """
+    if _TORCH_AVAILABLE:
+        if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+            return torch.matmul(a, b)
+        elif isinstance(a, torch.Tensor):
+            b_tensor = torch.from_numpy(np.asarray(b)).to(a.device)
+            return torch.matmul(a, b_tensor)
+        elif isinstance(b, torch.Tensor):
+            a_tensor = torch.from_numpy(np.asarray(a)).to(b.device)
+            return torch.matmul(a_tensor, b)
+
+    # NumPy fallback
+    return np.dot(np.asarray(a), np.asarray(b))
 
 
 
@@ -105,14 +141,19 @@ class HeuristicRegistry:
 
 @dataclass(slots=True)
 class HeuristicContext:
-    """A shared dataclass to hold context for heuristic functions."""
-    query_vec: np.ndarray # Shape: (D,)
-    target_vecs: Optional[np.ndarray] = None    
+    """
+    A shared dataclass to hold context for heuristic functions.
+
+    Supports both numpy arrays and PyTorch tensors for GPU acceleration.
+    When using GPU tensors, computations stay on GPU for maximum performance.
+    """
+    query_vec: Union[np.ndarray, "torch.Tensor"]  # Shape: (D,)
+    target_vecs: Optional[Union[np.ndarray, "torch.Tensor"]] = None
     target_ids: Union[List[int], np.ndarray] = None
 
-    pheromone_values: np.ndarray = field(default_factory=lambda: np.array([]))
-    node_degrees: np.ndarray = field(default_factory=lambda: np.array([]))
-   
+    pheromone_values: Union[np.ndarray, "torch.Tensor"] = field(default_factory=lambda: np.array([]))
+    node_degrees: Union[np.ndarray, "torch.Tensor"] = field(default_factory=lambda: np.array([]))
+
     graph: Optional[GraphStore] = None
     max_pheromone: float = 1.0
     avg_degree: float = 1.0
@@ -123,14 +164,32 @@ class HeuristicContext:
 
     extra_data: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def is_gpu(self) -> bool:
+        """Check if context is using GPU tensors."""
+        if _TORCH_AVAILABLE:
+            if isinstance(self.target_vecs, torch.Tensor):
+                return self.target_vecs.is_cuda
+        return False
+
+    @property
+    def device(self) -> str:
+        """Get the device of the tensors."""
+        if _TORCH_AVAILABLE and isinstance(self.target_vecs, torch.Tensor):
+            return str(self.target_vecs.device)
+        return "cpu"
+
 class Heuristics:
     """
-    A library of preset heuristics. 
-    Each function takes a `HeuristicContext` object and returns a float score, normalized to [0,1]
+    A library of preset heuristics.
+    Each function takes a `HeuristicContext` object and returns a float score, normalized to [0,1].
+
+    All heuristics support both numpy arrays and PyTorch tensors for GPU acceleration.
+    When GPU tensors are provided, computations stay on GPU for maximum performance.
     """
 
     # --- MOVEMENT HEURISTICS ---
-    
+
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY)
     def semantic_similarity(ctx: HeuristicContext) -> Union[float, Any]:
@@ -139,8 +198,10 @@ class Heuristics:
         - 0.0 = completely opposite direction (cosine = -1)
         - 0.5 = orthogonal/unrelated (cosine = 0)
         - 1.0 = perfect match (cosine = 1)
+
+        Supports GPU acceleration when ctx.target_vecs is a CUDA tensor.
         """
-        scores = np.dot(ctx.target_vecs, ctx.query_vec)
+        scores = _dot_product(ctx.target_vecs, ctx.query_vec)
         # Normalize from [-1, 1] to [0, 1]
         return (scores + 1.0) / 2.0
 
@@ -149,8 +210,10 @@ class Heuristics:
     def semantic_similarity_unnormalized(ctx: HeuristicContext) -> Union[float, Any]:
         """
         RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
+
+        Supports GPU acceleration when ctx.target_vecs is a CUDA tensor.
         """
-        return np.dot(ctx.target_vecs, ctx.query_vec)
+        return _dot_product(ctx.target_vecs, ctx.query_vec)
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.NODE_CENTRALITY)
@@ -198,9 +261,14 @@ class Heuristics:
         """
         RAW semantic similarity for final ranking.
         Uses full [-1, 1] range since we want to distinguish good from bad.
+
+        Supports GPU acceleration when ctx.target_vecs is a CUDA tensor.
         """
         val = Heuristics.semantic_similarity_unnormalized(ctx)
-        return val.item() if isinstance(val, (np.ndarray, np.ndarray)) else val
+        # Handle both numpy arrays and torch tensors
+        if hasattr(val, 'item'):
+            return val.item()
+        return float(val)
 
     # --- DEPOSIT HEURISTICS ---
 
@@ -222,8 +290,14 @@ class Heuristics:
         """
         Semantic-weighted deposit using NORMALIZED similarity.
         Only deposits on positive matches (similarity > 0.5 in normalized space) with range 0-1.
+
+        Supports GPU acceleration when ctx.target_vecs is a CUDA tensor.
         """
         normalized_sim = Heuristics.semantic_similarity(ctx)
+        # Handle both numpy and torch
+        if _TORCH_AVAILABLE and isinstance(normalized_sim, torch.Tensor):
+            return torch.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0,
+                               torch.zeros_like(normalized_sim))
         return np.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0, 0.0)
 
     @staticmethod
@@ -232,10 +306,14 @@ class Heuristics:
         """
         Alternative: Uses unnormalized similarity and clamps to [0, 1].
         Deposits on any positive match.
-        
+
         Range: [0, 1]
+        Supports GPU acceleration when ctx.target_vecs is a CUDA tensor.
         """
         sim = Heuristics.semantic_similarity_unnormalized(ctx)
+        # Handle both numpy and torch
+        if _TORCH_AVAILABLE and isinstance(sim, torch.Tensor):
+            return torch.clamp(sim, min=0.0)
         return np.maximum(0.0, sim)
     
     @staticmethod

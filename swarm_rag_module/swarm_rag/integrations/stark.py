@@ -1,6 +1,6 @@
 import math
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import numpy as np
 from numpy.typing import NDArray
 from multiprocessing import shared_memory
@@ -9,7 +9,7 @@ import atexit
 
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
 from ..interfaces.enums import HeuristicKey
-from ..utils import fail_on_missing_imports, LRUCache
+from ..utils import fail_on_missing_imports, LRUCache, get_device
 from ..core import HeuristicContext, HeuristicRegistry
 
 try:
@@ -18,9 +18,16 @@ try:
     from stark_qa.load_skb import SKB
 except ImportError:
     fail_on_missing_imports(
-                modules=["torch", "stark_qa", "faiss"], 
+                modules=["torch", "stark_qa", "faiss"],
                 extra_name="stark"
             )
+
+# Import GPU vector store (optional, fallback gracefully)
+try:
+    from .gpu_vector_store import GPUVectorStore
+    _GPU_AVAILABLE = True
+except ImportError:
+    _GPU_AVAILABLE = False
 
 import logging
 logger = logging.getLogger(__name__)    
@@ -294,3 +301,155 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
         """
         # Fetch individual arrays and stack them into a single (N, D) matrix
         return np.stack([self.query_embs[qid] for qid in query_ids])
+
+
+# --- 4. GPU-Accelerated Vector Store ---
+class StarkGPUVectorStore(VectorStore):
+    """
+    GPU-accelerated vector store using PyTorch for STaRK datasets.
+
+    This class wraps GPUVectorStore with STaRK-specific optimizations:
+    - Automatic device detection with env var override (SWARM_RAG_DEVICE)
+    - Fallback to FAISS-based store if GPU unavailable
+    - Compatible with existing VectorStore interface
+
+    Usage:
+        # Auto-detect GPU
+        store = StarkGPUVectorStore(doc_embs)
+
+        # Force CPU
+        store = StarkGPUVectorStore(doc_embs, use_gpu=False)
+    """
+
+    def __init__(
+        self,
+        doc_embs: Dict[int, torch.Tensor],
+        use_gpu: bool = True,
+        device: str = None
+    ):
+        """
+        Initialize GPU vector store.
+
+        Args:
+            doc_embs: Dictionary mapping doc_id -> embedding tensor
+            use_gpu: Whether to use GPU acceleration (default True)
+            device: Force specific device ("cuda" or "cpu")
+        """
+        self._device = device or (get_device() if use_gpu else "cpu")
+        self._use_gpu = use_gpu and self._device == "cuda" and _GPU_AVAILABLE
+
+        if self._use_gpu:
+            logger.info(f"Initializing GPU vector store on {self._device}")
+            self._store = GPUVectorStore.from_dict(doc_embs, device=self._device)
+            self.n_docs = self._store.n_docs
+            self.dim = self._store.dim
+        else:
+            logger.info("GPU not available/requested, using FAISS backend")
+            # Fall back to shared-memory FAISS store
+            self._store = StarkInMemoryVectorStore(doc_embs)
+            self.n_docs = self._store.n_docs
+            self.dim = self._store.dim
+
+        # Build ID lookup
+        self._ids = np.array(sorted(doc_embs.keys()))
+        self.real_id_to_idx = {int(rid): i for i, rid in enumerate(self._ids)}
+
+    def search(self, query_vec: np.ndarray, limit: int) -> List[Dict]:
+        """Find top-k most similar documents."""
+        return self._store.search(query_vec, limit)
+
+    def fetch(self, node_id: int) -> Optional[np.ndarray]:
+        """Fetch embedding for a single document."""
+        return self._store.fetch(node_id)
+
+    def fetch_batch(self, node_ids: List[int]) -> Matrix:
+        """Fetch embeddings for multiple documents."""
+        return self._store.fetch_batch(node_ids)
+
+    def fetch_batch_gpu(self, node_ids: List[int]):
+        """
+        Fetch embeddings as GPU tensor (only available when using GPU backend).
+
+        Returns:
+            Tuple of (embeddings tensor, valid_ids list) if GPU,
+            or (numpy array, valid_ids) if CPU
+        """
+        if self._use_gpu and hasattr(self._store, 'fetch_batch_gpu'):
+            return self._store.fetch_batch_gpu(node_ids)
+
+        # Fallback for CPU: return numpy
+        matrix = self.fetch_batch(node_ids)
+        valid_mask = ~np.isnan(matrix).any(axis=1)
+        valid_ids = [nid for i, nid in enumerate(node_ids) if valid_mask[i]]
+        return matrix[valid_mask], valid_ids
+
+    def compute_similarities(
+        self,
+        query_vec: Union[np.ndarray, torch.Tensor],
+        candidate_ids: List[int]
+    ):
+        """
+        Compute similarities between query and candidates.
+
+        Optimized for GPU when available.
+        """
+        if self._use_gpu and hasattr(self._store, 'compute_similarities'):
+            return self._store.compute_similarities(query_vec, candidate_ids)
+
+        # CPU fallback
+        matrix = self.fetch_batch(candidate_ids)
+        valid_mask = ~np.isnan(matrix).any(axis=1)
+        valid_ids = [nid for i, nid in enumerate(candidate_ids) if valid_mask[i]]
+
+        if len(valid_ids) == 0:
+            return np.array([]), []
+
+        valid_matrix = matrix[valid_mask]
+        query_vec = np.asarray(query_vec).flatten()
+        query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+
+        # Cosine similarity
+        similarities = np.dot(valid_matrix, query_vec)
+        return similarities, valid_ids
+
+    @property
+    def device(self) -> str:
+        """Return current device."""
+        return self._device
+
+    @property
+    def is_gpu(self) -> bool:
+        """Check if using GPU backend."""
+        return self._use_gpu
+
+
+def create_stark_vector_store(
+    doc_embs: Dict[int, torch.Tensor],
+    use_gpu: str = "auto",
+    shared_name: Optional[str] = None
+) -> VectorStore:
+    """
+    Factory function to create the appropriate vector store.
+
+    Args:
+        doc_embs: Dictionary mapping doc_id -> embedding tensor
+        use_gpu: "auto", "always", "never"
+        shared_name: For shared memory (FAISS backend only)
+
+    Returns:
+        VectorStore instance (GPU or FAISS-backed)
+    """
+    if use_gpu == "never":
+        return StarkInMemoryVectorStore(doc_embs, shared_name=shared_name)
+
+    if use_gpu == "always":
+        if not _GPU_AVAILABLE:
+            raise RuntimeError("GPU requested but GPUVectorStore not available")
+        return StarkGPUVectorStore(doc_embs, use_gpu=True)
+
+    # Auto mode
+    device = get_device()
+    if device == "cuda" and _GPU_AVAILABLE:
+        return StarkGPUVectorStore(doc_embs, use_gpu=True)
+
+    return StarkInMemoryVectorStore(doc_embs, shared_name=shared_name)

@@ -122,9 +122,9 @@ class GeneticStrategies:
                 
                 # 20% chance: Exploration (Re-sample or Large Jump)
                 else:
-                     ranges = ctx.config.get('swarmrag_param_ranges', {})
-                     if key in ranges:
-                         min_v, max_v = ranges[key]
+                     ranges = ctx.config.genetic.param_ranges
+                     if hasattr(ranges, key):
+                         min_v, max_v = getattr(ranges, key)
                          if isinstance(min_v, int):
                              genome.params[key] = random.randint(min_v, max_v)
                          else:
@@ -142,10 +142,10 @@ class GeneticStrategies:
     def _randomize_all_params(ctx: EvolutionContext) -> SwarmParams:
         """Helper to fully randomize parameters within configured ranges."""
         params = DEFAULT_PARAMS.copy()
-        ranges = ctx.config.get('swarmrag_param_ranges', {})
+        ranges = ctx.config.genetic.param_ranges
         for key in params.keys():
-            if key in ranges:
-                min_v, max_v = ranges[key]
+            if hasattr(ranges, key):
+                min_v, max_v = getattr(ranges, key)
                 if isinstance(min_v, int):
                     params[key] = random.randint(min_v, max_v)
                 else:
@@ -155,8 +155,8 @@ class GeneticStrategies:
     @staticmethod
     def _randomize_ratios(ctx: EvolutionContext, n_groups: int) -> Dict[str, float]:
         """Helper to fully randomize group ratios."""
-        ranges = ctx.config.get('swarmrag_param_ranges', {})
-        min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
+        # Default range for group ratios (not in SwarmParamRanges)
+        min_r, max_r = 0.1, 1.0
         return {f"g{i}": random.uniform(min_r, max_r) for i in range(n_groups)}
 
     @staticmethod
@@ -197,7 +197,7 @@ class GeneticStrategies:
         """
         Selects 'k' parents using Tournament logic.
         """
-        tourn_size = ctx.config["selection_k"]
+        tourn_size = ctx.config.genetic.selection_k
         pop_size = len(ctx.population)
         winners = []
         for _ in range(k):
@@ -231,53 +231,55 @@ class GeneticStrategies:
             * Low diversity -> Increase T (Heat up to explore)
             * High diversity -> Decrease T (Cool down to exploit)
         """
+        boltzmann_cfg = ctx.config.genetic.boltzmann
+
         # Initialize Temperature (if first run)
         if ctx.generation == 0 and ctx.current_temperature == 1.0:
-            ctx.current_temperature = ctx.config.get('boltzmann_temperature', 1.0)
+            ctx.current_temperature = boltzmann_cfg.temperature
 
         # Prepare Scores
         # Use quality_score which is the aggregated fitness
         scores = np.array([g.fitness.quality_score for g in ctx.population])
-        
+
         # Numerical Stability: subtract max to avoid overflow in exp
-        # T controls the "pressure". 
+        # T controls the "pressure".
         # T -> inf: Uniform random
         # T -> 0: Deterministic max
         T = ctx.current_temperature
         T = max(1e-4, T)
-        
+
         # Exp scaled by T
         exp_values = np.exp((scores - np.max(scores)) / T)
         probs = exp_values / np.sum(exp_values)
-        
+
         # Select
         selection_indices = np.random.choice(len(ctx.population), size=k, p=probs, replace=True)
         selected = [ctx.population[i] for i in selection_indices]
-        
+
         # Update Temperature (Adaptive)
-        if ctx.config.get('boltzmann_adaptive', True):
+        if boltzmann_cfg.adaptive:
             mean_score = np.mean(scores)
             if len(scores) > 1 and mean_score > 1e-6:
                 diversity_cv = np.std(scores) / mean_score
             else:
                 diversity_cv = 0.0
-            cooling_factor = ctx.config.get('boltzmann_alpha', 0.95)
+            cooling_factor = boltzmann_cfg.alpha
             heating_factor = 1.0 / cooling_factor
 
-            min_T = ctx.config.get('boltzmann_min_temp', 0.1)
-            max_T = ctx.config.get('boltzmann_max_temp', 5.0)
+            min_T = boltzmann_cfg.min_temp
+            max_T = boltzmann_cfg.max_temp
             # Use a relative threshold for diversity
-            diversity_threshold = ctx.config.get('boltzmann_diversity_threshold', 0.05)
+            diversity_threshold = boltzmann_cfg.diversity_threshold
             # Heuristic: If relative diversity is low, we are stagnating -> Heat up
             if diversity_cv < diversity_threshold:
                 ctx.current_temperature = ctx.current_temperature * heating_factor
             else:
                 # Otherwise -> Cool down (Annealing)
                 ctx.current_temperature = ctx.current_temperature * cooling_factor
-                
+
             # Clamp temperature within bounds
             ctx.current_temperature = np.clip(ctx.current_temperature, min_T, max_T)
-    
+
         return selected
 
     @staticmethod
@@ -309,7 +311,7 @@ class GeneticStrategies:
         """
         Adaptive Truncation (Batched).
         """
-        max_gens = ctx.config['n_generations']
+        max_gens = ctx.config.n_generations
         progress = ctx.generation / max(1, max_gens)
         
         start_k = 0.5 
@@ -478,8 +480,8 @@ class GeneticStrategies:
         - Ramped Half-and-Half for expression trees.
         - Uniform random sampling for scalar parameters.
         """
-        max_d = ctx.config['expr_max_depth']
-        n_groups = ctx.config["n_agent_groups"]
+        max_d = ctx.config.genetic.expr_max_depth
+        n_groups = ctx.config.genetic.n_agent_groups
 
         strat_trees = {}
         for strat_type in ["movement", "deposit"]:
@@ -500,7 +502,7 @@ class GeneticStrategies:
             max_depth=max_d
         )
 
-        base_rate = ctx.config['base_mutation_rate']
+        base_rate = ctx.config.genetic.base_mutation_rate
 
         population = []
         for i in range(count):
@@ -540,8 +542,8 @@ class GeneticStrategies:
         - Forces shallow trees (max_depth=2) using 'grow' method.
         - Useful for starting with simple, interpretable strategies.
         """
-        n_groups = ctx.config["n_agent_groups"]
-        base_rate = ctx.config['base_mutation_rate']
+        n_groups = ctx.config.genetic.n_agent_groups
+        base_rate = ctx.config.genetic.base_mutation_rate
         
         population = []
         for i in range(count):
@@ -593,7 +595,7 @@ class GeneticStrategies:
         and fills the rest with random genomes.
         """
         population = []
-        n_groups = ctx.config["n_agent_groups"]
+        n_groups = ctx.config.genetic.n_agent_groups
         
         # --- Helper to create a seed genome ---
         def create_seed(name: str, mov_expr: str, dep_expr: str, rank_expr: str, params: dict = None):
@@ -725,16 +727,16 @@ class GeneticStrategies:
         # Boost rate
         genome.mutation_rate = 0.4 # Lock to high rate
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
-        ranges = ctx.config['swarmrag_param_ranges']
+        ranges = ctx.config.genetic.param_ranges
 
         # Aggressive Parameter Resampling
         for key in genome.params.keys():
             if random.random() < rate:
-                if key in ranges:
+                if hasattr(ranges, key):
                     # 50% chance to purely resample from global range (Big Jump)
                     if random.random() < 0.5:
-                        min_v, max_v = ranges[key]
-                        if isinstance(ranges[key][0], int):
+                        min_v, max_v = getattr(ranges, key)
+                        if isinstance(min_v, int):
                             genome.params[key] = random.randint(int(min_v), int(max_v))
                         else:
                             genome.params[key] = random.uniform(min_v, max_v)

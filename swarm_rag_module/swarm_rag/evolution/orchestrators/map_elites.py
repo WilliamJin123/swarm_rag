@@ -14,7 +14,6 @@ from ..execution.factory import GenomeFactory
 from ..execution.evaluator import PopulationEvaluator
 from ..execution.tracker import ProgressTracker
 from ..execution.fitness_strategies import FitnessStrategy
-from ..extensions.base import EvolutionExtension
 
 
 class MAPElitesOrchestrator(BaseOrchestrator):
@@ -44,7 +43,6 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         archive: MapElitesArchive,
         me_loop: MapElitesLoop,
         genome_factory: GenomeFactory,
-        extensions: List[EvolutionExtension] = None
     ):
         """
         Initialize MAP-Elites orchestrator.
@@ -59,7 +57,6 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             archive: MAP-Elites archive for storing elites
             me_loop: MAP-Elites breeding loop
             genome_factory: Factory for creating genomes
-            extensions: Optional evolution extensions
         """
         super().__init__(
             context=context,
@@ -68,7 +65,6 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             tracker=tracker,
             val_query_ids=val_query_ids,
             val_ground_truth=val_ground_truth,
-            extensions=extensions
         )
         self.archive = archive
         self.me_loop = me_loop
@@ -89,15 +85,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         # Initialize population
         population = initial_population
         if not population:
-            self.logger.info(
-                f"Generating initial population of {self.config['map_elites_initial_fill']}..."
-            )
-            population = self.genome_factory.create_population(
-                self.config['map_elites_initial_fill']
-            )
+            initial_fill = self.evo_config.map_elites.initial_fill
+            self.logger.info(f"Generating initial population of {initial_fill}...")
+            population = self.genome_factory.create_population(initial_fill)
 
         best_genome = self.restored_best_genome
-        n_gen = self.config["n_generations"]
+        n_gen = self.evo_config.n_generations
         start_gen = self.context.generation
 
         if start_gen > 0:
@@ -126,19 +119,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             # Set generation (single source of truth)
             self.context.generation = gen
 
-            # Pre-generation hook
-            self.invoke_extension("on_generation_start")
-
             # BREED: Generate offspring from archive
-            # Note: me_loop.step() should NOT increment generation anymore
             offspring = self.me_loop.step(self.archive)
 
             if not offspring:
                 self.logger.warning("Archive empty or no offspring produced. Stopping.")
                 break
-
-            # Post-breeding hook
-            self.invoke_extension("on_after_evaluation")
 
             # EVALUATE offspring
             self.evaluator.evaluate(offspring)
@@ -159,20 +145,22 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             # STATS & LOGGING
             stats = self.archive.stats()
 
-            pbar.set_postfix({
-                "Cover": f"{stats['coverage']:.2%}",
-                "Best": f"{stats['max_fitness']:.4f}",
-                "Added": added_count
-            })
+            pbar.set_postfix(
+                {
+                    "Cover": f"{stats['coverage']:.2%}",
+                    "Best": f"{stats['max_fitness']:.4f}",
+                    "Added": added_count,
+                }
+            )
 
             log_stats = {
-                "best_quality": stats['max_fitness'],
-                "avg_quality": stats['qd_score'],  # QD Score as proxy
+                "best_quality": stats["max_fitness"],
+                "avg_quality": stats["qd_score"],  # QD Score as proxy
                 "best_stability": 0.0,
                 "best_cost": 0.0,
                 "best_complexity": 0.0,
-                "coverage": stats['coverage'],
-                "filled_cells": stats['filled_cells']
+                "coverage": stats["coverage"],
+                "filled_cells": stats["filled_cells"],
             }
 
             # VALIDATION (periodically)
@@ -187,16 +175,14 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             self.tracker.log(gen, log_stats, val_stats)
 
             # CHECKPOINTING
-            if gen % self.config["checkpoint_frequency"] == 0:
+            ckpt_freq = self.evo_config.checkpoint.checkpoint_frequency
+            if gen % ckpt_freq == 0:
                 self.save_checkpoint(
                     population=self.archive.as_population(),
                     best_genome=best_genome,
                     generation=gen,
-                    extra_state=self._serialize_archive_state()
+                    extra_state=self._serialize_archive_state(),
                 )
-
-            # Post-generation hook
-            self.invoke_extension("on_generation_end")
 
         # Cleanup
         pbar.close()
@@ -205,11 +191,11 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             population=self.archive.as_population(),
             best_genome=best_genome,
             generation=n_gen - 1,
-            extra_state=self._serialize_archive_state()
+            extra_state=self._serialize_archive_state(),
         )
         self.tracker.plot(
-            save_path=self.config["plot_path"],
-            title=self.config["plot_title"]
+            save_path=self.evo_config.checkpoint.plot_path,
+            title=self.evo_config.checkpoint.plot_title,
         )
 
         return best_genome
@@ -219,5 +205,5 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         return {
             "archive_bins": self.archive.bins,
             "archive_ranges": self.archive.ranges,
-            "archive_grid_keys": list(self.archive.grid.keys())
+            "archive_grid_keys": list(self.archive.grid.keys()),
         }

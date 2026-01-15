@@ -1,6 +1,6 @@
 """
 LLM Provider implementations.
 """
-from .cerebras import CerebrasProvider
+from .universal import UniversalLLMProvider
 
-__all__ = ["CerebrasProvider"]
+__all__ = ["UniversalLLMProvider"]
