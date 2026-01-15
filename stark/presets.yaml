@@ -1,0 +1,77 @@
+# Named configuration presets for evolve_stark.py
+# Usage: python evolve_stark.py --preset <preset_name>
+#
+# CLI arguments always override preset values when explicitly provided.
+# Example: python evolve_stark.py --preset toy --gens 10
+
+toy:
+  # Minimal settings for quick validation testing
+  # Use this to verify the pipeline works without waiting long
+  dataset: prime
+  gens: 3
+  pop: 5
+  init_fill: 10
+  train_ss: 20
+  val_ss: 10
+  concurrent: 2
+  workers: 2
+
+fast:
+  # Fast iteration settings for development
+  # Good balance between speed and meaningful results
+  dataset: prime
+  gens: 20
+  pop: 15
+  init_fill: 50
+  train_ss: 100
+  val_ss: 50
+  concurrent: 4
+  workers: 4
+
+full:
+  # Full training settings for production runs
+  dataset: prime
+  gens: 100
+  pop: 30
+  init_fill: 100
+  train_ss: 200
+  val_ss: 100
+  concurrent: 4
+  workers: 4
+
+llm_enabled:
+  # Settings with LLM-guided mutation enabled
+  # Requires valid API keys in .env file
+  dataset: prime
+  gens: 50
+  pop: 20
+  init_fill: 60
+  train_ss: 150
+  val_ss: 75
+  concurrent: 4
+  workers: 4
+  mutation_strategy: llm_mutation
+  llm_provider: cerebras
+  llm_model: zai-glm-4.7
+
+amazon:
+  # Full training on Amazon dataset
+  dataset: amazon
+  gens: 100
+  pop: 30
+  init_fill: 100
+  train_ss: 200
+  val_ss: 100
+  concurrent: 4
+  workers: 4
+
+mag:
+  # Full training on MAG (Microsoft Academic Graph) dataset
+  dataset: mag
+  gens: 100
+  pop: 30
+  init_fill: 100
+  train_ss: 200
+  val_ss: 100
+  concurrent: 4
+  workers: 4

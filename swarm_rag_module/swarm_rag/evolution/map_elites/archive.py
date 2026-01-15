@@ -128,3 +128,65 @@ class MapElitesArchive:
 
     def clear(self):
         self.grid.clear()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serialize archive state for checkpointing.
+
+        Returns:
+            Dictionary containing archive configuration and grid contents
+        """
+        grid_data = {}
+        for key, genome in self.grid.items():
+            # Store key as string for JSON compatibility
+            key_str = str(key)
+            grid_data[key_str] = {
+                "genome": genome.to_dict() if hasattr(genome, 'to_dict') else None,
+                "id": genome.id,
+                "fitness_quality": genome.fitness.quality_score
+            }
+
+        return {
+            "bins": self.bins,
+            "ranges": self.ranges,
+            "dimensions": getattr(self.descriptor_calc, 'dimensions', []),
+            "grid": grid_data,
+            "filled_cells": len(self.grid)
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        descriptor_calc: 'DescriptorCalculator'
+    ) -> 'MapElitesArchive':
+        """
+        Restore archive from checkpoint data.
+
+        Args:
+            data: Dictionary from to_dict()
+            descriptor_calc: DescriptorCalculator for the archive
+
+        Returns:
+            Restored MapElitesArchive instance
+        """
+        archive = cls(
+            descriptor_calc=descriptor_calc,
+            bins=data["bins"],
+            ranges=data["ranges"]
+        )
+
+        # Restore grid if genome data is available
+        if "grid" in data:
+            from ..types.genome import Genome
+            for key_str, genome_data in data["grid"].items():
+                if genome_data.get("genome"):
+                    try:
+                        # Parse tuple key from string
+                        key = eval(key_str)
+                        genome = Genome.from_dict(genome_data["genome"])
+                        archive.grid[key] = genome
+                    except Exception:
+                        pass  # Skip malformed entries
+
+        return archive

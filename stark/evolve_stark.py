@@ -1,6 +1,8 @@
 import argparse
 import os
 import json
+import random
+import sys
 
 # Import your existing engine components
 from swarm_rag.core import SwarmRetriever
@@ -13,16 +15,48 @@ from swarm_rag.eval import Evaluator
 # Import STaRK integrations
 from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
 from swarm_rag.integrations.stark import (
-    StarkInMemoryVectorStore, 
-    StarkPreComputedEmbeddingHandler, 
+    StarkInMemoryVectorStore,
+    StarkPreComputedEmbeddingHandler,
     StarkSKBAdapter
 )
 from load_stark import (
-    load_and_download_embeddings, 
-    load_and_download_skb, 
-    load_and_download_qa, 
+    load_and_download_embeddings,
+    load_and_download_skb,
+    load_and_download_qa,
     precompute_stark_adjacency
 )
+
+
+def load_preset(preset_name: str) -> dict:
+    """
+    Load a named preset from presets.yaml.
+
+    Args:
+        preset_name: Name of the preset (e.g., "toy", "fast", "full")
+
+    Returns:
+        Dictionary of preset configuration values
+    """
+    try:
+        import yaml
+    except ImportError:
+        print("Error: PyYAML is required for preset loading. Install with: pip install pyyaml")
+        sys.exit(1)
+
+    preset_path = os.path.join(BASE_DIR, "presets.yaml")
+
+    if not os.path.exists(preset_path):
+        raise FileNotFoundError(f"Presets file not found: {preset_path}")
+
+    with open(preset_path, 'r') as f:
+        presets = yaml.safe_load(f)
+
+    if preset_name not in presets:
+        available = list(presets.keys())
+        raise ValueError(f"Unknown preset '{preset_name}'. Available: {available}")
+
+    print(f"Loading preset: {preset_name}")
+    return presets[preset_name]
 
 # Get the directory where this script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,16 +84,20 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     return queries, query_ids, answer_ids
 
 def run_evolution(
-    dataset_name="prime", 
-    n_gens=100, 
-    pop_size=60, 
+    dataset_name="prime",
+    n_gens=100,
+    pop_size=60,
     initial_fill=120,
     train_sample_size=200,
     val_sample_size=100,
     start_from_scratch=False,
     concurrent_evals=4,
     max_workers=4,
-    use_map_elites=True
+    use_map_elites=True,
+    llm_provider="cerebras",
+    llm_model="zai-glm-4.7",
+    env_path=".env",
+    mutation_strategy="guided_mutation"
 ):
     # Load Data
     skb = load_and_download_skb(dataset_name)
@@ -117,14 +155,19 @@ def run_evolution(
         "n_generations": n_gens,
         "concurrent_evaluations": concurrent_evals,
         "max_workers_per_retrieval": max_workers,
-        
+
         # Paths
         "log_path": os.path.join(log_dir, f"evo_{dataset_name}.jsonl"),
         "plot_path": os.path.join(log_dir, f"plot_{dataset_name}.png"),
         "checkpoint_path": os.path.join(ckpt_dir, f"ckpt_{dataset_name}.pkl"),
         "validation_frequency": 5,
         "checkpoint_frequency": 5,
-        
+
+        # LLM Configuration
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
+        "llm_env_path": env_path,
+
         # Constraints & Search Space
         "expr_max_depth": 5,
         "swarmrag_param_ranges": {
@@ -140,18 +183,18 @@ def run_evolution(
         print(">> Mode: MAP-Elites Evolution")
         evo_config.update({
             "map_elites_enabled": True,
-            "population_size": pop_size, # This becomes the batch size for offspring generation
+            "population_size": pop_size,  # This becomes the batch size for offspring generation
             "map_elites_initial_fill": initial_fill,
-            # Dimensions: 
+            # Dimensions:
             # 1. Aggressiveness (n_agents * steps): Measures "effort". Range ~10 to 240.
             # 2. Complexity (Tree Size): Measures "sophistication". Range ~5 to 50.
             "map_elites_dims": ["aggressiveness", "complexity"],
-            "map_elites_bins": [15, 12], 
+            "map_elites_bins": [15, 12],
             "map_elites_ranges": [(10, 150), (5, 60)],
-            
+
             # Genetic Operators
-            "crossover_strategy": "uniform_parameter_mix", # Simple mixing
-            "mutation_strategy": "guided_mutation",        # Smart mutation
+            "crossover_strategy": "uniform_parameter_mix",  # Simple mixing
+            "mutation_strategy": mutation_strategy,         # Configurable mutation
             "base_mutation_rate": 0.25,
         })
     else:
@@ -161,7 +204,7 @@ def run_evolution(
             "population_size": pop_size,
             "creation_strategy": "seeded_initialization",
             "crossover_strategy": "root_mix_crossover",
-            "mutation_strategy": "guided_mutation",
+            "mutation_strategy": mutation_strategy,  # Configurable mutation
             "base_mutation_rate": 0.2,
             "elite_fraction": 0.1,
         })
@@ -264,29 +307,100 @@ def run_evolution(
     print("="*30)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="prime")
-    parser.add_argument("--gens", type=int, default=100)
-    parser.add_argument("--pop", type=int, default=30, help="Batch size for MAP-Elites or Pop Size for GA")
-    parser.add_argument("--init_fill", type=int, default=100, help="Initial random population for MAP-Elites")
-    parser.add_argument("--train_ss", type=int, default=200, help="Number of training samples.")
-    parser.add_argument("--val_ss", type=int, default=100, help="Number of validation samples.")
-    parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent genomes to evaluate.")
-    parser.add_argument("--workers", type=int, default=4, help="Number of threads per retrieval.")
-    parser.add_argument("--scratch", action="store_true", help="Clear previous checkpoints/logs.")
-    parser.add_argument("--standard-ga", action="store_true", help="Use Standard GA instead of MAP-Elites")
-    
+    parser = argparse.ArgumentParser(
+        description="Run evolutionary optimization for SwarmRAG on STaRK dataset"
+    )
+
+    # Preset configuration
+    parser.add_argument("--preset", type=str, default=None,
+                        help="Load named preset from presets.yaml (toy, fast, full, llm_enabled)")
+
+    # Dataset and sampling
+    parser.add_argument("--dataset", type=str, default="prime",
+                        help="Dataset name (prime, amazon, mag)")
+    parser.add_argument("--train_ss", type=int, default=200,
+                        help="Number of training samples")
+    parser.add_argument("--val_ss", type=int, default=100,
+                        help="Number of validation samples")
+
+    # Evolution parameters
+    parser.add_argument("--gens", type=int, default=100,
+                        help="Number of generations")
+    parser.add_argument("--pop", type=int, default=30,
+                        help="Batch size for MAP-Elites or Pop Size for GA")
+    parser.add_argument("--init_fill", type=int, default=100,
+                        help="Initial random population for MAP-Elites")
+
+    # Execution parameters
+    parser.add_argument("--concurrent", type=int, default=4,
+                        help="Number of concurrent genomes to evaluate")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="Number of threads per retrieval")
+
+    # Algorithm selection
+    parser.add_argument("--standard-ga", action="store_true",
+                        help="Use Standard GA instead of MAP-Elites")
+    parser.add_argument("--mutation-strategy", type=str, default="guided_mutation",
+                        help="Mutation strategy (guided_mutation, llm_mutation, etc.)")
+
+    # LLM configuration
+    parser.add_argument("--llm-provider", type=str, default="cerebras",
+                        help="LLM provider (cerebras, openai, groq, anthropic, etc.)")
+    parser.add_argument("--llm-model", type=str, default="zai-glm-4.7",
+                        help="Model ID for the LLM provider")
+    parser.add_argument("--env-path", type=str, default=".env",
+                        help="Path to .env file with API keys")
+
+    # Misc
+    parser.add_argument("--scratch", action="store_true",
+                        help="Clear previous checkpoints/logs")
+
     args = parser.parse_args()
-    
+
+    # Apply preset if specified (CLI args override preset values)
+    if args.preset:
+        preset = load_preset(args.preset)
+
+        # Only apply preset values if CLI arg was not explicitly provided
+        # We check against the defaults to determine this
+        if args.dataset == "prime":
+            args.dataset = preset.get("dataset", args.dataset)
+        if args.gens == 100:
+            args.gens = preset.get("gens", args.gens)
+        if args.pop == 30:
+            args.pop = preset.get("pop", args.pop)
+        if args.init_fill == 100:
+            args.init_fill = preset.get("init_fill", args.init_fill)
+        if args.train_ss == 200:
+            args.train_ss = preset.get("train_ss", args.train_ss)
+        if args.val_ss == 100:
+            args.val_ss = preset.get("val_ss", args.val_ss)
+        if args.concurrent == 4:
+            args.concurrent = preset.get("concurrent", args.concurrent)
+        if args.workers == 4:
+            args.workers = preset.get("workers", args.workers)
+        if args.mutation_strategy == "guided_mutation":
+            args.mutation_strategy = preset.get("mutation_strategy", args.mutation_strategy)
+        if args.llm_provider == "cerebras":
+            args.llm_provider = preset.get("llm_provider", args.llm_provider)
+        if args.llm_model == "zai-glm-4.7":
+            args.llm_model = preset.get("llm_model", args.llm_model)
+        if args.env_path == ".env":
+            args.env_path = preset.get("env_path", args.env_path)
+
     run_evolution(
-        dataset_name=args.dataset, 
-        n_gens=args.gens, 
-        pop_size=args.pop, 
+        dataset_name=args.dataset,
+        n_gens=args.gens,
+        pop_size=args.pop,
         initial_fill=args.init_fill,
-        train_sample_size=args.train_ss, 
+        train_sample_size=args.train_ss,
         val_sample_size=args.val_ss,
         start_from_scratch=args.scratch,
         concurrent_evals=args.concurrent,
         max_workers=args.workers,
-        use_map_elites=(not args.standard_ga)
+        use_map_elites=(not args.standard_ga),
+        llm_provider=args.llm_provider,
+        llm_model=args.llm_model,
+        env_path=args.env_path,
+        mutation_strategy=args.mutation_strategy
     )

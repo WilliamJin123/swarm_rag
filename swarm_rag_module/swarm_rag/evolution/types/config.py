@@ -143,16 +143,17 @@ class EvolutionContext:
     population: List[Genome] = field(default_factory=list)
     generation: int = 0
     config: EvolutionConfigDict = field(default_factory=lambda: DEFAULT_EVO_CONFIG.copy())
-    
+
     # Registry Data (What features can we mutate into?)
     available_features: List[str] = field(default_factory=list)
     expression_features: Dict[str, List[str]] = field(default_factory=dict)
-    
+
     # State for Adaptive Strategies
     current_temperature: float = 1.0
-    
-    # Optional LLM Optimizer instance
-    llm_optimizer = None
+
+    # LLM Integration (new provider interface preferred)
+    llm_provider = None  # LLMProvider protocol instance
+    llm_optimizer = None  # Legacy LLMOptimizer instance (backwards compat)
 
     
 

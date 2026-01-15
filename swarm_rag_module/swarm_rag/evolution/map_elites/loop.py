@@ -24,9 +24,9 @@ class MapElitesLoop:
     def step(self, archive: MapElitesArchive) -> List[Genome]:
         """
         Generates a new batch of offspring from the archive.
+
+        Note: Generation counter is managed by the orchestrator, not here.
         """
-        self.context.generation += 1
-        
         offspring: List[Genome] = []
         
         # If archive is empty, we can't breed. 

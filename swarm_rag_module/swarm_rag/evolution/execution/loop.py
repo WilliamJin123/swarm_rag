@@ -53,11 +53,11 @@ class EvolutionLoop:
     def step(self, population: List[Genome]) -> List[Genome]:
         """
         Produces the NEXT generation from the CURRENT one.
+
+        Note: Generation counter is managed by the orchestrator, not here.
         """
         # Update Context
         self.context.population = population
-        self.context.generation += 1 
-        current_gen_idx = self.context.generation
 
         # Calculate dynamic rate
         global_multiplier = self.get_global_multiplier(population)

@@ -159,6 +159,36 @@ class GeneticStrategies:
         min_r, max_r = ranges.get("group_ratio", (0.1, 1.0))
         return {f"g{i}": random.uniform(min_r, max_r) for i in range(n_groups)}
 
+    @staticmethod
+    def _resolve_feature_list(key: str, ctx: EvolutionContext) -> List[str]:
+        """
+        Resolves the appropriate feature list for a strategy key.
+
+        Handles patterns like 'ranking', 'gN_movement', 'gN_deposit'.
+
+        Args:
+            key: Strategy key (e.g., "g0_movement", "ranking")
+            ctx: Evolution context containing expression_features
+
+        Returns:
+            List of valid feature names for this strategy type
+        """
+        # Direct match first
+        feature_list = ctx.expression_features.get(key)
+        if feature_list:
+            return feature_list
+
+        # Pattern match for group strategies
+        if key.endswith("_movement") or "movement" in key:
+            return ctx.expression_features.get("movement", [])
+        elif key.endswith("_deposit") or "deposit" in key:
+            return ctx.expression_features.get("deposit", [])
+        elif key == "ranking" or "ranking" in key:
+            return ctx.expression_features.get("ranking", [])
+
+        # Fallback: return empty list
+        return []
+
     # --- SELECTION ---
 
     @staticmethod
@@ -650,15 +680,7 @@ class GeneticStrategies:
         # 3. Strategy Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
-                feature_list = ctx.expression_features.get(key)
-                
-                if not feature_list:
-                    if key.endswith("_movement"):
-                        feature_list = ctx.expression_features.get("movement")
-                    elif key.endswith("_deposit"):
-                        feature_list = ctx.expression_features.get("deposit")
-                    elif key == "ranking":
-                        feature_list = ctx.expression_features.get("ranking")
+                feature_list = GeneticStrategies._resolve_feature_list(key, ctx)
 
                 # Structural Mutations
                 mut_choice = random.random()
@@ -733,12 +755,8 @@ class GeneticStrategies:
         # Aggressive Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
-                feature_list = ctx.expression_features.get(key)
-                if not feature_list:
-                    if "movement" in key: feature_list = ctx.expression_features.get("movement")
-                    elif "deposit" in key: feature_list = ctx.expression_features.get("deposit")
-                    elif "ranking" in key: feature_list = ctx.expression_features.get("ranking")
-                
+                feature_list = GeneticStrategies._resolve_feature_list(key, ctx)
+
                 # Force a subtree replacement (structural change) 
                 # rather than just changing a node value
                 # We do this by manually generating a new random subtree and swapping
@@ -776,12 +794,8 @@ class GeneticStrategies:
         # Guided Tree Mutation
         for key, tree in genome.strategies.items():
             if random.random() < rate:
-                feature_list = ctx.expression_features.get(key)
-                if not feature_list:
-                    if "movement" in key: feature_list = ctx.expression_features.get("movement")
-                    elif "deposit" in key: feature_list = ctx.expression_features.get("deposit")
-                    elif "ranking" in key: feature_list = ctx.expression_features.get("ranking")
-                
+                feature_list = GeneticStrategies._resolve_feature_list(key, ctx)
+
                 # Check for critical features
                 all_nodes = ExpressionEvolution.get_all_nodes(tree)
                 has_semantic = any(n.value == 'semantic_similarity' for n in all_nodes)
