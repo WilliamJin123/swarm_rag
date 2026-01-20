@@ -39,6 +39,22 @@ class TrajectoryMetrics:
 
 
 @dataclass
+class TraversalPath:
+    """Single agent traversal path with stuck/revisit info."""
+    agent_id: int
+    path: List[int]
+    revisit_nodes: List[int]  # nodes visited more than once
+    stuck_at: Optional[int]  # node where agent got stuck (dead-end or loop)
+
+
+@dataclass
+class StuckNodeSummary:
+    """Summary of problematic nodes across all agents."""
+    dead_end_nodes: List[tuple]  # [(node_id, count), ...] - nodes where agents couldn't move
+    revisit_hotspots: List[tuple]  # [(node_id, count), ...] - most revisited nodes
+
+
+@dataclass
 class QueryDecisionContext:
     """Complete decision context for one query evaluation."""
     query_id: Any
@@ -365,6 +381,214 @@ class DecisionTracker:
         """Number of decisions captured."""
         return len(self._decisions)
 
+    def compute_traversal_paths(
+        self,
+        agent_trajectories: List[List[int]]
+    ) -> List[TraversalPath]:
+        """
+        Extract per-agent traversal paths with revisit and stuck info.
+
+        Args:
+            agent_trajectories: List of node ID lists, one per agent
+
+        Returns:
+            List of TraversalPath objects with path details
+        """
+        paths = []
+        for agent_id, traj in enumerate(agent_trajectories):
+            if not traj:
+                continue
+
+            # Find revisited nodes
+            seen = set()
+            revisit_nodes = []
+            for node in traj:
+                if node in seen:
+                    revisit_nodes.append(node)
+                seen.add(node)
+
+            # Detect if agent got stuck (same node repeated at end, or oscillating)
+            stuck_at = None
+            if len(traj) >= 2:
+                # Check for dead-end (repeated same node at end)
+                if traj[-1] == traj[-2]:
+                    stuck_at = traj[-1]
+                # Check for oscillation (A->B->A->B pattern)
+                elif len(traj) >= 4 and traj[-1] == traj[-3] and traj[-2] == traj[-4]:
+                    stuck_at = traj[-1]
+
+            paths.append(TraversalPath(
+                agent_id=agent_id,
+                path=traj,
+                revisit_nodes=list(set(revisit_nodes)),
+                stuck_at=stuck_at
+            ))
+        return paths
+
+    def compute_node_visitation_stats(
+        self,
+        agent_trajectories: List[List[int]]
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Compute node-level visitation statistics.
+
+        Args:
+            agent_trajectories: List of node ID lists, one per agent
+
+        Returns:
+            Dict mapping node_id to stats: {visits, unique_agents, is_dead_end}
+        """
+        node_stats: Dict[int, Dict[str, Any]] = {}
+
+        for agent_id, traj in enumerate(agent_trajectories):
+            for i, node in enumerate(traj):
+                if node not in node_stats:
+                    node_stats[node] = {
+                        "visits": 0,
+                        "unique_agents": set(),
+                        "is_dead_end": False,
+                        "is_terminal": 0  # count of times this was the last node
+                    }
+                node_stats[node]["visits"] += 1
+                node_stats[node]["unique_agents"].add(agent_id)
+
+                # Check if this is a terminal position
+                if i == len(traj) - 1:
+                    node_stats[node]["is_terminal"] += 1
+
+                # Check for dead-end (agent couldn't move)
+                if i > 0 and traj[i] == traj[i-1]:
+                    node_stats[node]["is_dead_end"] = True
+
+        # Convert sets to counts
+        for node in node_stats:
+            node_stats[node]["unique_agents"] = len(node_stats[node]["unique_agents"])
+
+        return node_stats
+
+    def identify_stuck_nodes(
+        self,
+        agent_trajectories: List[List[int]]
+    ) -> StuckNodeSummary:
+        """
+        Identify nodes where agents frequently get stuck.
+
+        Args:
+            agent_trajectories: List of node ID lists, one per agent
+
+        Returns:
+            StuckNodeSummary with dead-end and revisit hotspot info
+        """
+        dead_end_counts: Counter = Counter()
+        revisit_counts: Counter = Counter()
+
+        for traj in agent_trajectories:
+            if not traj:
+                continue
+
+            # Count dead-ends (same node repeated consecutively)
+            for i in range(1, len(traj)):
+                if traj[i] == traj[i-1]:
+                    dead_end_counts[traj[i]] += 1
+
+            # Count revisits
+            seen = set()
+            for node in traj:
+                if node in seen:
+                    revisit_counts[node] += 1
+                seen.add(node)
+
+        return StuckNodeSummary(
+            dead_end_nodes=dead_end_counts.most_common(5),
+            revisit_hotspots=revisit_counts.most_common(5)
+        )
+
+    def sample_representative_paths(
+        self,
+        agent_trajectories: List[List[int]],
+        max_samples: int = 5
+    ) -> List[TraversalPath]:
+        """
+        Sample diverse, representative paths for LLM context.
+
+        Prioritizes paths that show:
+        1. Stuck agents (dead-ends or loops)
+        2. High revisit counts
+        3. Diverse coverage (if no problems)
+
+        Args:
+            agent_trajectories: List of node ID lists, one per agent
+            max_samples: Maximum paths to return
+
+        Returns:
+            List of representative TraversalPath objects
+        """
+        all_paths = self.compute_traversal_paths(agent_trajectories)
+        if not all_paths:
+            return []
+
+        # Categorize paths
+        stuck_paths = [p for p in all_paths if p.stuck_at is not None]
+        revisit_paths = [p for p in all_paths if p.revisit_nodes and p.stuck_at is None]
+        clean_paths = [p for p in all_paths if not p.revisit_nodes and p.stuck_at is None]
+
+        # Build sample prioritizing problematic paths
+        samples = []
+
+        # Add stuck paths first (most informative)
+        for p in stuck_paths[:max(1, max_samples // 2)]:
+            samples.append(p)
+
+        # Add high-revisit paths
+        revisit_paths.sort(key=lambda p: len(p.revisit_nodes), reverse=True)
+        for p in revisit_paths[:max(1, (max_samples - len(samples)) // 2)]:
+            if len(samples) < max_samples:
+                samples.append(p)
+
+        # Fill remaining with clean paths (for comparison)
+        for p in clean_paths:
+            if len(samples) >= max_samples:
+                break
+            samples.append(p)
+
+        return samples[:max_samples]
+
+    def reconstruct_trajectories_from_decisions(self) -> List[List[int]]:
+        """
+        Reconstruct agent trajectories from recorded decisions.
+
+        Uses the decision data (agent_id, step, current_node, chosen_node)
+        to rebuild the path each agent took.
+
+        Returns:
+            List of node ID lists, one per agent
+        """
+        if not self._decisions:
+            return []
+
+        # Group decisions by agent
+        agent_decisions: Dict[int, List[AgentDecision]] = {}
+        for d in self._decisions:
+            if d.agent_id not in agent_decisions:
+                agent_decisions[d.agent_id] = []
+            agent_decisions[d.agent_id].append(d)
+
+        # Sort each agent's decisions by step
+        trajectories = []
+        for agent_id in sorted(agent_decisions.keys()):
+            decisions = sorted(agent_decisions[agent_id], key=lambda x: x.step)
+            if not decisions:
+                continue
+
+            # Build path: start with first current_node, then append chosen_nodes
+            path = [decisions[0].current_node]
+            for d in decisions:
+                path.append(d.chosen_node)
+
+            trajectories.append(path)
+
+        return trajectories
+
     def to_summary_dict(
         self,
         agent_trajectories: Optional[List[List[int]]] = None
@@ -374,7 +598,19 @@ class DecisionTracker:
 
         This is a convenience method that returns a JSON-serializable dict
         with behavioral metrics suitable for inclusion in LLM prompts.
+
+        Enhanced to include:
+        - sample_paths: Representative agent traversal paths
+        - node_hotspots: Most visited nodes with dead-end flags
+        - stuck_nodes: Summary of problematic nodes
+
+        If agent_trajectories is not provided, will attempt to reconstruct
+        from recorded decisions.
         """
+        # Auto-reconstruct trajectories if not provided and we have decisions
+        if agent_trajectories is None and self._decisions:
+            agent_trajectories = self.reconstruct_trajectories_from_decisions()
+
         ctx = self.get_context(agent_trajectories)
 
         summary = {
@@ -400,4 +636,223 @@ class DecisionTracker:
         choice_analysis = self.compute_choice_analysis()
         summary["choice_patterns"] = choice_analysis
 
+        # Add enhanced traversal context if trajectories provided
+        if agent_trajectories:
+            # Sample representative paths for LLM
+            sample_paths = self.sample_representative_paths(agent_trajectories, max_samples=5)
+            summary["sample_paths"] = [
+                {
+                    "agent_id": p.agent_id,
+                    "path": p.path,
+                    "revisit_nodes": p.revisit_nodes,
+                    "stuck_at": p.stuck_at
+                }
+                for p in sample_paths
+            ]
+
+            # Node-level hotspots (top 10 most visited)
+            node_stats = self.compute_node_visitation_stats(agent_trajectories)
+            sorted_nodes = sorted(
+                node_stats.items(),
+                key=lambda x: x[1]["visits"],
+                reverse=True
+            )[:10]
+            summary["node_hotspots"] = [
+                {
+                    "node_id": node_id,
+                    "visits": stats["visits"],
+                    "unique_agents": stats["unique_agents"],
+                    "is_dead_end": stats["is_dead_end"]
+                }
+                for node_id, stats in sorted_nodes
+            ]
+
+            # Stuck nodes summary
+            stuck_summary = self.identify_stuck_nodes(agent_trajectories)
+            summary["stuck_nodes"] = {
+                "dead_ends": [list(item) for item in stuck_summary.dead_end_nodes],
+                "revisit_traps": [list(item) for item in stuck_summary.revisit_hotspots]
+            }
+
         return summary
+
+
+class SmartDecisionTracker(DecisionTracker):
+    """
+    Enhanced decision tracker with priority-based sampling.
+
+    Instead of sampling uniformly, this tracker prioritizes capturing
+    edge cases that are most informative for LLM-guided mutations:
+    - Dead ends (no movement possible)
+    - Revisits (agent returning to previously visited node)
+    - Low confidence decisions (close scores between candidates)
+    - First/last steps (boundary conditions)
+
+    This allows batch retrieval while still capturing representative decisions.
+
+    Expected Impact: 3-5x speedup when LLM mutations enabled.
+
+    Args:
+        enabled: Whether tracking is active
+        sample_rate: Base sample rate for normal decisions (0.0-1.0)
+        priority_sample_rate: Sample rate for edge cases (0.0-1.0)
+        max_decisions: Maximum decisions to capture (prevents memory bloat)
+    """
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        sample_rate: float = 0.1,
+        priority_sample_rate: float = 0.5,
+        max_decisions: int = 200
+    ):
+        super().__init__(enabled=enabled, sample_rate=sample_rate)
+        self.priority_sample_rate = priority_sample_rate
+        self.max_decisions = max_decisions
+        self._visited_nodes: Dict[int, set] = {}  # agent_id -> set of visited nodes
+
+    def start_query(self, query_id: Any, n_agents: int, n_steps: int):
+        """Begin tracking for a new query."""
+        super().start_query(query_id, n_agents, n_steps)
+        self._visited_nodes = {i: set() for i in range(n_agents)}
+
+    def should_capture_smart(
+        self,
+        agent_id: int,
+        step: int,
+        current_node: int,
+        chosen_node: int,
+        final_scores: np.ndarray
+    ) -> bool:
+        """
+        Determine if this decision should be captured using smart sampling.
+
+        Prioritizes edge cases that are most informative:
+        - Dead ends: chosen_node == current_node (couldn't move)
+        - Revisits: chosen_node already visited by this agent
+        - Low confidence: top 2 scores are within 10% of each other
+        - Boundary steps: first or last step
+        """
+        if not self.enabled:
+            return False
+
+        # Check max decisions limit
+        if len(self._decisions) >= self.max_decisions:
+            return False
+
+        # Detect edge cases
+        is_edge_case = False
+
+        # 1. Dead end detection
+        if chosen_node == current_node:
+            is_edge_case = True
+
+        # 2. Revisit detection
+        if agent_id in self._visited_nodes:
+            if chosen_node in self._visited_nodes[agent_id]:
+                is_edge_case = True
+            self._visited_nodes[agent_id].add(chosen_node)
+
+        # 3. Low confidence detection
+        if len(final_scores) >= 2:
+            sorted_scores = np.sort(final_scores)[::-1]
+            if sorted_scores[0] > 0:
+                score_ratio = sorted_scores[1] / (sorted_scores[0] + 1e-10)
+                if score_ratio > 0.9:  # Top 2 scores within 10%
+                    is_edge_case = True
+
+        # 4. Boundary step detection (first or last step)
+        if step == 0 or step == self._n_steps - 1:
+            is_edge_case = True
+
+        # Apply appropriate sample rate
+        if is_edge_case:
+            return self._rng.random() < self.priority_sample_rate
+        else:
+            return self._rng.random() < self.sample_rate
+
+    def record_decision(
+        self,
+        agent_id: int,
+        step: int,
+        current_node: int,
+        candidates: List[int],
+        heuristic_scores: Dict[str, np.ndarray],
+        final_scores: np.ndarray,
+        chosen_node: int,
+        chosen_index: int,
+        deposit: float
+    ):
+        """
+        Record a decision using smart sampling.
+
+        Uses priority-based sampling instead of uniform sampling.
+        """
+        # Use smart sampling instead of base class's should_capture()
+        if not self.should_capture_smart(
+            agent_id, step, current_node, chosen_node, final_scores
+        ):
+            return
+
+        # Compute probabilities from final scores
+        total = np.sum(final_scores) + 1e-10
+        probabilities = final_scores / total
+
+        decision = AgentDecision(
+            agent_id=agent_id,
+            step=step,
+            current_node=current_node,
+            candidates=list(candidates),
+            scores={k: v.copy() if isinstance(v, np.ndarray) else np.array(v)
+                   for k, v in heuristic_scores.items()},
+            final_scores=final_scores.copy() if isinstance(final_scores, np.ndarray)
+                        else np.array(final_scores),
+            probabilities=probabilities,
+            chosen_node=chosen_node,
+            chosen_index=chosen_index,
+            deposit_amount=deposit
+        )
+        self._decisions.append(decision)
+
+    def clear(self):
+        """Reset tracker for reuse."""
+        super().clear()
+        self._visited_nodes = {}
+
+    def get_edge_case_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary focused on edge cases for LLM context.
+
+        Returns a compressed summary that highlights problematic patterns.
+        """
+        if not self._decisions:
+            return {}
+
+        dead_ends = 0
+        revisits = 0
+        low_confidence = 0
+        boundary_decisions = 0
+
+        for d in self._decisions:
+            if d.chosen_node == d.current_node:
+                dead_ends += 1
+            if d.step == 0 or d.step == self._n_steps - 1:
+                boundary_decisions += 1
+            if len(d.final_scores) >= 2:
+                sorted_scores = np.sort(d.final_scores)[::-1]
+                if sorted_scores[0] > 0:
+                    ratio = sorted_scores[1] / (sorted_scores[0] + 1e-10)
+                    if ratio > 0.9:
+                        low_confidence += 1
+
+        total = len(self._decisions)
+        return {
+            "total_captured": total,
+            "dead_end_rate": dead_ends / max(1, total),
+            "low_confidence_rate": low_confidence / max(1, total),
+            "boundary_decisions": boundary_decisions,
+            "issues_detected": {
+                "dead_ends": dead_ends > total * 0.1,
+                "uncertain_decisions": low_confidence > total * 0.3,
+            }
+        }

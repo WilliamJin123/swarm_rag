@@ -8,7 +8,6 @@ class HeuristicKey(Enum):
     NODE_CENTRALITY = "node_centrality"
     PHEROMONE_REPULSION = "pheromone_repulsion"
     RANDOM_JITTER = "random_jitter"
-    EDGE_TYPE_PREFERENCE = "edge_type_preference"
 
     # --- RANKING HEURISTICS ---
     PERCENTAGE_VISITED = "percentage_visited"

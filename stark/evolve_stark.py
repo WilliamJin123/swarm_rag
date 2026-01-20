@@ -44,38 +44,6 @@ from load_stark import (
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def load_preset(preset_name: str) -> dict:
-    """
-    Load a named preset from presets.yaml.
-
-    Args:
-        preset_name: Name of the preset (e.g., "toy", "fast", "full")
-
-    Returns:
-        Dictionary of preset configuration values
-    """
-    try:
-        import yaml
-    except ImportError:
-        print("Error: PyYAML is required for preset loading. Install with: pip install pyyaml")
-        sys.exit(1)
-
-    preset_path = os.path.join(BASE_DIR, "presets.yaml")
-
-    if not os.path.exists(preset_path):
-        raise FileNotFoundError(f"Presets file not found: {preset_path}")
-
-    with open(preset_path, "r") as f:
-        presets = yaml.safe_load(f)
-
-    if preset_name not in presets:
-        available = list(presets.keys())
-        raise ValueError(f"Unknown preset '{preset_name}'. Available: {available}")
-
-    print(f"Loading preset: {preset_name}")
-    return presets[preset_name]
-
-
 def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     """
     Loads STaRK data and converts it into the format expected by EvolutionEngine.
@@ -345,14 +313,6 @@ if __name__ == "__main__":
         description="Run MAP-Elites evolutionary optimization for SwarmRAG on STaRK datasets"
     )
 
-    # Preset configuration
-    parser.add_argument(
-        "--preset",
-        type=str,
-        default=None,
-        help="Load named preset from presets.yaml (toy, fast, full, llm)",
-    )
-
     # Dataset and sampling
     parser.add_argument(
         "--dataset",
@@ -415,44 +375,6 @@ if __name__ == "__main__":
     parser.add_argument("--scratch", action="store_true", help="Clear previous checkpoints/logs")
 
     args = parser.parse_args()
-
-    # Apply preset if specified (CLI args override preset values)
-    if args.preset:
-        preset = load_preset(args.preset)
-
-        # Only apply preset values if CLI arg was not explicitly provided
-        if args.dataset == "prime":
-            args.dataset = preset.get("dataset", args.dataset)
-        if args.gens == 100:
-            args.gens = preset.get("gens", args.gens)
-        if args.pop == 30:
-            args.pop = preset.get("pop", args.pop)
-        if args.init_fill == 100:
-            args.init_fill = preset.get("init_fill", args.init_fill)
-        if args.train_ss == 200:
-            args.train_ss = preset.get("train_ss", args.train_ss)
-        if args.val_ss == 100:
-            args.val_ss = preset.get("val_ss", args.val_ss)
-        if args.concurrent == 4:
-            args.concurrent = preset.get("concurrent", args.concurrent)
-        if args.workers == 4:
-            args.workers = preset.get("workers", args.workers)
-        if args.mutation == "guided_mutation":
-            args.mutation = preset.get("mutation_strategy", args.mutation)
-        if args.llm_provider == "cerebras":
-            args.llm_provider = preset.get("llm_provider", args.llm_provider)
-        if args.llm_model == "zai-glm-4.7":
-            args.llm_model = preset.get("llm_model", args.llm_model)
-        if args.env_path == ".env":
-            args.env_path = preset.get("env_path", args.env_path)
-
-        # LLM preset override
-        if not args.llm:
-            args.llm = preset.get("llm_enabled", False)
-
-        # GPU preset override
-        if args.gpu == "auto":
-            args.gpu = preset.get("use_gpu", args.gpu)
 
     run_evolution(
         dataset_name=args.dataset,

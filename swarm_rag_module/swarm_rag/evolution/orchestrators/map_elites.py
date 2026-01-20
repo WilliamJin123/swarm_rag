@@ -1,5 +1,10 @@
 """
 MAP-Elites Quality-Diversity orchestrator.
+
+Enhanced with three-tier LLM-guided evolution:
+- Evolution Journal for tracking mutation history
+- Strategic Oracle integration for periodic steering
+- Mutation outcome tracking for learning loops
 """
 from typing import List, Optional, Any
 
@@ -14,6 +19,7 @@ from ..execution.factory import GenomeFactory
 from ..execution.evaluator import PopulationEvaluator
 from ..execution.tracker import ProgressTracker
 from ..execution.fitness_strategies import FitnessStrategy
+from ..llm.evolution_journal import EvolutionJournal
 
 
 class MAPElitesOrchestrator(BaseOrchestrator):
@@ -43,6 +49,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         archive: MapElitesArchive,
         me_loop: MapElitesLoop,
         genome_factory: GenomeFactory,
+        evolution_journal: Optional[EvolutionJournal] = None,
     ):
         """
         Initialize MAP-Elites orchestrator.
@@ -57,6 +64,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             archive: MAP-Elites archive for storing elites
             me_loop: MAP-Elites breeding loop
             genome_factory: Factory for creating genomes
+            evolution_journal: Optional journal for tracking mutation history
         """
         super().__init__(
             context=context,
@@ -69,6 +77,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         self.archive = archive
         self.me_loop = me_loop
         self.genome_factory = genome_factory
+
+        # Initialize evolution journal for three-tier architecture
+        self.evolution_journal = evolution_journal or EvolutionJournal()
+
+        # Attach journal to context for access by mutation strategies
+        self.context.evolution_journal = self.evolution_journal
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
         """
@@ -119,6 +133,9 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             # Set generation (single source of truth)
             self.context.generation = gen
 
+            # STRATEGIC ORACLE: Update directive if needed
+            self.me_loop.update_strategic_directive(self.archive)
+
             # BREED: Generate offspring from archive
             offspring = self.me_loop.step(self.archive)
 
@@ -130,11 +147,22 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             self.evaluator.evaluate(offspring)
             self.fitness_strategy.assign_fitness(offspring, generation=gen)
 
-            # ARCHIVE INSERTION
+            # ARCHIVE INSERTION + JOURNAL OUTCOME TRACKING
             added_count = 0
             for child in offspring:
-                if self.archive.add(child):
+                added = self.archive.add(child)
+                if added:
                     added_count += 1
+
+                # Update mutation record in journal with outcome
+                mutation_record = getattr(child, '_mutation_record', None)
+                if mutation_record is not None:
+                    self.evolution_journal.update_outcome(
+                        record=mutation_record,
+                        fitness_after=child.fitness.quality_score,
+                        added_to_archive=added,
+                        replaced_existing=added,  # If added, it replaced or filled
+                    )
 
                 if best_genome is None or child.fitness > best_genome.fitness:
                     best_genome = child.copy()
@@ -144,6 +172,13 @@ class MAPElitesOrchestrator(BaseOrchestrator):
 
             # STATS & LOGGING
             stats = self.archive.stats()
+
+            # FINALIZE JOURNAL GENERATION
+            self.evolution_journal.finalize_generation(
+                generation=gen,
+                qd_score=stats["qd_score"],
+                coverage=stats["coverage"],
+            )
 
             pbar.set_postfix(
                 {
@@ -201,9 +236,18 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         return best_genome
 
     def _serialize_archive_state(self) -> dict:
-        """Serialize archive metadata for checkpoint restoration."""
+        """Serialize archive and journal metadata for checkpoint restoration."""
         return {
             "archive_bins": self.archive.bins,
             "archive_ranges": self.archive.ranges,
             "archive_grid_keys": list(self.archive.grid.keys()),
+            "evolution_journal": self.evolution_journal.to_dict(),
         }
+
+    def _restore_journal_state(self, extra_state: dict):
+        """Restore journal from checkpoint extra_state."""
+        if "evolution_journal" in extra_state:
+            self.evolution_journal = EvolutionJournal.from_dict(
+                extra_state["evolution_journal"]
+            )
+            self.context.evolution_journal = self.evolution_journal

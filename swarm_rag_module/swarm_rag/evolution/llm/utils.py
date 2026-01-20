@@ -7,6 +7,10 @@ Provides enhanced context for LLM-guided mutations including:
 - Behavioral analysis from decision tracking
 - Evolutionary context
 - Available heuristics and parameter bounds
+
+Also provides tiered context builders for the three-tier architecture:
+- build_strategic_context: For Strategic Oracle (Tier 1)
+- build_tactical_context: For Tactical Advisor (Tier 2)
 """
 from typing import Any, Dict, TypedDict, Optional, List
 import logging
@@ -14,6 +18,51 @@ from ..types.genome import Genome, SwarmParams
 from .parsers import ExpressionParser
 
 logger = logging.getLogger(__name__)
+
+
+# Re-export tiered context builders for convenience
+def build_strategic_context(
+    archive_stats: Dict[str, Any],
+    journal: Optional[Any],
+    generation: int,
+    total_generations: int,
+    population: Optional[List[Any]] = None,
+) -> "StrategicContext":
+    """
+    Build context for Strategic Oracle (Tier 1).
+
+    Args:
+        archive_stats: Stats from MapElitesArchive.stats()
+        journal: EvolutionJournal instance
+        generation: Current generation
+        total_generations: Total planned generations
+        population: Optional list of genomes for diversity calculation
+
+    Returns:
+        StrategicContext for the oracle
+    """
+    from .strategic_oracle import build_strategic_context as _build
+    return _build(archive_stats, journal, generation, total_generations, population)
+
+
+def build_tactical_context(
+    genome: Genome,
+    directive: "StrategicDirective",
+    journal: Optional[Any] = None,
+) -> "TacticalContext":
+    """
+    Build context for Tactical Advisor (Tier 2).
+
+    Args:
+        genome: The genome to analyze
+        directive: Current strategic directive
+        journal: Evolution journal for history
+
+    Returns:
+        TacticalContext for the advisor
+    """
+    from .tactical_advisor import build_tactical_context as _build
+    return _build(genome, directive, journal)
 
 
 class HeuristicStats(TypedDict):
@@ -35,6 +84,10 @@ class BehavioralMetrics(TypedDict, total=False):
     final_dispersion: float  # how spread out agents are (0=clustered, 1=dispersed)
     heuristic_usage: Dict[str, HeuristicStats]
     choice_patterns: Dict[str, float]  # avg_chosen_rank, greedy_match_rate, etc.
+    # Enhanced traversal context
+    sample_paths: List[Dict[str, Any]]  # Representative agent paths with stuck/revisit info
+    node_hotspots: List[Dict[str, Any]]  # Most visited nodes with dead-end flags
+    stuck_nodes: Dict[str, List]  # {dead_ends: [...], revisit_traps: [...]}
 
 
 class EvolutionaryContext(TypedDict, total=False):
@@ -174,6 +227,36 @@ def _extract_behavioral_metrics(decision_context: Any) -> BehavioralMetrics:
     """Extract behavioral metrics from QueryDecisionContext."""
     behavioral: BehavioralMetrics = {}
 
+    # Handle dict directly (from to_summary_dict output stored on genome)
+    if isinstance(decision_context, dict):
+        summary = decision_context
+        if "trajectory" in summary:
+            t = summary["trajectory"]
+            behavioral["unique_nodes_ratio"] = t.get("unique_nodes_ratio", 0.0)
+            behavioral["revisit_rate"] = t.get("revisit_rate", 0.0)
+            behavioral["dead_end_rate"] = t.get("dead_end_rate", 0.0)
+            behavioral["avg_branching_factor"] = t.get("avg_branching_factor", 0.0)
+            behavioral["convergence_step"] = t.get("convergence_step")
+            behavioral["final_dispersion"] = t.get("final_dispersion", 0.0)
+
+        if "heuristic_usage" in summary:
+            behavioral["heuristic_usage"] = summary["heuristic_usage"]
+
+        if "choice_patterns" in summary:
+            behavioral["choice_patterns"] = summary["choice_patterns"]
+
+        # Extract enhanced traversal context
+        if "sample_paths" in summary:
+            behavioral["sample_paths"] = summary["sample_paths"]
+
+        if "node_hotspots" in summary:
+            behavioral["node_hotspots"] = summary["node_hotspots"]
+
+        if "stuck_nodes" in summary:
+            behavioral["stuck_nodes"] = summary["stuck_nodes"]
+
+        return behavioral
+
     # Use to_summary_dict if available (from DecisionTracker)
     if hasattr(decision_context, 'to_summary_dict'):
         # This is a DecisionTracker
@@ -192,6 +275,16 @@ def _extract_behavioral_metrics(decision_context: Any) -> BehavioralMetrics:
 
         if "choice_patterns" in summary:
             behavioral["choice_patterns"] = summary["choice_patterns"]
+
+        # Extract enhanced traversal context
+        if "sample_paths" in summary:
+            behavioral["sample_paths"] = summary["sample_paths"]
+
+        if "node_hotspots" in summary:
+            behavioral["node_hotspots"] = summary["node_hotspots"]
+
+        if "stuck_nodes" in summary:
+            behavioral["stuck_nodes"] = summary["stuck_nodes"]
 
     # Handle QueryDecisionContext directly
     elif hasattr(decision_context, 'trajectory_metrics') and decision_context.trajectory_metrics:

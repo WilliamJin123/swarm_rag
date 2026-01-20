@@ -6,9 +6,24 @@ MAP-Elites is the default and only evolution paradigm.
 """
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING
+import os
 
 if TYPE_CHECKING:
     from .genome import Genome
+
+
+def _get_optimal_concurrency() -> int:
+    """
+    Calculate optimal concurrency based on available CPU cores.
+
+    Uses half the CPU count (to leave room for other processes),
+    capped at 16 to avoid memory issues.
+    """
+    try:
+        cpu_count = os.cpu_count() or 4
+        return min(cpu_count // 2, 16)
+    except Exception:
+        return 4
 
 
 # =============================================================================
@@ -17,9 +32,19 @@ if TYPE_CHECKING:
 
 @dataclass
 class ResourceConfig:
-    """Concurrency and worker settings."""
-    concurrent_evaluations: int = 4
+    """
+    Concurrency and worker settings.
+
+    Defaults are dynamically scaled based on available CPU cores.
+    """
+    concurrent_evaluations: int = field(default_factory=_get_optimal_concurrency)
     max_workers_per_retrieval: int = 4
+
+    # Dynamic batch sizing based on archive state
+    enable_dynamic_batch_size: bool = True
+    base_batch_size: int = 30
+    min_batch_size: int = 15
+    max_batch_size: int = 50
 
 
 @dataclass
@@ -344,3 +369,86 @@ def get_default_flat_config() -> Dict[str, Any]:
 
 # Alias for old DEFAULT_EVO_CONFIG usage
 DEFAULT_EVO_CONFIG = get_default_flat_config()
+
+
+# =============================================================================
+# Dynamic Configuration Helpers
+# =============================================================================
+
+def get_dynamic_batch_size(
+    archive_fill_rate: float,
+    config: ResourceConfig
+) -> int:
+    """
+    Calculate dynamic batch size based on archive state.
+
+    Larger batches when archive is sparse (explore more),
+    smaller batches when full (refine existing).
+
+    Args:
+        archive_fill_rate: Fraction of archive cells occupied (0.0-1.0)
+        config: ResourceConfig with batch size settings
+
+    Returns:
+        Batch size adjusted for current archive state
+    """
+    if not config.enable_dynamic_batch_size:
+        return config.base_batch_size
+
+    if archive_fill_rate < 0.3:
+        # Sparse archive: explore more
+        batch_size = int(config.base_batch_size * 1.5)
+    elif archive_fill_rate > 0.7:
+        # Full archive: refine existing
+        batch_size = int(config.base_batch_size * 0.6)
+    else:
+        # Mid-range: standard batch
+        batch_size = config.base_batch_size
+
+    # Clamp to configured limits
+    return max(config.min_batch_size, min(config.max_batch_size, batch_size))
+
+
+def get_dynamic_evaluation_config(
+    archive_fill_rate: float,
+    generation: int,
+    config: EvolutionConfig
+) -> Dict[str, Any]:
+    """
+    Get dynamically adjusted evaluation parameters.
+
+    Adjusts evaluation intensity based on evolutionary progress.
+
+    Args:
+        archive_fill_rate: Fraction of archive cells occupied
+        generation: Current generation number
+        config: Full evolution config
+
+    Returns:
+        Dict with adjusted evaluation parameters
+    """
+    base_queries = 100
+
+    # Early generations: lighter evaluation for faster exploration
+    if generation < 10:
+        query_fraction = 0.6
+        decision_sample_rate = 0.05  # Light tracking
+    # Mid generations: standard evaluation
+    elif generation < config.n_generations * 0.7:
+        query_fraction = 0.8
+        decision_sample_rate = 0.1
+    # Late generations: full evaluation for refinement
+    else:
+        query_fraction = 1.0
+        decision_sample_rate = 0.15
+
+    # Adjust based on archive state
+    if archive_fill_rate > 0.8:
+        # Archive is full, need discriminative evaluation
+        query_fraction = min(1.0, query_fraction * 1.2)
+
+    return {
+        "max_queries": int(base_queries * query_fraction),
+        "decision_sample_rate": decision_sample_rate,
+        "batch_size": get_dynamic_batch_size(archive_fill_rate, config.resources),
+    }

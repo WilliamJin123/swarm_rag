@@ -5,6 +5,9 @@ Uses keycycle's MultiProviderWrapper to support any LLM provider
 (cerebras, openai, groq, anthropic, together, etc.) through a unified API.
 
 Enhanced with behavioral context for smarter mutations.
+
+Note: The `wrapper` and `model` attributes are public and used by the
+three-tier LLM architecture (Strategic Oracle, Tactical Advisor).
 """
 import json
 import logging
@@ -172,6 +175,43 @@ Solutions:
 - Increase `pheromone_repulsion`
 - This may be fine if quality is high
 
+## Path-Based Diagnosis (use sample_paths and stuck_nodes data)
+
+### Agent Stuck at Same Node (stuck_at != null)
+Problem: Agent reached a dead-end or got trapped in a loop
+Solutions:
+- Increase `node_centrality` weight to prefer hub nodes with more neighbors
+- Increase `pheromone_repulsion` to force exploration away from visited nodes
+- Increase `initial_pool_size` to start from better-connected nodes
+
+### Oscillation Paths (e.g., A->B->A->B pattern in path)
+Problem: Agent bouncing between two nodes without progress
+Solutions:
+- Increase `pheromone_repulsion` significantly (0.3+)
+- Add `random_jitter` to break symmetry
+- Decrease `decay` to make pheromone trails persist longer
+
+### Dead-End Traps (high counts in stuck_nodes.dead_ends)
+Problem: Many agents getting stuck at specific nodes with no neighbors
+Solutions:
+- Increase `initial_pool_size` to diversify starting points
+- Increase `node_centrality` to prefer well-connected hub nodes
+- Reduce `steps` if agents are walking into graph boundaries
+
+### Revisit Traps (high counts in stuck_nodes.revisit_traps)
+Problem: Specific nodes are being revisited excessively across agents
+Solutions:
+- Increase `pheromone_repulsion` weight significantly
+- Decrease `decay` so pheromone trails persist longer
+- Check if these nodes are semantically attractive but non-productive
+
+### Node Hotspots (is_dead_end=True in node_hotspots)
+Problem: High-traffic nodes that are actually dead-ends
+Solutions:
+- These nodes might be attracting agents due to high semantic similarity
+- Increase `node_centrality` to counterbalance semantic attraction
+- Consider if `initial_pool_size` is too small (agents all starting near same node)
+
 ## Available Heuristics (use exact names in strategies)
 
 Movement Heuristics:
@@ -259,6 +299,42 @@ Return a JSON object with exactly these keys:
 - Greedy Match Rate: {cp.get('greedy_match_rate', 0):.1%} (how often agents pick top candidate)
 - Avg Chosen Rank: {cp.get('avg_chosen_rank', 0):.2f} (0 = always best, higher = more exploration)
 - Exploration Rate: {cp.get('exploration_rate', 0):.1%}"""
+
+            # Sample agent paths (enhanced traversal context)
+            if b.get('sample_paths'):
+                behavioral_str += "\n\n**Sample Agent Paths**:"
+                for p in b['sample_paths'][:5]:  # Limit to 5 paths
+                    path_str = " -> ".join(str(n) for n in p.get('path', [])[:8])  # Truncate long paths
+                    if len(p.get('path', [])) > 8:
+                        path_str += " ..."
+                    status = ""
+                    if p.get('stuck_at') is not None:
+                        status = f" [STUCK at {p['stuck_at']}]"
+                    elif p.get('revisit_nodes'):
+                        status = f" [Revisited: {', '.join(str(n) for n in p['revisit_nodes'][:3])}]"
+                    behavioral_str += f"\n  Agent {p.get('agent_id', '?')}: {path_str}{status}"
+
+            # Node hotspots
+            if b.get('node_hotspots'):
+                behavioral_str += "\n\n**Node Hotspots** (most visited):"
+                for h in b['node_hotspots'][:5]:  # Top 5
+                    flags = []
+                    if h.get('is_dead_end'):
+                        flags.append("DEAD-END")
+                    if h.get('visits', 0) > h.get('unique_agents', 0) * 1.5:
+                        flags.append("HIGH-REVISIT")
+                    flag_str = f" [{', '.join(flags)}]" if flags else ""
+                    behavioral_str += f"\n  Node {h.get('node_id', '?')}: {h.get('visits', 0)} visits, {h.get('unique_agents', 0)} agents{flag_str}"
+
+            # Problem nodes summary
+            if b.get('stuck_nodes'):
+                sn = b['stuck_nodes']
+                if sn.get('dead_ends') or sn.get('revisit_traps'):
+                    behavioral_str += "\n\n**PROBLEM NODES**:"
+                    if sn.get('dead_ends'):
+                        behavioral_str += f"\n  Dead-end traps: {sn['dead_ends']}"
+                    if sn.get('revisit_traps'):
+                        behavioral_str += f"\n  Revisit loops: {sn['revisit_traps']}"
 
         # Evolutionary context (if available)
         evo_str = ""

@@ -30,16 +30,6 @@ class TestDeviceUtilities:
         device = get_device(force_cpu=True)
         assert device == "cpu"
 
-    def test_get_array_module_cpu(self):
-        """Test get_array_module returns numpy when on CPU."""
-        from swarm_rag.utils.device import get_array_module, clear_device_cache
-
-        clear_device_cache()
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            xp = get_array_module()
-            assert xp.__name__ == 'numpy'
-
     def test_ensure_tensor_numpy_input(self):
         """Test ensure_tensor with numpy array input."""
         from swarm_rag.utils.device import ensure_tensor, clear_device_cache
@@ -76,109 +66,6 @@ class TestDeviceUtilities:
         arr = np.array([1.0, 2.0, 3.0])
         result = to_numpy(arr)
         assert result is arr
-
-
-class TestCuPyIntegration:
-    """Tests for CuPy integration utilities."""
-
-    def test_is_cupy_available(self):
-        """Test CuPy availability check."""
-        from swarm_rag.utils.device import is_cupy_available
-
-        # Should return boolean without error
-        result = is_cupy_available()
-        assert isinstance(result, bool)
-
-    def test_cupy_to_numpy_fallback(self):
-        """Test cupy_to_numpy falls back gracefully."""
-        from swarm_rag.utils.device import cupy_to_numpy
-
-        arr = np.array([1.0, 2.0, 3.0])
-        result = cupy_to_numpy(arr)
-        assert isinstance(result, np.ndarray)
-        np.testing.assert_array_equal(result, arr)
-
-    def test_cupy_matmul_cpu(self):
-        """Test cupy_matmul on CPU."""
-        from swarm_rag.utils.device import cupy_matmul, clear_device_cache
-
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            a = np.array([[1, 2], [3, 4]])
-            b = np.array([[5, 6], [7, 8]])
-            result = cupy_matmul(a, b)
-            expected = np.matmul(a, b)
-            np.testing.assert_array_equal(result, expected)
-
-    def test_cupy_dot_cpu(self):
-        """Test cupy_dot on CPU."""
-        from swarm_rag.utils.device import cupy_dot, clear_device_cache
-
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            a = np.array([1, 2, 3])
-            b = np.array([4, 5, 6])
-            result = cupy_dot(a, b)
-            expected = np.dot(a, b)
-            assert result == expected
-
-    def test_cupy_norm_cpu(self):
-        """Test cupy_norm on CPU."""
-        from swarm_rag.utils.device import cupy_norm, clear_device_cache
-
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            arr = np.array([3, 4])
-            result = cupy_norm(arr)
-            assert abs(result - 5.0) < 1e-6
-
-    def test_cupy_normalize_cpu(self):
-        """Test cupy_normalize on CPU."""
-        from swarm_rag.utils.device import cupy_normalize, clear_device_cache
-
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            arr = np.array([[3, 4], [6, 8]])
-            result = cupy_normalize(arr, axis=1)
-
-            # Check each row is unit length
-            norms = np.linalg.norm(result, axis=1)
-            np.testing.assert_array_almost_equal(norms, [1.0, 1.0])
-
-    def test_cupy_cosine_similarity_cpu(self):
-        """Test cupy_cosine_similarity on CPU."""
-        from swarm_rag.utils.device import cupy_cosine_similarity, clear_device_cache
-
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            query = np.array([1.0, 0.0])
-            candidates = np.array([
-                [1.0, 0.0],  # Same direction
-                [0.0, 1.0],  # Orthogonal
-                [-1.0, 0.0]  # Opposite
-            ])
-
-            scores = cupy_cosine_similarity(query, candidates)
-
-            assert abs(scores[0] - 1.0) < 1e-6  # Same direction
-            assert abs(scores[1]) < 1e-6  # Orthogonal
-            assert abs(scores[2] + 1.0) < 1e-6  # Opposite
-
-    def test_cupy_topk_cpu(self):
-        """Test cupy_topk on CPU."""
-        from swarm_rag.utils.device import cupy_topk, clear_device_cache
-
-        with patch.dict('os.environ', {'SWARM_RAG_DEVICE': 'cpu'}):
-            clear_device_cache()
-            scores = np.array([0.1, 0.5, 0.3, 0.9, 0.2])
-
-            top_scores, top_indices = cupy_topk(scores, k=3)
-
-            # Check top values
-            assert len(top_scores) == 3
-            assert len(top_indices) == 3
-            assert top_scores[0] == 0.9  # Highest
-            assert 3 in top_indices  # Index of 0.9 (scores[3] = 0.9)
 
 
 class TestBenchmarker:

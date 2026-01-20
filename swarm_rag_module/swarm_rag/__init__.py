@@ -4,7 +4,7 @@ from .interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvi
 from .integrations.stark import StarkSKBAdapter
 
 # GPU utilities
-from .utils.device import get_device, get_array_module
+from .utils.device import get_device
 from .integrations.gpu_vector_store import GPUVectorStore
 
 __all__ = [
@@ -14,6 +14,5 @@ __all__ = [
     'EmbeddingProvider',
     'StarkSKBAdapter',
     'get_device',
-    'get_array_module',
     'GPUVectorStore',
 ]

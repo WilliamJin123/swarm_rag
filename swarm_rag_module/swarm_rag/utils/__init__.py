@@ -10,12 +10,8 @@ from tqdm.auto import tqdm
 
 # Re-export device utilities
 from .device import (
-    get_device, get_array_module, ensure_tensor, to_numpy,
-    clear_device_cache, get_gpu_memory_info,
-    # CuPy integration
-    is_cupy_available, to_cupy, cupy_to_numpy,
-    cupy_matmul, cupy_dot, cupy_norm, cupy_normalize,
-    cupy_cosine_similarity, cupy_topk, sync_device
+    get_device, ensure_tensor, to_numpy,
+    clear_device_cache, get_gpu_memory_info
 )
 
 # Re-export benchmark utilities
@@ -110,22 +106,10 @@ __all__ = [
     'TqdmLoggingHandler',
     # Device utilities
     'get_device',
-    'get_array_module',
     'ensure_tensor',
     'to_numpy',
     'clear_device_cache',
     'get_gpu_memory_info',
-    # CuPy integration
-    'is_cupy_available',
-    'to_cupy',
-    'cupy_to_numpy',
-    'cupy_matmul',
-    'cupy_dot',
-    'cupy_norm',
-    'cupy_normalize',
-    'cupy_cosine_similarity',
-    'cupy_topk',
-    'sync_device',
     # Benchmark utilities
     'Benchmarker',
     'BenchmarkResult',
