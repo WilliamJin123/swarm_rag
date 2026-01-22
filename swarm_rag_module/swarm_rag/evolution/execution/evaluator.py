@@ -65,7 +65,6 @@ class PopulationEvaluator:
         logger.info(f"  > Concurrency: {batch_size} genomes parallel")
         logger.info(f"  > max_workers: {self.max_workers_per_retrieval} workers")
 
-        batch_size = self.concurrent_evaluations
         for i in range(0, len(unevaluated), batch_size):
             batch = unevaluated[i : i + batch_size]
             self._evaluate_batch(batch, queries, ground_truth)
@@ -93,15 +92,14 @@ class PopulationEvaluator:
             for future in as_completed(future_to_genome):
                 genome = future_to_genome[future]
                 completed_count += 1
-                # try:
                 future.result()
 
                 qual = genome.fitness.quality_score
                 cost = genome.fitness.cost_score
-                
+
                 r20 = genome.metrics.get("Recall@20", 0.0)
-                h1  = genome.metrics.get("Hit@1", 0.0)
-                h5  = genome.metrics.get("Hit@5", 0.0)
+                h1 = genome.metrics.get("Hit@1", 0.0)
+                h5 = genome.metrics.get("Hit@5", 0.0)
                 mrr = genome.metrics.get("MRR", 0.0)
 
                 logger.info(
@@ -109,14 +107,6 @@ class PopulationEvaluator:
                     f"Qual: {qual:.4f} | Cost: {cost:.1f} | "
                     f"R@20: {r20:.4f} | H@1: {h1:.4f} | H@5: {h5:.4f} | MRR: {mrr:.4f}"
                 )
-                # except Exception as e:
-                #     logger.error(f"Genome {genome.id} evaluation failed: {e}")
-                #     # Assign worst possible fitness so it dies out
-                #     from .fitness import FitnessResult
-                #     # Create a default bad result. 
-                #     # Note: fitness calculation might have failed, so we set manually.
-                #     genome.fitness = FitnessResult(quality_score=0.0, stability_score=0.0, cost_score=9999.0)
-                #     genome.evaluated = True
 
     def _create_decision_tracker(self) -> Optional[Any]:
         """Create a DecisionTracker if decision tracking is enabled."""
@@ -268,6 +258,9 @@ class PopulationEvaluator:
         else:
             # This handles edge cases like "Recall@15" or custom metrics
             fallback = next((k for k in keys if "Recall" in k or "Hit" in k), None)
-            aggregated["variance"] = aggregated[f"var_{fallback}"] if fallback else 0.0
+            if fallback and f"var_{fallback}" in aggregated:
+                aggregated["variance"] = aggregated[f"var_{fallback}"]
+            else:
+                aggregated["variance"] = 0.0
             
         return aggregated

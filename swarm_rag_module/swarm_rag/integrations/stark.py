@@ -29,6 +29,13 @@ try:
 except ImportError:
     _GPU_AVAILABLE = False
 
+# Import GPU graph store (optional)
+try:
+    from .gpu_graph_store import GPUGraphStore
+    _GPU_GRAPH_AVAILABLE = True
+except ImportError:
+    _GPU_GRAPH_AVAILABLE = False
+
 import logging
 logger = logging.getLogger(__name__)    
 
@@ -157,7 +164,7 @@ class StarkSKBAdapter(GraphStore):
     @HeuristicRegistry.register_movement(HeuristicKey.STARK_CENTRALITY)
     def centrality_heuristic(ctx :HeuristicContext) -> np.ndarray:
         """
-        Vectorized centrality heuristic. 
+        Vectorized centrality heuristic.
         Uses pre-fetched ctx.node_degrees for speed.
         """
         graph: StarkSKBAdapter = ctx.graph
@@ -165,10 +172,193 @@ class StarkSKBAdapter(GraphStore):
 
         #Sigmoid normalization
         normalized = log_degrees / (log_degrees + graph.avg_log_degree + 1e-8)
-        
+
         return normalized
-        
-    
+
+
+# --- 1b. GPU-Accelerated Graph Adapter for STaRK SKB ---
+class StarkGPUGraphAdapter(GraphStore):
+    """
+    GPU-accelerated graph adapter for STaRK datasets.
+
+    Combines CSR storage with optional GPU acceleration for batch operations.
+    Falls back to CPU for single-node queries to maintain interface compatibility.
+
+    Usage:
+        # Auto-detect GPU
+        adapter = StarkGPUGraphAdapter(skb, "prime", adjacency_dict=adj)
+
+        # Force CPU
+        adapter = StarkGPUGraphAdapter(skb, "prime", adjacency_dict=adj, use_gpu=False)
+
+        # Batch operations (GPU-accelerated)
+        neighbors, mask = adapter.get_neighbors_batch([1, 2, 3])
+    """
+
+    def __init__(
+        self,
+        skb_data: 'SKB',
+        dataset: str,
+        adjacency_dict: Optional[Dict[int, List[int]]] = None,
+        cache_path: Optional[str] = None,
+        use_gpu: bool = True,
+        device: Optional[str] = None
+    ):
+        """
+        Initialize GPU graph adapter.
+
+        Args:
+            skb_data: STaRK SKB object
+            dataset: Dataset name (e.g., "prime", "amazon", "mag")
+            adjacency_dict: Pre-computed adjacency dictionary
+            cache_path: Path to cache CSR matrix
+            use_gpu: Whether to enable GPU acceleration
+            device: Force specific device ("cuda" or "cpu")
+        """
+        self.skb = skb_data
+        if dataset not in AVG_LOG_DEGREE_BY_DATASET:
+            raise ValueError(f"Unknown dataset: {dataset}")
+
+        self.dataset = dataset
+        self.cache_path = cache_path or f"./adjacency_cache/graph_{dataset}.npz"
+        self.avg_log_degree = AVG_LOG_DEGREE_BY_DATASET[dataset]
+
+        # Load or create CSR matrix (always kept for fallback)
+        if os.path.exists(self.cache_path):
+            logger.info(f"Loading CSR graph from {self.cache_path}...")
+            self.adj_matrix = sp.load_npz(self.cache_path)
+        elif adjacency_dict is not None:
+            logger.info("Converting dict to CSR and saving...")
+            self.adj_matrix = self._dict_to_csr(adjacency_dict)
+            os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
+            sp.save_npz(self.cache_path, self.adj_matrix)
+        else:
+            raise ValueError("Must provide adjacency_dict or existing cache_path")
+
+        # Setup GPU store if requested and available
+        self._use_gpu = use_gpu and _GPU_GRAPH_AVAILABLE
+        self._device = device or (get_device() if use_gpu else "cpu")
+        self._gpu_store = None
+
+        if self._use_gpu and self._device == "cuda":
+            try:
+                logger.info("Initializing GPU graph store...")
+                self._gpu_store = GPUGraphStore.from_csr(
+                    self.adj_matrix,
+                    device=self._device,
+                    avg_degree=AVG_DEGREE_BY_DATASET.get(dataset, 10.0)
+                )
+                logger.info(f"GPU graph store ready on {self._device}")
+            except Exception as e:
+                logger.warning(f"GPU graph initialization failed: {e}. Falling back to CPU.")
+                self._gpu_store = None
+                self._use_gpu = False
+                self._device = "cpu"
+        else:
+            self._use_gpu = False
+            self._device = "cpu"
+
+    def _dict_to_csr(self, adj_dict: Dict[int, List[int]]) -> sp.csr_matrix:
+        """Convert adjacency dictionary to CSR matrix."""
+        nodes = sorted(adj_dict.keys())
+        max_node = nodes[-1] if nodes else 0
+
+        indptr = [0]
+        indices = []
+
+        for i in range(max_node + 1):
+            neighbors = adj_dict.get(i, [])
+            indices.extend(neighbors)
+            indptr.append(len(indices))
+
+        data = np.ones(len(indices), dtype=np.int8)
+        return sp.csr_matrix((data, indices, indptr), shape=(max_node + 1, max_node + 1))
+
+    def get_neighbors(self, node_id: int) -> np.ndarray:
+        """
+        Get neighbors for a single node.
+
+        Uses CPU CSR for single queries (avoids GPU kernel overhead).
+        """
+        if node_id >= self.adj_matrix.shape[0]:
+            return np.array([], dtype=np.int64)
+
+        start = self.adj_matrix.indptr[node_id]
+        end = self.adj_matrix.indptr[node_id + 1]
+        return self.adj_matrix.indices[start:end]
+
+    def get_neighbors_batch(self, node_ids):
+        """
+        Batch neighbor lookup (GPU-accelerated when available).
+
+        Args:
+            node_ids: List/array of node IDs
+
+        Returns:
+            Tuple of (neighbors tensor, mask tensor) if GPU available,
+            otherwise (list of neighbor arrays, None)
+        """
+        if self._gpu_store is not None:
+            return self._gpu_store.get_neighbors_batch(node_ids)
+
+        # CPU fallback: return list of arrays
+        neighbors_list = [self.get_neighbors(nid) for nid in node_ids]
+        return neighbors_list, None
+
+    def get_degrees_batch(self, node_ids):
+        """
+        Batch degree lookup (GPU-accelerated when available).
+
+        Args:
+            node_ids: List/array of node IDs
+
+        Returns:
+            Tensor of degrees if GPU available, otherwise numpy array
+        """
+        if self._gpu_store is not None:
+            return self._gpu_store.get_degrees_batch(node_ids)
+
+        # CPU fallback
+        return np.array([self.get_degree(nid) for nid in node_ids], dtype=np.int32)
+
+    def get_degree(self, node_id: int) -> int:
+        """Get degree for a single node."""
+        if node_id >= self.adj_matrix.shape[0]:
+            return 0
+        return self.adj_matrix.indptr[node_id + 1] - self.adj_matrix.indptr[node_id]
+
+    def contains(self, node_id: int) -> bool:
+        """Check if node exists in graph."""
+        return node_id < self.adj_matrix.shape[0]
+
+    def get_avg_degree(self) -> float:
+        """Return average graph degree."""
+        if self.dataset in AVG_DEGREE_BY_DATASET:
+            return AVG_DEGREE_BY_DATASET[self.dataset]
+        return 10.0
+
+    @property
+    def is_gpu(self) -> bool:
+        """Check if GPU acceleration is active."""
+        return self._gpu_store is not None
+
+    @property
+    def device(self) -> str:
+        """Return current device."""
+        return self._device
+
+    @staticmethod
+    def centrality_heuristic(ctx: HeuristicContext) -> np.ndarray:
+        """
+        Centrality heuristic compatible with GPU adapter.
+        """
+        graph = ctx.graph
+        log_degrees = np.log(1 + ctx.node_degrees)
+        avg_log = getattr(graph, 'avg_log_degree', AVG_LOG_DEGREE_BY_DATASET.get('prime', 4.8))
+        normalized = log_degrees / (log_degrees + avg_log + 1e-8)
+        return normalized
+
+
 # --- 2. Vector Store Adapter for STaRK Tensors ---
 class StarkInMemoryVectorStore(VectorStore):
     def __init__(self, doc_embs: Dict[int, torch.Tensor], shared_name: Optional[str] = None):

@@ -7,11 +7,12 @@ that the Constrained Executor will translate into actual changes.
 
 Input: Simplified genome performance + behavioral signature + strategic directive
 Output: Diagnosis + MutationIntent + target component + confidence
+
+LLM calls: get_prescription() -> LLMClient.call()
 """
-import json
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 from .intents import (
     MutationIntent,
@@ -21,6 +22,9 @@ from .intents import (
     EvolutionMode,
 )
 from .evolution_journal import EvolutionJournal
+
+if TYPE_CHECKING:
+    from .client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -80,22 +84,18 @@ class TacticalAdvisor:
 
     Diagnoses individual genomes and prescribes mutation intents.
     Does NOT generate actual values - that's the Executor's job.
+
+    LLM calls made via: get_prescription() -> self.client.call()
     """
 
-    def __init__(
-        self,
-        llm_wrapper: Any,  # keycycle MultiProviderWrapper
-        model: str,
-    ):
+    def __init__(self, client: "LLMClient"):
         """
         Initialize the Tactical Advisor.
 
         Args:
-            llm_wrapper: LLM wrapper for API calls
-            model: Model ID to use
+            client: LLMClient instance for API calls
         """
-        self.llm_wrapper = llm_wrapper
-        self.model = model
+        self.client = client
 
     def get_prescription(
         self,
@@ -104,42 +104,35 @@ class TacticalAdvisor:
         """
         Get mutation prescription for a genome.
 
+        LLM call: self.client.call(system_prompt, user_prompt)
+
         Args:
             context: Tactical context with genome metrics
 
         Returns:
             MutationPrescription with diagnosis and intent
         """
-        try:
-            system_prompt = self._build_system_prompt()
-            user_prompt = self._build_user_prompt(context)
+        system_prompt = self._build_system_prompt()
+        user_prompt = self._build_user_prompt(context)
 
-            client = self.llm_wrapper.get_openai_client()
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"},
+        result = self.client.call(system_prompt, user_prompt)
+
+        if not result.success or result.parsed is None:
+            logger.warning(
+                f"Tactical Advisor LLM call failed for {context.genome_id}: "
+                f"{result.error}. Using heuristic fallback."
             )
-
-            content = response.choices[0].message.content
-            data = json.loads(content)
-
-            prescription = self._parse_response(data)
-
-            logger.debug(
-                f"Tactical Advisor {context.genome_id}: "
-                f"Intent={prescription.primary_intent.value}, "
-                f"Confidence={prescription.confidence:.2f}"
-            )
-
-            return prescription
-
-        except Exception as e:
-            logger.warning(f"Tactical Advisor failed for {context.genome_id}: {e}")
             return self._heuristic_fallback(context)
+
+        prescription = self._parse_response(result.parsed)
+
+        logger.debug(
+            f"Tactical Advisor {context.genome_id}: "
+            f"Intent={prescription.primary_intent.value}, "
+            f"Confidence={prescription.confidence:.2f}"
+        )
+
+        return prescription
 
     def _build_system_prompt(self) -> str:
         """Build system prompt for tactical decisions."""

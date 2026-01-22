@@ -128,6 +128,40 @@ class LLMConfig:
 
 
 @dataclass
+class CreativeModeConfig:
+    """
+    Configuration for LLM creative mode (custom expression generation).
+
+    Creative mode allows the LLM to generate custom heuristic expressions
+    beyond predefined templates, while maintaining safety through validation.
+
+    Trigger conditions (any of these can activate creative mode):
+    - Stagnation: No improvement for `trigger_stagnation` generations
+    - Fill rate: Archive fill rate below `trigger_fill_rate`
+    - Top fitness unchanged: Best fitness hasn't improved for 3+ generations
+    - Periodic: Every `periodic_interval` generations
+    """
+    # Global enable flag
+    enabled: bool = False
+
+    # Trigger thresholds
+    trigger_stagnation: int = 5          # Generations without improvement
+    trigger_fill_rate: float = 0.3       # Archive fill rate threshold
+    periodic_interval: int = 10          # Periodic experimentation interval
+
+    # Limits
+    max_creative_per_generation: int = 3  # Max creative mutations per generation
+    complexity_limit: int = 30            # Max expression nodes
+
+    # Behavior
+    fallback_on_failure: bool = True     # Use template if creative fails
+    track_performance: bool = True       # Compare creative vs template
+
+    # Circuit breaker (auto-disable after failures)
+    max_consecutive_failures: int = 5    # Disable after N consecutive failures
+
+
+@dataclass
 class CheckpointConfig:
     """Logging and checkpointing settings."""
     log_path: str = "evolution_run/evolution_log.jsonl"
@@ -163,6 +197,7 @@ class EvolutionConfig:
     map_elites: MapElitesConfig = field(default_factory=MapElitesConfig)
     genetic: GeneticConfig = field(default_factory=GeneticConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    creative_mode: CreativeModeConfig = field(default_factory=CreativeModeConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
 
     def to_flat_dict(self) -> Dict[str, Any]:
@@ -227,6 +262,15 @@ class EvolutionConfig:
             "map_elites_bins": self.map_elites.bins,
             "map_elites_ranges": self.map_elites.ranges,
             "map_elites_initial_fill": self.map_elites.initial_fill,
+
+            # Creative Mode Settings
+            "creative_mode_enabled": self.creative_mode.enabled,
+            "creative_mode_trigger_stagnation": self.creative_mode.trigger_stagnation,
+            "creative_mode_trigger_fill_rate": self.creative_mode.trigger_fill_rate,
+            "creative_mode_periodic_interval": self.creative_mode.periodic_interval,
+            "creative_mode_max_per_generation": self.creative_mode.max_creative_per_generation,
+            "creative_mode_complexity_limit": self.creative_mode.complexity_limit,
+            "creative_mode_fallback_on_failure": self.creative_mode.fallback_on_failure,
         }
 
     @classmethod
@@ -312,6 +356,29 @@ class EvolutionConfig:
         if config.genetic.mutation_strategy == "llm_mutation":
             config.llm.enabled = True
 
+        # Creative Mode
+        config.creative_mode.enabled = flat.get(
+            "creative_mode_enabled", config.creative_mode.enabled
+        )
+        config.creative_mode.trigger_stagnation = flat.get(
+            "creative_mode_trigger_stagnation", config.creative_mode.trigger_stagnation
+        )
+        config.creative_mode.trigger_fill_rate = flat.get(
+            "creative_mode_trigger_fill_rate", config.creative_mode.trigger_fill_rate
+        )
+        config.creative_mode.periodic_interval = flat.get(
+            "creative_mode_periodic_interval", config.creative_mode.periodic_interval
+        )
+        config.creative_mode.max_creative_per_generation = flat.get(
+            "creative_mode_max_per_generation", config.creative_mode.max_creative_per_generation
+        )
+        config.creative_mode.complexity_limit = flat.get(
+            "creative_mode_complexity_limit", config.creative_mode.complexity_limit
+        )
+        config.creative_mode.fallback_on_failure = flat.get(
+            "creative_mode_fallback_on_failure", config.creative_mode.fallback_on_failure
+        )
+
         return config
 
 
@@ -351,9 +418,28 @@ class EvolutionContext:
     # LLM Integration (single provider interface)
     llm_provider: Optional[Any] = None
 
+    # Creative Mode State (runtime tracking)
+    stagnation_count: int = 0              # Generations without improvement
+    archive_fill_rate: float = 0.0         # Current archive fill rate
+    top_fitness_unchanged: int = 0         # Generations where top fitness unchanged
+    creative_mutations_this_gen: int = 0   # Creative mutations used this generation
+    creative_success_count: int = 0        # Successful creative mutations
+    creative_failure_count: int = 0        # Failed creative mutations
+
     def get_flat_config(self) -> Dict[str, Any]:
         """Get config as flat dict for backwards compatibility."""
         return self.config.to_flat_dict()
+
+    def reset_creative_gen_count(self):
+        """Reset the per-generation creative mutation counter."""
+        self.creative_mutations_this_gen = 0
+
+    def can_use_creative_mode(self) -> bool:
+        """Check if creative mode can be used this generation."""
+        if not self.config.creative_mode.enabled:
+            return False
+        max_per_gen = self.config.creative_mode.max_creative_per_generation
+        return self.creative_mutations_this_gen < max_per_gen
 
 
 # =============================================================================

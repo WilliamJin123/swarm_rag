@@ -5,11 +5,24 @@ import io
 from pathlib import Path
 import sys
 from contextlib import redirect_stdout
+import pytest
 from swarm_rag.evolution.execution.tracker import ProgressTracker
 
 ROOT = Path(__file__).parent
 LOG_FILE = ROOT / "test_data/test_advanced_log.jsonl"
 PLOT_FILE = ROOT / "test_data/test_advanced_plot.png"
+
+
+@pytest.fixture(autouse=True)
+def cleanup_test_files():
+    """Cleanup test files after each test."""
+    yield
+    for f in [LOG_FILE, PLOT_FILE]:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
 def test_dynamic_logging():
     print("\n--- Testing Dynamic Logging & JSONL Structure ---")

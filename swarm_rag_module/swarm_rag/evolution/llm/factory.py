@@ -1,52 +1,34 @@
 """
-Factory for creating LLM providers based on configuration.
-
-Uses UniversalLLMProvider for provider-agnostic LLM access through
-keycycle's MultiProviderWrapper.
+Factory for creating LLM clients from configuration.
 """
 from typing import Optional, Union, Dict, Any
 import logging
 
-from .provider import LLMProvider
+from .client import LLMClient, SUPPORTED_PROVIDERS
 from ..types.config import EvolutionConfig
 
 logger = logging.getLogger(__name__)
 
 
-# Known providers supported by keycycle
-KNOWN_PROVIDERS = [
-    "cerebras",
-    "openai",
-    "groq",
-    "anthropic",
-    "together",
-    "fireworks",
-    "deepseek",
-]
-
-
-class LLMProviderFactory:
+class LLMClientFactory:
     """
-    Factory for creating LLM providers based on configuration.
-
-    Uses UniversalLLMProvider which supports any provider through keycycle's
-    MultiProviderWrapper unified API.
+    Factory for creating LLMClient instances from configuration.
     """
 
     @classmethod
     def create(
         cls, config: Union[EvolutionConfig, Dict[str, Any]]
-    ) -> Optional[LLMProvider]:
+    ) -> Optional[LLMClient]:
         """
-        Create an LLM provider based on configuration.
+        Create an LLMClient from configuration.
 
-        Returns None if LLM mutation is not configured.
+        Returns None if LLM is not configured/enabled.
 
         Args:
             config: Evolution configuration (EvolutionConfig or legacy dict)
 
         Returns:
-            LLMProvider instance or None if not configured
+            LLMClient instance or None if not configured
         """
         # Handle both new EvolutionConfig and legacy dict
         if isinstance(config, EvolutionConfig):
@@ -63,22 +45,23 @@ class LLMProviderFactory:
             model = config.get("llm_model", "zai-glm-4.7")
             env_path = config.get("llm_env_path", ".env")
 
-        # Check if LLM mutation is enabled
+        # Check if LLM is enabled
         if not llm_enabled and mutation_strategy != "llm_mutation":
             return None
 
-        # Import here to avoid circular imports
-        from .providers.universal import UniversalLLMProvider
+        logger.info(f"Creating LLMClient: provider={provider_name}, model={model}")
 
-        logger.info(
-            f"Creating UniversalLLMProvider: provider={provider_name}, model={model}"
-        )
-
-        return UniversalLLMProvider(
-            provider=provider_name, model=model, env_path=env_path
+        return LLMClient.from_config(
+            provider=provider_name,
+            model=model,
+            env_path=env_path,
         )
 
     @classmethod
     def available_providers(cls) -> list:
-        """Return list of known provider names supported by keycycle."""
-        return KNOWN_PROVIDERS.copy()
+        """Return list of supported provider names."""
+        return SUPPORTED_PROVIDERS.copy()
+
+
+# Backwards compatibility alias
+LLMProviderFactory = LLMClientFactory

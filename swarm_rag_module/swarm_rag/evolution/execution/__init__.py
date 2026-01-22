@@ -17,7 +17,6 @@ from .adaptive_evaluator import (
     AdaptivePopulationEvaluator,
     EvaluationTier,
     EvaluationStats,
-    create_dynamic_tiers,
 )
 from .stratified_sampler import (
     StratifiedQuerySampler,
@@ -44,7 +43,6 @@ __all__ = [
     "AdaptivePopulationEvaluator",
     "EvaluationTier",
     "EvaluationStats",
-    "create_dynamic_tiers",
     # Stratified sampling
     "StratifiedQuerySampler",
     "StratifiedSample",

@@ -324,25 +324,6 @@ class GeneticStrategies:
         pool = ctx.population[:cutoff]
         return random.choices(pool, k=k)
 
-    @staticmethod
-    @GeneticRegistry.register_selection(GeneticKey.DIVERSITY_TRUNCATION)
-    def diversity_truncation_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
-        """
-        Diversity Truncation (Batched).
-        """
-        qualities = [g.fitness.quality_score for g in ctx.population]
-        diversity = np.std(qualities) if qualities else 0.0
-        
-        # Dynamic cutoff based on population stagnation
-        if diversity < 0.01:
-            current_k = 0.6  # High diversity mode
-        else:
-            current_k = 0.2  # High exploitation mode
-            
-        cutoff = max(1, int(len(ctx.population) * current_k))
-        pool = ctx.population[:cutoff]
-        return random.choices(pool, k=k)
-
     # --- CROSSOVER ---
 
     @staticmethod

@@ -431,31 +431,3 @@ class AdaptivePopulationEvaluator:
             except ImportError:
                 logger.warning("DecisionTracker not available")
                 return None
-
-
-def create_dynamic_tiers(
-    total_queries: int,
-    difficulty_distribution: Optional[Dict[str, float]] = None
-) -> List[EvaluationTier]:
-    """
-    Create evaluation tiers dynamically based on available queries
-    and optional difficulty distribution.
-
-    Args:
-        total_queries: Total number of queries available
-        difficulty_distribution: Optional dict with % of easy/medium/hard queries
-
-    Returns:
-        List of EvaluationTier configs
-    """
-    # Scale tier sizes based on total queries
-    tier_fractions = [0.1, 0.3, 0.6, 1.0]  # 10%, 30%, 60%, 100%
-    tier_thresholds = [0.05, 0.15, 0.25, None]
-    tier_names = ["quick_filter", "promising", "competitive", "full"]
-
-    tiers = []
-    for frac, thresh, name in zip(tier_fractions, tier_thresholds, tier_names):
-        queries = max(5, int(total_queries * frac))
-        tiers.append(EvaluationTier(queries=queries, threshold=thresh, name=name))
-
-    return tiers

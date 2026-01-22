@@ -118,6 +118,17 @@ class TestEvaluator(unittest.TestCase):
         df = self.evaluator.aggregate_results([])
         self.assertTrue(df.empty)
 
+    def test_empty_retrieved_list(self):
+        """Test metrics with empty retrieved list."""
+        metrics = self.evaluator.calculate_metrics([], [1, 2, 3], 0.1)
+        self.assertEqual(metrics['Hit@1'], 0.0)
+        self.assertEqual(metrics['MRR'], 0.0)
+
+    def test_empty_ground_truth(self):
+        """Test metrics with empty ground truth."""
+        metrics = self.evaluator.calculate_metrics([{'id': 1}], [], 0.1)
+        self.assertEqual(metrics['Hit@1'], 0.0)
+
 class TestEvalReporter(unittest.TestCase):
     def setUp(self):
         self.reporter = EvalReporter()

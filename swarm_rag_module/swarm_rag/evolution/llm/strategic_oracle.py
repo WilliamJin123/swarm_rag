@@ -7,11 +7,12 @@ is detected.
 
 Input: Archive statistics, QD trends, historical success rates
 Output: EvolutionMode + focus area + exploration temperature
+
+LLM calls: get_directive() -> LLMClient.call()
 """
-import json
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 from .intents import (
     EvolutionMode,
@@ -19,6 +20,9 @@ from .intents import (
     StrategicDirective,
 )
 from .evolution_journal import EvolutionJournal
+
+if TYPE_CHECKING:
+    from .client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -85,12 +89,13 @@ class StrategicOracle:
 
     Decides the overall direction of evolution based on archive-level metrics.
     Called periodically (every N generations) or when stagnation is detected.
+
+    LLM calls made via: get_directive() -> self.client.call()
     """
 
     def __init__(
         self,
-        llm_wrapper: Any,  # keycycle MultiProviderWrapper
-        model: str,
+        client: "LLMClient",
         call_interval: int = 5,
         stagnation_threshold: int = 3,
     ):
@@ -98,13 +103,11 @@ class StrategicOracle:
         Initialize the Strategic Oracle.
 
         Args:
-            llm_wrapper: LLM wrapper for API calls
-            model: Model ID to use
+            client: LLMClient instance for API calls
             call_interval: Generations between strategic calls
             stagnation_threshold: Stagnant generations before forced call
         """
-        self.llm_wrapper = llm_wrapper
-        self.model = model
+        self.client = client
         self.call_interval = call_interval
         self.stagnation_threshold = stagnation_threshold
         self._current_directive: Optional[StrategicDirective] = None
@@ -143,6 +146,8 @@ class StrategicOracle:
         """
         Get strategic directive from the LLM.
 
+        LLM call: self.client.call(system_prompt, user_prompt)
+
         Args:
             context: Strategic context with archive stats
             journal: Evolution journal for history
@@ -152,36 +157,27 @@ class StrategicOracle:
         """
         self._last_call_generation = context.current_generation
 
-        try:
-            system_prompt = self._build_system_prompt()
-            user_prompt = self._build_user_prompt(context, journal)
+        system_prompt = self._build_system_prompt()
+        user_prompt = self._build_user_prompt(context, journal)
 
-            client = self.llm_wrapper.get_openai_client()
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"},
+        result = self.client.call(system_prompt, user_prompt)
+
+        if not result.success or result.parsed is None:
+            logger.warning(
+                f"Strategic Oracle LLM call failed: {result.error}. "
+                "Using heuristic fallback."
             )
-
-            content = response.choices[0].message.content
-            data = json.loads(content)
-
-            directive = self._parse_response(data)
-            self._current_directive = directive
-
-            logger.info(
-                f"Strategic Oracle Gen {context.current_generation}: "
-                f"Mode={directive.mode.value}, Focus={directive.focus_component.value}"
-            )
-
-            return directive
-
-        except Exception as e:
-            logger.warning(f"Strategic Oracle failed: {e}. Using heuristic fallback.")
             return self._heuristic_fallback(context)
+
+        directive = self._parse_response(result.parsed)
+        self._current_directive = directive
+
+        logger.info(
+            f"Strategic Oracle Gen {context.current_generation}: "
+            f"Mode={directive.mode.value}, Focus={directive.focus_component.value}"
+        )
+
+        return directive
 
     def get_current_directive(self) -> StrategicDirective:
         """

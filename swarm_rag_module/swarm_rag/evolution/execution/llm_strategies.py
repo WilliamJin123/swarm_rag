@@ -7,9 +7,11 @@ Implements a three-tier architecture:
 - Tier 1: Strategic Oracle (archive-level steering, called periodically)
 - Tier 2: Tactical Advisor (per-genome diagnosis and intent prescription)
 - Tier 3: Constrained Executor (intent-to-mutation translation)
+
+All LLM calls flow through LLMClient (see llm/client.py).
 """
 import logging
-from typing import Optional, Any
+from typing import Optional
 
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
@@ -17,10 +19,9 @@ from ...interfaces.enums import GeneticKey
 
 from .strategies import GeneticRegistry
 
-from ..llm.utils import apply_llm_edits
-from ..llm.provider import BaseLLMProvider
+from ..llm.client import LLMClient
 from ..llm.intents import StrategicDirective, MutationPrescription, MutationIntent
-from ..llm.evolution_journal import EvolutionJournal, MutationRecord
+from ..llm.evolution_journal import MutationRecord
 from ..llm.constrained_executor import ConstrainedExecutor, ThreeTierMutator, ParameterBounds
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def get_three_tier_mutator(ctx: EvolutionContext) -> Optional[ThreeTierMutator]:
     Get or create the three-tier mutator instance.
 
     Args:
-        ctx: Evolution context with LLM provider
+        ctx: Evolution context with LLM client
 
     Returns:
         ThreeTierMutator or None if LLM not available
@@ -45,16 +46,17 @@ def get_three_tier_mutator(ctx: EvolutionContext) -> Optional[ThreeTierMutator]:
     if _three_tier_mutator is not None:
         return _three_tier_mutator
 
-    provider = ctx.llm_provider
-    if provider is None:
-        return None
+    # Get LLM client from context
+    client: Optional[LLMClient] = getattr(ctx, 'llm_client', None)
 
-    # Get LLM wrapper and model from provider
-    if hasattr(provider, 'wrapper') and hasattr(provider, 'model'):
-        wrapper = provider.wrapper
-        model = provider.model
-    else:
-        logger.warning("Provider does not expose wrapper/model for three-tier architecture")
+    # Fallback: create client from provider if available (backwards compatibility)
+    if client is None:
+        provider = getattr(ctx, 'llm_provider', None)
+        if provider is not None and hasattr(provider, 'wrapper') and hasattr(provider, 'model'):
+            client = LLMClient(provider.wrapper, provider.model)
+            logger.info("Created LLMClient from legacy provider")
+
+    if client is None:
         return None
 
     # Get parameter bounds from config if available
@@ -72,7 +74,7 @@ def get_three_tier_mutator(ctx: EvolutionContext) -> Optional[ThreeTierMutator]:
                 drop_zone_inc=getattr(pr, 'drop_zone_inc', (0.05, 0.2)),
             )
 
-    _three_tier_mutator = ThreeTierMutator(wrapper, model, bounds)
+    _three_tier_mutator = ThreeTierMutator(client, bounds)
     return _three_tier_mutator
 
 
@@ -235,51 +237,3 @@ class LLMStrategies:
 def _fallback_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
     """Apply fallback standard mutation."""
     return GeneticRegistry.get_mutation(GeneticKey.EXPRESSION_TREE_MUTATION)(genome, ctx)
-
-
-# Legacy support: Keep the old provider-based mutation available
-class LegacyLLMStrategies:
-    """
-    Legacy LLM mutation using direct provider calls.
-
-    This is the old approach where the LLM directly generates expression strings.
-    Kept for backwards compatibility but not recommended.
-    """
-
-    @staticmethod
-    def llm_mutation_legacy(genome: Genome, ctx: EvolutionContext) -> Genome:
-        """
-        Legacy mutation using direct LLM expression generation.
-
-        Args:
-            genome: Genome to mutate
-            ctx: Evolution context
-
-        Returns:
-            Mutated genome
-        """
-        provider: BaseLLMProvider = ctx.llm_provider
-
-        if provider is None:
-            return _fallback_mutation(genome, ctx)
-
-        try:
-            response = provider.refine_genome(genome, ctx)
-
-            if not response.success:
-                return _fallback_mutation(genome, ctx)
-
-            edits = {
-                "diagnosis": response.diagnosis,
-                "proposed_changes": response.proposed_changes,
-            }
-            applied = apply_llm_edits(genome, edits)
-
-            if not applied:
-                return _fallback_mutation(genome, ctx)
-
-        except Exception as e:
-            logger.error(f"Legacy LLM Mutation failed for {genome.id}: {e}")
-            return _fallback_mutation(genome, ctx)
-
-        return genome

@@ -1,6 +1,7 @@
+import random
 import numpy as np
 import pytest
-from swarm_rag.evolution.types.config import EvolutionContext, DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfig
 from swarm_rag.evolution.types.fitness_results import FitnessResult
 from swarm_rag.evolution.execution.strategies import GeneticStrategies
 
@@ -10,13 +11,14 @@ class MockGenome:
         self.id = f"g_{quality}"
 
 def test_boltzmann_selection_probability():
+    random.seed(42)  # Ensure determinism
     print("\n--- Testing Boltzmann Selection Probability ---")
-    
-    # 1. Setup Context
-    config = DEFAULT_EVO_CONFIG.copy()
-    config["boltzmann_temperature"] = 1.0 # Moderate temp
-    config["boltzmann_adaptive"] = False  # Disable adaptive for this test
-    
+
+    # 1. Setup Context with proper EvolutionConfig dataclass
+    config = EvolutionConfig()
+    config.genetic.boltzmann.temperature = 1.0  # Moderate temp
+    config.genetic.boltzmann.adaptive = False   # Disable adaptive for this test
+
     ctx = EvolutionContext(config=config)
     ctx.current_temperature = 1.0
     
@@ -48,13 +50,13 @@ def test_boltzmann_selection_probability():
 
 def test_boltzmann_adaptive_heating():
     print("\n--- Testing Adaptive Heating (Low Diversity) ---")
-    
-    # 1. Setup Context
-    config = DEFAULT_EVO_CONFIG.copy()
-    config["boltzmann_temperature"] = 1.0
-    config["boltzmann_adaptive"] = True
-    config["boltzmann_alpha"] = 0.9
-    
+
+    # 1. Setup Context with proper EvolutionConfig dataclass
+    config = EvolutionConfig()
+    config.genetic.boltzmann.temperature = 1.0
+    config.genetic.boltzmann.adaptive = True
+    config.genetic.boltzmann.alpha = 0.9
+
     ctx = EvolutionContext(config=config)
     ctx.current_temperature = 1.0
     
@@ -72,13 +74,13 @@ def test_boltzmann_adaptive_heating():
 
 def test_boltzmann_adaptive_cooling():
     print("\n--- Testing Adaptive Cooling (High Diversity) ---")
-    
-    # 1. Setup Context
-    config = DEFAULT_EVO_CONFIG.copy()
-    config["boltzmann_temperature"] = 1.0
-    config["boltzmann_adaptive"] = True
-    config["boltzmann_alpha"] = 0.9
-    
+
+    # 1. Setup Context with proper EvolutionConfig dataclass
+    config = EvolutionConfig()
+    config.genetic.boltzmann.temperature = 1.0
+    config.genetic.boltzmann.adaptive = True
+    config.genetic.boltzmann.alpha = 0.9
+
     ctx = EvolutionContext(config=config)
     ctx.current_temperature = 1.0
     

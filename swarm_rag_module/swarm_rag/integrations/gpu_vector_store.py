@@ -116,7 +116,7 @@ class GPUVectorStore(VectorStore):
         first_emb = doc_embs[sorted_ids[0]]
         if isinstance(first_emb, torch.Tensor):
             embeddings = torch.stack([
-                doc_embs[i].detach().cpu() if doc_embs[i].is_cuda else doc_embs[i].detach()
+                (doc_embs[i].detach().cpu() if doc_embs[i].is_cuda else doc_embs[i].detach()).squeeze()
                 for i in sorted_ids
             ])
         else:
@@ -124,6 +124,12 @@ class GPUVectorStore(VectorStore):
                 np.asarray(doc_embs[i]).squeeze() for i in sorted_ids
             ])
             embeddings = torch.from_numpy(embeddings)
+
+        # Ensure 2D: (n_docs, dim)
+        if embeddings.dim() == 1:
+            embeddings = embeddings.unsqueeze(0)
+        elif embeddings.dim() > 2:
+            embeddings = embeddings.squeeze()
 
         return cls(embeddings=embeddings, ids=ids, device=device)
 
@@ -355,6 +361,11 @@ class GPUVectorStore(VectorStore):
     def device(self) -> str:
         """Return the device this store is on."""
         return self._device
+
+    @property
+    def is_gpu(self) -> bool:
+        """Check if using GPU backend."""
+        return self._device == "cuda"
 
     @property
     def embeddings(self) -> "torch.Tensor":

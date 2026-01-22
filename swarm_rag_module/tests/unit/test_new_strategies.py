@@ -1,6 +1,6 @@
 import random
 import numpy as np
-from swarm_rag.evolution.types.config import EvolutionContext, DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfig
 from swarm_rag.evolution.types.genome import Genome, DEFAULT_PARAMS
 from swarm_rag.evolution.execution.factory import GenomeFactory
 from swarm_rag.evolution.execution.strategies import GeneticStrategies, GeneticRegistry
@@ -8,13 +8,13 @@ from swarm_rag.evolution.types.expressions import ExpressionNode
 
 def test_shallow_initialization():
     print("\n--- Testing Shallow Growth Initialization ---")
-    
-    # 1. Setup Context
-    config = DEFAULT_EVO_CONFIG.copy()
-    config["creation_strategy"] = "shallow_growth_initialization"
-    config["population_size"] = 10
-    config["n_agent_groups"] = 2
-    
+
+    # 1. Setup Context with proper EvolutionConfig dataclass
+    config = EvolutionConfig()
+    config.genetic.creation_strategy = "shallow_growth_initialization"
+    config.map_elites.batch_size = 10  # population_size maps to batch_size
+    config.genetic.n_agent_groups = 2
+
     # Need to mock expression features since factory needs them
     ctx = EvolutionContext(config=config)
     ctx.expression_features = {
@@ -38,12 +38,13 @@ def test_shallow_initialization():
         
         for name, tree in genome.strategies.items():
             d = tree.depth()
+            # max_depth=2 allows root + 2 levels of children, so depth can be up to 3
             assert d <= 3, f"Tree {name} is too deep: {d} (Expected <= 3)"
             
             # Ensure it's not just a constant (should have some features if chance allows)
             # With 'grow' method and depth 2, it might be a feature or an op of features.
             
-    print("  ✓ All genomes initialized with shallow trees (depth <= 2)")
+    print("  All genomes initialized with shallow trees (depth <= 3)")
 
 
 def test_aggressive_mutation():
@@ -69,14 +70,12 @@ def test_aggressive_mutation():
         mutation_rate=0.1
     )
     
-    # 2. Setup Context
-    config = DEFAULT_EVO_CONFIG.copy()
+    # 2. Setup Context with proper EvolutionConfig dataclass
+    config = EvolutionConfig()
     # Define ranges to allow resampling
-    config['swarmrag_param_ranges'] = {
-        'n_agents': (5, 30),
-        'decay': (0.1, 0.9)
-    }
-    
+    config.genetic.param_ranges.n_agents = (5, 30)
+    config.genetic.param_ranges.decay = (0.1, 0.9)
+
     ctx = EvolutionContext(config=config)
     ctx.global_mutation_multiplier = 100.0 # Force mutation event
     ctx.expression_features = {
@@ -114,7 +113,7 @@ def test_aggressive_mutation():
     # if it triggers a subtree replacement or even a node mutation
     assert new_tree.to_string() != dummy_tree.to_string(), "Tree failed to mutate"
     
-    print("  ✓ Aggressive mutation applied successfully")
+    print("  Aggressive mutation applied successfully")
 
 def test_custom_strategy_integration():
     print("\n--- Testing Custom Strategy Integration (Mock) ---")
@@ -134,9 +133,9 @@ def test_custom_strategy_integration():
     GeneticRegistry.creation.register("my_custom_init", my_custom_creator)
     
     # 3. Use it via Factory
-    config = DEFAULT_EVO_CONFIG.copy()
-    config["creation_strategy"] = "my_custom_init"
-    
+    config = EvolutionConfig()
+    config.genetic.creation_strategy = "my_custom_init"
+
     ctx = EvolutionContext(config=config)
     factory = GenomeFactory(ctx)
     
@@ -145,7 +144,7 @@ def test_custom_strategy_integration():
     assert len(pop) == 3
     assert pop[0].id == "custom_0"
     
-    print("  ✓ Custom dynamic strategy registered and executed")
+    print("  Custom dynamic strategy registered and executed")
 
 if __name__ == "__main__":
     test_shallow_initialization()

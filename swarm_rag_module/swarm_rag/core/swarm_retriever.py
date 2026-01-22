@@ -383,38 +383,64 @@ class SwarmRetriever:
                 n_steps=steps
             )
 
+        # Check if we can use batched GPU processing
+        use_batched = (
+            self._use_gpu and
+            hasattr(self.graph_store, 'get_neighbors_batch') and
+            getattr(self.graph_store, 'is_gpu', False) and
+            decision_tracker is None  # Batched mode doesn't support decision tracking
+        )
+
         # --- TRAVERSAL LOOP ---
         for step in range(steps):
             pheromone_updates = {}
             max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
 
-            # Linear execution over flattened agents
-            for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
-                
-                current_loc = agent_locations[agent_idx]
-                
-                result = self._process_agent_step(
-                    agent_id=agent_idx,
-                    current_loc=current_loc,
+            if use_batched:
+                # GPU-accelerated batched agent processing
+                new_locations, pheromone_updates = self._step_agents_batched(
+                    agent_locations=agent_locations,
                     query_vec=query_vec,
                     query_pheromones=query_pheromones,
-                    move_func=move_fn,
-                    deposit_func=deposit_fn,
+                    resolved_agents=resolved_agents,
                     step=step,
                     max_pheromone=max_pheromone,
                     np_rng=np_rng,
-                    decision_tracker=decision_tracker,
                 )
 
-                if result:
-                    next_node = result['new_location']
-                    agent_locations[agent_idx] = next_node 
-                    agent_trajectories[agent_idx].append(next_node)
-                    
-                    deposit = result['deposit']
-                    # Aggressive pruning: only track significant deposits
-                    if deposit > self.PHEROMONE_EPSILON:
-                        pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
+                # Update locations and trajectories
+                for agent_idx in range(n_agents):
+                    if new_locations[agent_idx] != agent_locations[agent_idx]:
+                        agent_trajectories[agent_idx].append(new_locations[agent_idx])
+                agent_locations = new_locations
+
+            else:
+                # Original sequential processing
+                for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
+                    current_loc = agent_locations[agent_idx]
+
+                    result = self._process_agent_step(
+                        agent_id=agent_idx,
+                        current_loc=current_loc,
+                        query_vec=query_vec,
+                        query_pheromones=query_pheromones,
+                        move_func=move_fn,
+                        deposit_func=deposit_fn,
+                        step=step,
+                        max_pheromone=max_pheromone,
+                        np_rng=np_rng,
+                        decision_tracker=decision_tracker,
+                    )
+
+                    if result:
+                        next_node = result['new_location']
+                        agent_locations[agent_idx] = next_node
+                        agent_trajectories[agent_idx].append(next_node)
+
+                        deposit = result['deposit']
+                        # Aggressive pruning: only track significant deposits
+                        if deposit > self.PHEROMONE_EPSILON:
+                            pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
 
             # Update pheromones with pruning
             # 1. Decay and prune existing
@@ -634,6 +660,246 @@ class SwarmRetriever:
             'node_id': next_node,
             'deposit': deposit_amount
         }
+
+    def _step_agents_batched(
+        self,
+        agent_locations: np.ndarray,
+        query_vec: np.ndarray,
+        query_pheromones: Dict,
+        resolved_agents: List[Tuple[Callable, Callable]],
+        step: int,
+        max_pheromone: float,
+        np_rng: np.random.Generator,
+    ) -> Tuple[np.ndarray, Dict[int, float]]:
+        """
+        Process all agents in one batched GPU operation.
+
+        This method provides significant speedup by:
+        1. Batch fetching all neighbors for all agents in single GPU call
+        2. Batch fetching all embeddings in single GPU call
+        3. Computing all similarities in one matrix operation
+        4. Vectorized softmax selection
+
+        Args:
+            agent_locations: Array of current agent positions
+            query_vec: Query embedding vector
+            query_pheromones: Current pheromone map
+            resolved_agents: List of (move_fn, deposit_fn) tuples
+            step: Current step index
+            max_pheromone: Maximum pheromone value
+            np_rng: NumPy random generator
+
+        Returns:
+            Tuple of (new_locations array, pheromone_updates dict)
+        """
+        import torch
+
+        n_agents = len(agent_locations)
+        device = self._device
+
+        # Convert positions to tensor
+        positions = torch.tensor(agent_locations, device=device, dtype=torch.long)
+
+        # Batch fetch all neighbors using GPU graph store
+        all_neighbors, neighbor_mask = self.graph_store.get_neighbors_batch(positions)
+        # all_neighbors: (n_agents, max_degree), neighbor_mask: (n_agents, max_degree)
+
+        if all_neighbors is None or neighbor_mask is None:
+            # Fallback to sequential processing if batch not supported
+            return self._step_agents_sequential_fallback(
+                agent_locations, query_vec, query_pheromones,
+                resolved_agents, step, max_pheromone, np_rng
+            )
+
+        max_degree = all_neighbors.shape[1]
+
+        # Handle agents with no neighbors
+        agent_has_neighbors = neighbor_mask.any(dim=1)  # (n_agents,)
+
+        # Flatten valid neighbors for batch embedding fetch
+        # Create flat list of unique neighbor IDs to minimize fetches
+        flat_neighbors = all_neighbors[neighbor_mask].cpu().numpy()
+        unique_neighbors = np.unique(flat_neighbors[flat_neighbors >= 0])
+
+        if len(unique_neighbors) == 0:
+            # No valid neighbors for any agent
+            return agent_locations, {}
+
+        # Batch fetch embeddings for all unique neighbors
+        if hasattr(self.vector_store, 'fetch_batch_gpu') and self._use_gpu:
+            unique_embs, valid_unique_ids = self.vector_store.fetch_batch_gpu(unique_neighbors.tolist())
+            if _TORCH_AVAILABLE and not isinstance(unique_embs, torch.Tensor):
+                unique_embs = torch.tensor(unique_embs, device=device, dtype=torch.float32)
+        else:
+            unique_embs_np, valid_unique_ids = self._fetch_vectors_batch(unique_neighbors)
+            unique_embs = torch.tensor(unique_embs_np, device=device, dtype=torch.float32)
+
+        if len(valid_unique_ids) == 0:
+            return agent_locations, {}
+
+        # Build ID to embedding index mapping
+        id_to_emb_idx = {int(vid): i for i, vid in enumerate(valid_unique_ids)}
+
+        # Convert query to GPU tensor
+        query_tensor = torch.tensor(query_vec, device=device, dtype=torch.float32).view(1, -1)
+        query_tensor = torch.nn.functional.normalize(query_tensor, p=2, dim=1)
+
+        # Compute similarities for all unique neighbors at once
+        # (1, D) @ (N_unique, D).T -> (1, N_unique) -> (N_unique,)
+        all_similarities = torch.mm(query_tensor, unique_embs.t()).squeeze(0)
+
+        # Now scatter similarities back to (n_agents, max_degree) shape
+        neighbor_sims = torch.full(
+            (n_agents, max_degree), -float('inf'),
+            device=device, dtype=torch.float32
+        )
+
+        # Build pheromone tensor
+        neighbor_pheromones = torch.zeros(
+            (n_agents, max_degree), device=device, dtype=torch.float32
+        )
+
+        # Fetch degrees for all neighbors (for centrality heuristic)
+        if hasattr(self.graph_store, 'get_degrees_batch'):
+            # Flatten and get all degrees at once
+            all_neighbor_degrees = self.graph_store.get_degrees_batch(
+                all_neighbors.view(-1)
+            ).view(n_agents, max_degree).float()
+        else:
+            all_neighbor_degrees = torch.ones(
+                (n_agents, max_degree), device=device, dtype=torch.float32
+            )
+
+        # Fill in similarities and pheromones for valid neighbors
+        all_neighbors_cpu = all_neighbors.cpu().numpy()
+        neighbor_mask_cpu = neighbor_mask.cpu().numpy()
+
+        for agent_idx in range(n_agents):
+            for neighbor_pos in range(max_degree):
+                if not neighbor_mask_cpu[agent_idx, neighbor_pos]:
+                    continue
+
+                neighbor_id = int(all_neighbors_cpu[agent_idx, neighbor_pos])
+                emb_idx = id_to_emb_idx.get(neighbor_id)
+
+                if emb_idx is not None:
+                    neighbor_sims[agent_idx, neighbor_pos] = all_similarities[emb_idx]
+
+                # Get pheromone value
+                neighbor_pheromones[agent_idx, neighbor_pos] = query_pheromones.get(neighbor_id, 0.0)
+
+        # Compute combined scores using vectorized heuristics
+        # Semantic similarity (already computed)
+        semantic_scores = neighbor_sims.clone()
+        semantic_scores = (semantic_scores + 1.0) / 2.0  # Scale to [0, 1]
+
+        # Centrality heuristic (log degree normalized)
+        log_degrees = torch.log(1 + all_neighbor_degrees)
+        avg_log_degree = np.log(1 + self.avg_degree)
+        centrality_scores = log_degrees / (log_degrees + avg_log_degree + 1e-8)
+
+        # Pheromone repulsion
+        normalized_pheromones = neighbor_pheromones / (max_pheromone + 1e-8)
+        repulsion_scores = 1.0 - normalized_pheromones
+
+        # Combine with default weights (matching DEFAULT_PARAMS)
+        # semantic: 0.3, centrality: 0.4, diversity: 0.3
+        total_scores = (
+            0.3 * semantic_scores +
+            0.4 * centrality_scores +
+            0.3 * repulsion_scores
+        )
+
+        # Apply mask: set invalid neighbors to 0
+        total_scores = torch.where(neighbor_mask, total_scores, torch.zeros_like(total_scores))
+
+        # Clamp minimum scores
+        total_scores = torch.clamp(total_scores, min=0.001)
+
+        # Softmax selection for each agent
+        # Add small epsilon to avoid division by zero
+        score_sums = total_scores.sum(dim=1, keepdim=True)
+        probs = total_scores / (score_sums + 1e-10)
+
+        # Handle agents with no valid neighbors
+        probs = torch.where(
+            score_sums > 0,
+            probs,
+            torch.zeros_like(probs)
+        )
+
+        # Sample next nodes using multinomial
+        # For agents with no valid neighbors, we'll keep them in place
+        new_locations = agent_locations.copy()
+        pheromone_updates = {}
+
+        # Move to CPU for sampling (multinomial is fast enough on CPU)
+        probs_cpu = probs.cpu().numpy()
+
+        for agent_idx in range(n_agents):
+            if not agent_has_neighbors[agent_idx]:
+                continue
+
+            agent_probs = probs_cpu[agent_idx]
+            prob_sum = agent_probs.sum()
+
+            if prob_sum < 1e-10:
+                continue
+
+            # Normalize and sample
+            agent_probs = agent_probs / prob_sum
+            chosen_pos = np_rng.choice(max_degree, p=agent_probs)
+            next_node = int(all_neighbors_cpu[agent_idx, chosen_pos])
+
+            new_locations[agent_idx] = next_node
+
+            # Compute deposit (using flat deposit for batched mode)
+            deposit_amount = 1.0
+            if deposit_amount > self.PHEROMONE_EPSILON:
+                pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit_amount
+
+        return new_locations, pheromone_updates
+
+    def _step_agents_sequential_fallback(
+        self,
+        agent_locations: np.ndarray,
+        query_vec: np.ndarray,
+        query_pheromones: Dict,
+        resolved_agents: List[Tuple[Callable, Callable]],
+        step: int,
+        max_pheromone: float,
+        np_rng: np.random.Generator,
+    ) -> Tuple[np.ndarray, Dict[int, float]]:
+        """
+        Fallback to sequential agent processing when batch mode unavailable.
+        """
+        new_locations = agent_locations.copy()
+        pheromone_updates = {}
+
+        for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
+            current_loc = agent_locations[agent_idx]
+
+            result = self._process_agent_step(
+                agent_id=agent_idx,
+                current_loc=current_loc,
+                query_vec=query_vec,
+                query_pheromones=query_pheromones,
+                move_func=move_fn,
+                deposit_func=deposit_fn,
+                step=step,
+                max_pheromone=max_pheromone,
+                np_rng=np_rng,
+            )
+
+            if result:
+                next_node = result['new_location']
+                new_locations[agent_idx] = next_node
+
+                deposit = result['deposit']
+                if deposit > self.PHEROMONE_EPSILON:
+                    pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
+
+        return new_locations, pheromone_updates
 
     def _capture_heuristic_scores(self, ctx: HeuristicContext) -> Dict[str, np.ndarray]:
         """

@@ -10,7 +10,6 @@ import numpy as np
 from .fitness_results import FitnessResult
 
 from .expressions import ExpressionNode
-from .expressions import ExpressionNode
 
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
 # Import shared types from interfaces to reduce coupling with core
@@ -116,11 +115,14 @@ class Genome:
         """Ensures group_ratios sum to 1.0."""
         if not self.group_ratios:
             return
-            
+
+        n = len(self.group_ratios)
+        if n == 0:  # Additional safety check
+            return
+
         total = sum(self.group_ratios.values())
         if total <= 1e-9:
             # If all are zero, distribute evenly
-            n = len(self.group_ratios)
             for k in self.group_ratios:
                 self.group_ratios[k] = 1.0 / n
         else:
@@ -290,15 +292,16 @@ class GenomeCompiler:
                 total_ratio = 1.0
             
             counts = [int(round(total_agents * (r / total_ratio))) for r in ratios]
-            
+
             # Fix rounding remainder (dump into first group)
-            current_sum = sum(counts)
-            if current_sum < total_agents:
-                # Add deficit to first group
-                counts[0] += (total_agents - current_sum)
-            elif current_sum > total_agents:
-                # Remove surplus from first group (rare with round, but possible)
-                counts[0] -= (current_sum - total_agents)
+            if counts:
+                current_sum = sum(counts)
+                if current_sum < total_agents:
+                    # Add deficit to first group
+                    counts[0] += (total_agents - current_sum)
+                elif current_sum > total_agents:
+                    # Remove surplus from first group (rare with round, but possible)
+                    counts[0] -= (current_sum - total_agents)
             
             for i, group_key in enumerate(sorted_groups):
                 if counts[i] <= 0: continue

@@ -107,7 +107,21 @@ class Evaluator:
         metrics["Diversity_Count"] = float(
             len(set(retrieved_ids[:cutoff]) & gt_set)
         )
-        
+
+        # Per-node correctness tracking
+        node_results = []
+        for rank, node in enumerate(retrieved_nodes, 1):
+            node_id = str(node['id']) if 'id' in node else None
+            if node_id:
+                node_results.append({
+                    'id': node['id'],
+                    'rank': rank,
+                    'correct': node_id in gt_set,
+                    'score': node.get('score', None)
+                })
+
+        metrics['node_results'] = node_results
+
         return metrics
 
     def aggregate_results(self, results: List[Metrics]) -> pd.DataFrame:

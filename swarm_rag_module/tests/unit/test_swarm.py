@@ -19,15 +19,21 @@ class DummyVectorStore(VectorStore):
         }
         
     def search(self, query_vec: np.ndarray, limit: int) -> List[Dict[str, Any]]:
-        """Mock search that returns random nodes with scores"""
+        """Mock search that returns deterministic nodes based on query vector"""
+        # Use query vector to seed selection for determinism
+        query_hash = hash(query_vec.tobytes()) % (2**32)
+        rng = random.Random(query_hash)
+
         results = []
-        for i in range(min(limit, self.num_nodes)):
-            node_id = random.randint(0, self.num_nodes - 1)
-            # Calculate mock similarity score
-            score = np.dot(query_vec, self.embeddings[node_id]) / (
-                np.linalg.norm(query_vec) * np.linalg.norm(self.embeddings[node_id])
-            )
-            results.append({'id': node_id, 'score': float(score)})
+        seen_ids = set()
+        while len(results) < min(limit, self.num_nodes) and len(seen_ids) < self.num_nodes:
+            node_id = rng.randint(0, self.num_nodes - 1)
+            if node_id not in seen_ids:
+                seen_ids.add(node_id)
+                score = np.dot(query_vec, self.embeddings[node_id]) / (
+                    np.linalg.norm(query_vec) * np.linalg.norm(self.embeddings[node_id]) + 1e-8
+                )
+                results.append({'id': node_id, 'score': float(score)})
         return sorted(results, key=lambda x: x['score'], reverse=True)
     
     def fetch_batch(self, node_ids: List[Any]) -> List[Optional[np.ndarray]]:
@@ -151,6 +157,11 @@ def test_swarm_retriever():
     print(f"   ✓ Single query returned {len(single_results)} results in {latency:.3f}s")
     print(f"   ✓ Metrics: MRR={metrics['MRR']:.4f}, Hit@10={metrics['Hit@10']:.4f}")
 
+    # Assertions for single query test
+    assert len(single_results) > 0, "Should return results"
+    assert len(single_results) <= 5, "Should respect top_k"
+    assert all('id' in r and 'score' in r for r in single_results), "Results should have id and score"
+
     print("\nTesting batch retrieval with automatic strategy selection...")
     start_time = time.time()
     batch_results = retriever.retrieve_batch(queries=queries, n_agents=10, steps=3, top_k=5, max_workers=10)
@@ -160,6 +171,9 @@ def test_swarm_retriever():
         batch_metrics = evaluator.calculate_metrics(res, ground_truth_batch, latency_per_query)
         reporter.add_run("Batch Queries", batch_metrics)
         print(f"   ✓ Query '{q[:30]}...' -> {len(res)} results, MRR={batch_metrics['MRR']:.4f}")
+
+    # Assertions for batch test
+    assert len(batch_results) == len(queries), "Should return results for all queries"
 
     large_queries = [f"Test query {i}" for i in range(10)]
 
