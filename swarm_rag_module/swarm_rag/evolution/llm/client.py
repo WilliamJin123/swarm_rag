@@ -35,13 +35,16 @@ class LLMClient:
     """
     Unified LLM client for the evolution system.
 
-    Wraps keycycle's MultiProviderWrapper and provides a consistent
+    Wraps keycycle's MultiClientWrapper and provides a consistent
     interface for all LLM calls with retry logic and JSON parsing.
 
     Usage:
-        from keycycle import MultiProviderWrapper
-        wrapper = MultiProviderWrapper.from_env(provider="cerebras", ...)
-        client = LLMClient(wrapper, model="zai-glm-4.7")
+        from keycycle import MultiClientWrapper, ProviderEnvConfig
+        wrapper = MultiClientWrapper.from_env(
+            providers={"cerebras": ProviderEnvConfig(default_model="zai-glm-4.7")},
+            env_file=".env"
+        )
+        client = LLMClient(wrapper, model="zai-glm-4.7", provider="cerebras")
 
         result = client.call(
             system_prompt="You are an expert...",
@@ -53,8 +56,9 @@ class LLMClient:
 
     def __init__(
         self,
-        wrapper: Any,  # keycycle.MultiProviderWrapper
+        wrapper: Any,  # keycycle.MultiClientWrapper
         model: str,
+        provider: str,
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ):
@@ -62,13 +66,15 @@ class LLMClient:
         Initialize the LLM client.
 
         Args:
-            wrapper: keycycle MultiProviderWrapper instance
+            wrapper: keycycle MultiClientWrapper instance
             model: Model ID (e.g., "zai-glm-4.7", "gpt-4o-mini")
+            provider: Provider name (e.g., "cerebras", "openai", "groq")
             max_retries: Max retry attempts
             retry_delay: Base delay for exponential backoff
         """
         self.wrapper = wrapper
         self.model = model
+        self.provider = provider
         self.max_retries = max_retries
         self.retry_delay = retry_delay
 
@@ -126,7 +132,15 @@ class LLMClient:
         temperature: float,
     ) -> LLMCallResult:
         """Make single LLM call (no retry)."""
-        openai_client = self.wrapper.get_openai_client()
+        from keycycle import RotatingOpenAIClient
+
+        manager = self.wrapper.get_manager(self.provider)
+        openai_client = RotatingOpenAIClient(
+            manager=manager,
+            limit_resolver=lambda m, k: self.wrapper._resolve_limits(self.provider, m, k),
+            default_model=self.model,
+            provider=self.provider,
+        )
 
         kwargs = {
             "model": self.model,
@@ -175,7 +189,7 @@ class LLMClient:
         Create an LLMClient from configuration.
 
         Args:
-            provider: Provider name (cerebras, openai, groq, anthropic, together)
+            provider: Provider name (cerebras, openai, groq, openrouter, gemini, cohere)
             model: Model ID
             env_path: Path to .env file with API keys
             **kwargs: Additional args (max_retries, retry_delay)
@@ -184,7 +198,7 @@ class LLMClient:
             Configured LLMClient instance
         """
         try:
-            from keycycle import MultiProviderWrapper
+            from keycycle import MultiClientWrapper, ProviderEnvConfig
         except ImportError:
             raise ImportError(
                 "keycycle is required for LLMClient. "
@@ -194,23 +208,25 @@ class LLMClient:
         from dotenv import load_dotenv
         load_dotenv(env_path)
 
-        wrapper = MultiProviderWrapper.from_env(
-            provider=provider,
-            default_model_id=model,
+        wrapper = MultiClientWrapper.from_env(
+            providers={
+                provider: ProviderEnvConfig(
+                    default_model=model,
+                )
+            },
             env_file=env_path,
         )
 
         logger.info(f"Created LLMClient: {provider}/{model}")
-        return cls(wrapper, model, **kwargs)
+        return cls(wrapper, model, provider=provider, **kwargs)
 
 
-# Supported providers
+# Supported providers (matches keycycle PROVIDER_BASE_URLS)
 SUPPORTED_PROVIDERS = [
-    "cerebras",
     "openai",
+    "openrouter",
+    "gemini",
+    "cerebras",
     "groq",
-    "anthropic",
-    "together",
-    "fireworks",
-    "deepseek",
+    "cohere",
 ]
