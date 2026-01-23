@@ -235,6 +235,9 @@ class PopulationEvaluator:
         aggregated = {}
         for k in keys:
             values = [m[k] for m in all_metrics]
+            # Skip non-numeric values (e.g., node_results which is a list of dicts)
+            if not values or not isinstance(values[0], (int, float)):
+                continue
             aggregated[k] = float(np.mean(values))
             aggregated[f"var_{k}"] = float(np.var(values))
 

@@ -132,7 +132,7 @@ class LLMClient:
         temperature: float,
     ) -> LLMCallResult:
         """Make single LLM call (no retry)."""
-        from keycycle import RotatingOpenAIClient
+        from keycycle.adapters.openai_adapter import RotatingOpenAIClient
 
         manager = self.wrapper.get_manager(self.provider)
         openai_client = RotatingOpenAIClient(

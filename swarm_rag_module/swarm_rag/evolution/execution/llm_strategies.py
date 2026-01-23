@@ -49,12 +49,12 @@ def get_three_tier_mutator(ctx: EvolutionContext) -> Optional[ThreeTierMutator]:
     # Get LLM client from context
     client: Optional[LLMClient] = getattr(ctx, 'llm_client', None)
 
-    # Fallback: create client from provider if available (backwards compatibility)
+    # Fallback: use llm_provider if it's already an LLMClient (from factory)
     if client is None:
         provider = getattr(ctx, 'llm_provider', None)
-        if provider is not None and hasattr(provider, 'wrapper') and hasattr(provider, 'model'):
-            client = LLMClient(provider.wrapper, provider.model)
-            logger.info("Created LLMClient from legacy provider")
+        if isinstance(provider, LLMClient):
+            client = provider
+            logger.info("Using LLMClient from llm_provider")
 
     if client is None:
         return None

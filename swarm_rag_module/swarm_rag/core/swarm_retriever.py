@@ -620,7 +620,14 @@ class SwarmRetriever:
         if decision_tracker is not None and decision_tracker.enabled:
             heuristic_scores = self._capture_heuristic_scores(ctx)
 
-        total_scores = np.maximum(total_scores, 0.001)
+        total_scores = np.atleast_1d(np.maximum(total_scores, 0.001))
+
+        # Ensure total_scores matches valid_ids length (broadcast scalar if needed)
+        if len(total_scores) == 1 and len(valid_ids) > 1:
+            total_scores = np.full(len(valid_ids), total_scores[0])
+        elif len(total_scores) != len(valid_ids):
+            logger.warning(f"Score mismatch: {len(total_scores)} scores vs {len(valid_ids)} candidates")
+            return None
 
         if len(valid_ids) > 5:
             total_scores[total_scores < 0.01] = 0.0

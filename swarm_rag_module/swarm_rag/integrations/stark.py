@@ -612,6 +612,11 @@ class StarkGPUVectorStore(VectorStore):
         """Check if using GPU backend."""
         return self._use_gpu
 
+    def close(self):
+        """Clean up resources (delegates to underlying store if needed)."""
+        if hasattr(self._store, 'close'):
+            self._store.close()
+
 
 def create_stark_vector_store(
     doc_embs: Dict[int, torch.Tensor],
