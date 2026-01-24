@@ -4,8 +4,8 @@ MAP-Elites Archive with Configurable Comparison Modes
 Stores high-performing elites in a structured phenotypic grid with
 configurable comparison strategies for determining which genomes replace others.
 """
+import math
 import random
-import numpy as np
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Tuple, Dict, Optional, Any, TypedDict
@@ -330,7 +330,7 @@ class MapElitesArchive:
 
     def stats(self) -> MAPStats:
         """Returns coverage metrics."""
-        total_cells = np.prod(self.bins)
+        total_cells = math.prod(self.bins)
         filled_cells = len(self.grid)
         coverage = filled_cells / total_cells if total_cells > 0 else 0.0
 

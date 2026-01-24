@@ -1,7 +1,6 @@
 import random
 import logging
 from typing import List, Optional
-import numpy as np
 
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
