@@ -152,14 +152,88 @@ class CreativeModeConfig:
 
 
 @dataclass
-class CheckpointConfig:
-    """Logging and checkpointing settings."""
-    log_path: str = "evolution_run/evolution_log.jsonl"
-    plot_path: str = "evolution_run/evolution_progress.png"
-    plot_title: str = "MAP-Elites Evolution"
-    checkpoint_path: str = "evolution_run/evo_checkpoint.pkl"
+class StorageConfig:
+    """
+    Unified storage configuration with dataset-first organization.
+
+    Directory structure:
+        {base_dir}/{dataset}/{run_id}/
+            config.json         # Full experiment config snapshot
+            checkpoints/
+                latest.pkl      # Most recent checkpoint
+                gen_000.pkl     # Per-generation checkpoints
+            logs/
+                evolution.jsonl # Main evolution log
+            plots/
+                progress.png    # Evolution progress plot
+            results/
+                best_genome.json    # Best genome parameters
+                final_metrics.json  # Final evaluation metrics
+    """
+    base_dir: str = "runs"
+    dataset: str = "prime"
+    run_id: Optional[str] = None  # Auto-generated if None
+    use_gpu: str = "auto"  # "auto", "always", "never"
+
     checkpoint_frequency: int = 5
     validation_frequency: int = 5
+    keep_n_checkpoints: int = 10  # 0 = keep all
+    plot_title: str = "MAP-Elites Evolution"
+
+    # Computed paths (set in __post_init__)
+    run_dir: str = field(default="", init=False)
+    checkpoint_dir: str = field(default="", init=False)
+    log_dir: str = field(default="", init=False)
+    plot_dir: str = field(default="", init=False)
+    results_dir: str = field(default="", init=False)
+
+    def __post_init__(self):
+        if self.run_id is None:
+            from datetime import datetime
+            self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._resolve_paths()
+
+    def _resolve_paths(self):
+        """Compute all directory paths from base_dir, dataset, and run_id."""
+        self.run_dir = os.path.join(self.base_dir, self.dataset, self.run_id)
+        self.checkpoint_dir = os.path.join(self.run_dir, "checkpoints")
+        self.log_dir = os.path.join(self.run_dir, "logs")
+        self.plot_dir = os.path.join(self.run_dir, "plots")
+        self.results_dir = os.path.join(self.run_dir, "results")
+
+    @property
+    def latest_checkpoint_path(self) -> str:
+        """Path to latest.pkl checkpoint file."""
+        return os.path.join(self.checkpoint_dir, "latest.pkl")
+
+    @property
+    def log_path(self) -> str:
+        """Path to main evolution log (JSONL format)."""
+        return os.path.join(self.log_dir, "evolution.jsonl")
+
+    @property
+    def plot_path(self) -> str:
+        """Path to evolution progress plot."""
+        return os.path.join(self.plot_dir, "progress.png")
+
+    @property
+    def best_genome_path(self) -> str:
+        """Path to best genome JSON file."""
+        return os.path.join(self.results_dir, "best_genome.json")
+
+    @property
+    def config_snapshot_path(self) -> str:
+        """Path to config snapshot JSON file."""
+        return os.path.join(self.run_dir, "config.json")
+
+    def checkpoint_path_for_gen(self, generation: int) -> str:
+        """Get checkpoint path for a specific generation."""
+        return os.path.join(self.checkpoint_dir, f"gen_{generation:03d}.pkl")
+
+    def ensure_directories(self):
+        """Create all required directories for the run."""
+        for d in [self.checkpoint_dir, self.log_dir, self.plot_dir, self.results_dir]:
+            os.makedirs(d, exist_ok=True)
 
 
 @dataclass
@@ -188,7 +262,7 @@ class EvolutionConfig:
     genetic: GeneticConfig = field(default_factory=GeneticConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     creative_mode: CreativeModeConfig = field(default_factory=CreativeModeConfig)
-    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
 
 
@@ -246,6 +320,22 @@ class EvolutionContext:
             return False
         max_per_gen = self.config.creative_mode.max_creative_per_generation
         return self.creative_mutations_this_gen < max_per_gen
+
+    @property
+    def device(self) -> str:
+        """
+        Get resolved device string from storage config.
+
+        Returns:
+            Device string: "cuda" or "cpu"
+        """
+        from ...utils.device import get_device
+        use_gpu = self.config.storage.use_gpu
+        if use_gpu == "never":
+            return "cpu"
+        elif use_gpu == "always":
+            return "cuda"
+        return get_device()  # auto-detect
 
 
 # =============================================================================
