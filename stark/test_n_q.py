@@ -6,7 +6,7 @@ supporting both GPU and CPU modes with detailed metrics reporting.
 
 Usage:
     python test_n_q.py --n 10 --device auto          # Auto-detect GPU/CPU
-    python test_n_q.py --n 10 --device gpu           # Force GPU
+    python test_n_q.py --n 10 --device gpu           # Force GPU (auto-enables GPU graph store)
     python test_n_q.py --n 10 --device cpu           # Force CPU
     python test_n_q.py --n 10 --compare              # Compare GPU vs CPU
     python test_n_q.py --n 10 --verbose              # Detailed per-query output
@@ -227,7 +227,6 @@ def test_stark(
     human_gen: bool = False,
     device: str = "auto",
     compare: bool = False,
-    gpu_graph: bool = False,
     verbose: bool = False,
     config: Optional[dict] = None,
     plot: bool = False,
@@ -241,9 +240,8 @@ def test_stark(
         num_questions: Number of questions to evaluate
         seed: Random seed for reproducibility
         human_gen: Use human-generated QA data
-        device: "auto", "gpu", "cpu", or "cuda"
+        device: "auto", "gpu", "cpu", or "cuda" (GPU mode auto-enables GPU graph store)
         compare: Run both GPU and CPU for comparison
-        gpu_graph: Use GPU-accelerated graph store
         verbose: Show detailed per-query output
         config: Override default hyperparameters
         plot: Display metric graphs after evaluation
@@ -266,6 +264,9 @@ def test_stark(
     if config:
         run_config.update(config)
 
+    # GPU graph store is automatically enabled when using GPU
+    use_gpu_graph = (resolved_device == "cuda")
+
     print(f"\n{'='*70}")
     print(f"SWARM RAG STARK EVALUATION")
     print(f"{'='*70}")
@@ -273,7 +274,7 @@ def test_stark(
     print(f"Questions: {num_questions}")
     print(f"Agents: {run_config['n_agents']}, Steps: {run_config['steps']}")
     print(f"Compare mode: {compare}")
-    print(f"GPU Graph: {gpu_graph}")
+    print(f"GPU Graph: {use_gpu_graph} (auto-enabled with GPU)")
     print(f"{'='*70}")
 
     reporter = EvalReporter()
@@ -295,8 +296,8 @@ def test_stark(
         os.makedirs(cache_dir, exist_ok=True)
         graph_cache_path = os.path.join(cache_dir, f"graph_{dataset_name}.npz")
 
-        # Shared components - use GPU graph store if requested and device supports it
-        if gpu_graph and resolved_device == "cuda":
+        # Shared components - use GPU graph store automatically when using GPU
+        if use_gpu_graph:
             print(f"  Initializing GPU graph store...")
             graph_store = StarkGPUGraphAdapter(
                 skb, dataset_name,
@@ -493,11 +494,9 @@ Examples:
                         help="Use human-generated QA data")
     parser.add_argument("--device", choices=["auto", "gpu", "cpu", "cuda"],
                         default="auto",
-                        help="Device to use (default: auto)")
+                        help="Device to use; gpu/cuda auto-enables GPU graph store (default: auto)")
     parser.add_argument("--compare", action='store_true',
                         help="Run both GPU and CPU for comparison")
-    parser.add_argument("--gpu-graph", action='store_true',
-                        help="Use GPU-accelerated graph store for batch neighbor lookups")
     parser.add_argument("--verbose", "-v", action='store_true',
                         help="Show detailed per-query output")
     parser.add_argument("--plot", action='store_true',
@@ -527,7 +526,6 @@ Examples:
         human_gen=args.he,
         device=args.device,
         compare=args.compare,
-        gpu_graph=args.gpu_graph,
         verbose=args.verbose,
         config=config_overrides if config_overrides else None,
         plot=args.plot,

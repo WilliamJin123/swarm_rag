@@ -3,6 +3,12 @@ Evolutionary optimization for SwarmRAG on STaRK datasets.
 
 Uses MAP-Elites with optional LLM-guided mutations to evolve
 specialized retrieval strategies.
+
+Target Metrics:
+- Hit@1: >50%
+- Hit@5: >70%
+- MRR: >80%
+- Recall@20: >80%
 """
 import argparse
 import os
@@ -13,7 +19,14 @@ import sys
 # Import core components
 from swarm_rag.core import SwarmRetriever
 from swarm_rag.evolution.engine import EvolutionEngine
-from swarm_rag.evolution.execution.fitness import FitnessCalculator
+from swarm_rag.evolution.execution.fitness import (
+    FitnessCalculator,
+    FitnessConfig,
+    FitnessMode,
+    MetricConfig,
+    CurriculumSchedule,
+    create_fitness_calculator,
+)
 from swarm_rag.eval import Evaluator
 
 # Import config types
@@ -24,6 +37,12 @@ from swarm_rag.evolution.types.config import (
     LLMConfig,
     ResourceConfig,
     CheckpointConfig,
+)
+
+# Import archive comparator config
+from swarm_rag.evolution.map_elites.archive import (
+    ArchiveComparatorConfig,
+    ArchiveComparisonMode,
 )
 
 # Import STaRK integrations
@@ -42,6 +61,33 @@ from load_stark import (
 
 # Get the directory where this script is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# ============ CONFIGURATION (edit manually between runs) ============
+CONFIG = {
+    # MAP-Elites parameters
+    "pop_size": 30,
+    "initial_fill": 100,
+
+    # Resource allocation (hardware-dependent)
+    "concurrent_evals": 4,
+    "max_workers": 4,
+
+    # LLM settings (used when --llm is passed)
+    "llm_provider": "cerebras",
+    "llm_model": "zai-glm-4.7",
+    "env_path": ".env",
+
+    # Evolution strategies
+    "mutation_strategy": "guided_mutation",
+    "creation_strategy": "baseline_seeded_initialization",
+    "fitness_mode": "hybrid",
+    "use_curriculum": True,
+
+    # GPU mode: "auto", "always", "never"
+    "use_gpu": "auto",
+}
+# ====================================================================
 
 
 def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
@@ -83,10 +129,19 @@ def run_evolution(
     llm_model: str = "zai-glm-4.7",
     env_path: str = ".env",
     mutation_strategy: str = "guided_mutation",
+    creation_strategy: str = "baseline_seeded_initialization",  # Use baseline seeding
     use_gpu: str = "auto",  # GPU mode: "auto", "always", "never"
+    fitness_mode: str = "hybrid",  # weighted_sum, min_metric, geometric_mean, threshold_bonus, hybrid
+    use_curriculum: bool = True,  # Enable curriculum learning
 ):
     """
     Run MAP-Elites evolutionary optimization.
+
+    Target Metrics:
+    - Hit@1: >50%
+    - Hit@5: >70%
+    - MRR: >80%
+    - Recall@20: >80%
 
     Args:
         dataset_name: STARK dataset to use (prime, amazon, mag)
@@ -103,7 +158,10 @@ def run_evolution(
         llm_model: Model ID for the provider
         env_path: Path to .env file with API keys
         mutation_strategy: Mutation strategy name
+        creation_strategy: Strategy for initial population (baseline_seeded_initialization recommended)
         use_gpu: GPU mode - "auto" (detect), "always" (require), "never" (CPU only)
+        fitness_mode: Fitness calculation mode (hybrid recommended)
+        use_curriculum: Enable curriculum learning (progressive weight schedule)
     """
     print(f"\n{'='*60}")
     print("MAP-ELITES EVOLUTION")
@@ -112,6 +170,10 @@ def run_evolution(
     print(f"Generations: {n_gens}")
     print(f"Batch Size: {pop_size}")
     print(f"Initial Fill: {initial_fill}")
+    print(f"Fitness Mode: {fitness_mode}")
+    print(f"Curriculum: {use_curriculum}")
+    print(f"Creation Strategy: {creation_strategy}")
+    print(f"Mutation Strategy: {mutation_strategy}")
     print(f"LLM Enabled: {llm_enabled}")
     print(f"GPU Mode: {use_gpu}")
     if use_gpu != "never":
@@ -120,6 +182,8 @@ def run_evolution(
             print(f"GPU Device: {get_device()}")
         except ImportError:
             print("GPU Device: (utils not available)")
+    print(f"\nTarget Metrics:")
+    print(f"  Hit@1: >50%  |  Hit@5: >70%  |  MRR: >80%  |  Recall@20: >80%")
     print(f"{'='*60}\n")
 
     # Load Data
@@ -156,14 +220,23 @@ def run_evolution(
     print(f"Evolution Corpus: {len(train_q)} training queries, {len(val_q)} validation queries.")
 
     # Define Fitness Goals
-    fitness_calc = FitnessCalculator(
+    # Target thresholds aligned with goals:
+    # Hit@1: >50%, Hit@5: >70%, MRR: >80%, Recall@20: >80%
+    fitness_calc = create_fitness_calculator(
+        mode=fitness_mode,
         weights={
             "Hit@1": 0.25,
             "Hit@5": 0.25,
             "MRR": 0.25,
             "Recall@20": 0.25,
-            "complexity": -0.0001,  # Slight penalty for bloat
         },
+        use_curriculum=use_curriculum,
+        thresholds={
+            "Hit@1": 0.50,
+            "Hit@5": 0.70,
+            "MRR": 0.80,
+            "Recall@20": 0.80,
+        }
     )
 
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
@@ -193,9 +266,10 @@ def run_evolution(
             batch_size=pop_size,
         ),
         genetic=GeneticConfig(
+            creation_strategy=creation_strategy,
             mutation_strategy=mutation_strategy,
             crossover_strategy="uniform_parameter_mix",
-            base_mutation_rate=0.25,
+            base_mutation_rate=0.20,  # Slightly lower to preserve good patterns
             crossover_rate=0.6,
             expr_max_depth=5,
             n_agent_groups=3,
@@ -313,83 +387,28 @@ if __name__ == "__main__":
         description="Run MAP-Elites evolutionary optimization for SwarmRAG on STaRK datasets"
     )
 
-    # Dataset and sampling
+    # Essential CLI flags (6 total)
     parser.add_argument(
         "--dataset",
         type=str,
         default="prime",
         help="Dataset name (prime, amazon, mag)",
     )
+    parser.add_argument("--gens", type=int, default=100, help="Number of generations")
     parser.add_argument("--train_ss", type=int, default=200, help="Number of training samples")
     parser.add_argument("--val_ss", type=int, default=100, help="Number of validation samples")
-
-    # Evolution parameters
-    parser.add_argument("--gens", type=int, default=100, help="Number of generations")
-    parser.add_argument("--pop", type=int, default=30, help="Batch size for MAP-Elites")
-    parser.add_argument(
-        "--init_fill", type=int, default=100, help="Initial random population for MAP-Elites"
-    )
-
-    # Execution parameters
-    parser.add_argument(
-        "--concurrent", type=int, default=4, help="Number of concurrent genomes to evaluate"
-    )
-    parser.add_argument("--workers", type=int, default=4, help="Number of threads per retrieval")
-
-    # LLM configuration
     parser.add_argument("--llm", action="store_true", help="Enable LLM-guided mutations")
-    parser.add_argument(
-        "--llm-provider",
-        type=str,
-        default="cerebras",
-        help="LLM provider (cerebras, openai, groq, anthropic, etc.)",
-    )
-    parser.add_argument(
-        "--llm-model",
-        type=str,
-        default="zai-glm-4.7",
-        help="Model ID for the LLM provider",
-    )
-    parser.add_argument(
-        "--env-path", type=str, default=".env", help="Path to .env file with API keys"
-    )
-
-    # Mutation strategy
-    parser.add_argument(
-        "--mutation",
-        type=str,
-        default="guided_mutation",
-        help="Mutation strategy (guided_mutation, expression_tree_mutation, aggressive_mutation)",
-    )
-
-    # GPU
-    parser.add_argument(
-        "--gpu",
-        type=str,
-        default="auto",
-        choices=["auto", "always", "never"],
-        help="GPU acceleration mode: auto (detect), always (require), never (CPU only)"
-    )
-
-    # Misc
     parser.add_argument("--scratch", action="store_true", help="Clear previous checkpoints/logs")
 
     args = parser.parse_args()
 
+    # Merge CLI args with CONFIG dict
     run_evolution(
         dataset_name=args.dataset,
         n_gens=args.gens,
-        pop_size=args.pop,
-        initial_fill=args.init_fill,
         train_sample_size=args.train_ss,
         val_sample_size=args.val_ss,
         start_from_scratch=args.scratch,
-        concurrent_evals=args.concurrent,
-        max_workers=args.workers,
         llm_enabled=args.llm,
-        llm_provider=args.llm_provider,
-        llm_model=args.llm_model,
-        env_path=args.env_path,
-        mutation_strategy=args.mutation,
-        use_gpu=args.gpu,
+        **CONFIG,
     )
