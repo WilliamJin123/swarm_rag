@@ -67,7 +67,7 @@ import os
 from typing import List, Optional, Dict, Any
 import pandas as pd
 import logging
-import numpy as np
+import torch
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -253,7 +253,7 @@ def test_stark(
     """
     if seed is not None:
         random.seed(seed)
-        np.random.seed(seed)
+        torch.manual_seed(seed)
 
     # Resolve device
     if device == "auto":
@@ -453,10 +453,10 @@ def test_stark(
                 gpu_results = results_summary["GPU"]["results"]
                 cpu_results = results_summary["CPU"]["results"]
 
-                gpu_mrr = np.mean([r['MRR'] for r in gpu_results])
-                cpu_mrr = np.mean([r['MRR'] for r in cpu_results])
-                gpu_recall = np.mean([r['Recall@20'] for r in gpu_results])
-                cpu_recall = np.mean([r['Recall@20'] for r in cpu_results])
+                gpu_mrr = sum(r['MRR'] for r in gpu_results) / len(gpu_results)
+                cpu_mrr = sum(r['MRR'] for r in cpu_results) / len(cpu_results)
+                gpu_recall = sum(r['Recall@20'] for r in gpu_results) / len(gpu_results)
+                cpu_recall = sum(r['Recall@20'] for r in cpu_results) / len(cpu_results)
 
                 print(f"\n  Quality Comparison:")
                 print(f"    MRR:       GPU={gpu_mrr:.4f}, CPU={cpu_mrr:.4f}")

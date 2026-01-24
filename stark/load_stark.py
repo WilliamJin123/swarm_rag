@@ -1,7 +1,6 @@
 from stark_qa import load_qa, load_skb
 from stark_qa.skb import SKB
 from stark_qa.retrieval import STaRKDataset
-import faiss
 import torch
 import gdown
 import pickle

@@ -1,11 +1,9 @@
 import math
 import os
 from typing import Dict, List, Optional, Union
-import numpy as np
-from numpy.typing import NDArray
-from multiprocessing import shared_memory
 import scipy.sparse as sp
-import atexit
+
+import torch
 
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
 from ..interfaces.enums import HeuristicKey
@@ -13,28 +11,30 @@ from ..utils import fail_on_missing_imports, LRUCache, get_device
 from ..core import HeuristicContext, HeuristicRegistry
 
 try:
-    import torch
-    import faiss
     from stark_qa.load_skb import SKB
 except ImportError:
     fail_on_missing_imports(
-                modules=["torch", "stark_qa", "faiss"],
+                modules=["torch", "stark_qa"],
                 extra_name="stark"
             )
 
 # Import GPU vector store (optional, fallback gracefully)
+# TorchVectorStore is a device-agnostic alias for GPUVectorStore
 try:
-    from .gpu_vector_store import GPUVectorStore
+    from .gpu_vector_store import GPUVectorStore, TorchVectorStore
     _GPU_AVAILABLE = True
 except ImportError:
     _GPU_AVAILABLE = False
+    TorchVectorStore = None
 
 # Import GPU graph store (optional)
+# TorchGraphStore is a device-agnostic alias for GPUGraphStore
 try:
-    from .gpu_graph_store import GPUGraphStore
+    from .gpu_graph_store import GPUGraphStore, TorchGraphStore
     _GPU_GRAPH_AVAILABLE = True
 except ImportError:
     _GPU_GRAPH_AVAILABLE = False
+    TorchGraphStore = None
 
 import logging
 logger = logging.getLogger(__name__)    
@@ -99,7 +99,7 @@ class StarkSKBAdapter(GraphStore):
         """Converts adjacency dictionary to a memory-efficient CSR matrix."""
         nodes = sorted(adj_dict.keys())
         max_node = nodes[-1] if nodes else 0
-        
+
         indptr = [0]
         indices = []
         # We use a mapping if node IDs are non-contiguous, but STaRK is usually 0-indexed
@@ -107,30 +107,33 @@ class StarkSKBAdapter(GraphStore):
             neighbors = adj_dict.get(i, [])
             indices.extend(neighbors)
             indptr.append(len(indices))
-        
-        # Use dummy data (1s) as we only care about topology/indices
-        data = np.ones(len(indices), dtype=np.int8)
-        return sp.csr_matrix((data, indices, indptr), shape=(max_node + 1, max_node + 1))
 
-    def get_neighbors(self, node_id: int) -> np.ndarray:
+        # Use dummy data (1s) as we only care about topology/indices
+        # Keep as list for scipy CSR construction
+        data = [1] * len(indices)
+        return sp.csr_matrix((data, indices, indptr), shape=(max_node + 1, max_node + 1), dtype='int8')
+
+    def get_neighbors(self, node_id: int) -> torch.Tensor:
+        """Get neighbors for a single node as a torch tensor."""
         if self.use_precomputed:
-            if node_id >= self.adj_matrix.shape[0]: return np.array([])
+            if node_id >= self.adj_matrix.shape[0]:
+                return torch.tensor([], dtype=torch.long)
             start = self.adj_matrix.indptr[node_id]
             end = self.adj_matrix.indptr[node_id+1]
-            # Treat as READ-ONLY.
-            return self.adj_matrix.indices[start:end]
-        
+            return torch.tensor(self.adj_matrix.indices[start:end], dtype=torch.long)
+
         if self.cache_neighbors:
             cached = self.neighbor_cache.get(node_id)
-            if cached is not None: return np.array(cached)
-        
+            if cached is not None:
+                return torch.as_tensor(cached, dtype=torch.long)
+
         neighbors = self.skb.get_neighbor_nodes(node_id)
-        np_neighbors = np.array(neighbors)
-        
+        neighbors_tensor = torch.tensor(neighbors, dtype=torch.long)
+
         if self.cache_neighbors:
-            self.neighbor_cache.set(node_id, np_neighbors)
-            
-        return np_neighbors
+            self.neighbor_cache.set(node_id, neighbors_tensor)
+
+        return neighbors_tensor
             
     def get_degree(self, node_id: int) -> int:
         if self.use_precomputed:
@@ -162,13 +165,14 @@ class StarkSKBAdapter(GraphStore):
     
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.STARK_CENTRALITY)
-    def centrality_heuristic(ctx :HeuristicContext) -> np.ndarray:
+    def centrality_heuristic(ctx :HeuristicContext) -> torch.Tensor:
         """
         Vectorized centrality heuristic.
         Uses pre-fetched ctx.node_degrees for speed.
         """
         graph: StarkSKBAdapter = ctx.graph
-        log_degrees = np.log(1 + ctx.node_degrees)
+        degrees = ctx.node_degrees if isinstance(ctx.node_degrees, torch.Tensor) else torch.as_tensor(ctx.node_degrees)
+        log_degrees = torch.log(1 + degrees)
 
         #Sigmoid normalization
         normalized = log_degrees / (log_degrees + graph.avg_log_degree + 1e-8)
@@ -271,21 +275,23 @@ class StarkGPUGraphAdapter(GraphStore):
             indices.extend(neighbors)
             indptr.append(len(indices))
 
-        data = np.ones(len(indices), dtype=np.int8)
-        return sp.csr_matrix((data, indices, indptr), shape=(max_node + 1, max_node + 1))
+        # Use list for scipy CSR construction
+        data = [1] * len(indices)
+        return sp.csr_matrix((data, indices, indptr), shape=(max_node + 1, max_node + 1), dtype='int8')
 
-    def get_neighbors(self, node_id: int) -> np.ndarray:
+    def get_neighbors(self, node_id: int) -> torch.Tensor:
         """
         Get neighbors for a single node.
 
         Uses CPU CSR for single queries (avoids GPU kernel overhead).
+        Returns torch.Tensor for consistency.
         """
         if node_id >= self.adj_matrix.shape[0]:
-            return np.array([], dtype=np.int64)
+            return torch.tensor([], dtype=torch.long)
 
         start = self.adj_matrix.indptr[node_id]
         end = self.adj_matrix.indptr[node_id + 1]
-        return self.adj_matrix.indices[start:end]
+        return torch.tensor(self.adj_matrix.indices[start:end], dtype=torch.long)
 
     def get_neighbors_batch(self, node_ids):
         """
@@ -296,12 +302,12 @@ class StarkGPUGraphAdapter(GraphStore):
 
         Returns:
             Tuple of (neighbors tensor, mask tensor) if GPU available,
-            otherwise (list of neighbor arrays, None)
+            otherwise (list of neighbor tensors, None)
         """
         if self._gpu_store is not None:
             return self._gpu_store.get_neighbors_batch(node_ids)
 
-        # CPU fallback: return list of arrays
+        # CPU fallback: return list of tensors
         neighbors_list = [self.get_neighbors(nid) for nid in node_ids]
         return neighbors_list, None
 
@@ -313,13 +319,13 @@ class StarkGPUGraphAdapter(GraphStore):
             node_ids: List/array of node IDs
 
         Returns:
-            Tensor of degrees if GPU available, otherwise numpy array
+            Tensor of degrees
         """
         if self._gpu_store is not None:
             return self._gpu_store.get_degrees_batch(node_ids)
 
-        # CPU fallback
-        return np.array([self.get_degree(nid) for nid in node_ids], dtype=np.int32)
+        # CPU fallback - return tensor
+        return torch.tensor([self.get_degree(nid) for nid in node_ids], dtype=torch.int32)
 
     def get_degree(self, node_id: int) -> int:
         """Get degree for a single node."""
@@ -348,12 +354,13 @@ class StarkGPUGraphAdapter(GraphStore):
         return self._device
 
     @staticmethod
-    def centrality_heuristic(ctx: HeuristicContext) -> np.ndarray:
+    def centrality_heuristic(ctx: HeuristicContext) -> torch.Tensor:
         """
         Centrality heuristic compatible with GPU adapter.
         """
         graph = ctx.graph
-        log_degrees = np.log(1 + ctx.node_degrees)
+        degrees = ctx.node_degrees if isinstance(ctx.node_degrees, torch.Tensor) else torch.as_tensor(ctx.node_degrees)
+        log_degrees = torch.log(1 + degrees)
         avg_log = getattr(graph, 'avg_log_degree', AVG_LOG_DEGREE_BY_DATASET.get('prime', 4.8))
         normalized = log_degrees / (log_degrees + avg_log + 1e-8)
         return normalized
@@ -361,93 +368,83 @@ class StarkGPUGraphAdapter(GraphStore):
 
 # --- 2. Vector Store Adapter for STaRK Tensors ---
 class StarkInMemoryVectorStore(VectorStore):
+    """
+    Pure PyTorch in-memory vector store for STaRK datasets.
+
+    Replaces the FAISS-based implementation with torch operations:
+    - Uses torch.mm() + torch.topk() for similarity search
+    - Uses torch.nn.functional.normalize for L2 normalization
+    - No shared memory complexity - torch tensors are copy-on-read in forked processes
+    """
+
     def __init__(self, doc_embs: Dict[int, torch.Tensor], shared_name: Optional[str] = None):
         """
-        Wraps doc embeddings in SharedMemory to prevent 4x RAM usage in parallel mode.
-        """
-        self._parent_pid = os.getpid()
-        faiss.omp_set_num_threads(1)
+        Initialize vector store from embedding dictionary.
 
-        raw_ids = np.array(list(doc_embs.keys()))
-        self.id_dtype = raw_ids.dtype
-        sorted_keys = np.sort(raw_ids)
-        
-        first_tensor = doc_embs[sorted_keys[0]].detach().cpu().numpy().squeeze()
-        self.dim = first_tensor.shape[0]
-        self.vec_dtype = first_tensor.dtype
+        Args:
+            doc_embs: Dictionary mapping doc_id -> embedding tensor
+            shared_name: Ignored (kept for API compatibility)
+        """
+        # Sort keys for deterministic ordering
+        sorted_keys = sorted(doc_embs.keys())
+        self._ids = torch.tensor(sorted_keys, dtype=torch.long)
         self.n_docs = len(sorted_keys)
 
-        matrix_bytes = self.n_docs * self.dim * np.dtype(self.vec_dtype).itemsize
-        id_bytes = self.n_docs * np.dtype(self.id_dtype).itemsize
+        # Get dimensions from first embedding
+        first_tensor = doc_embs[sorted_keys[0]].detach().cpu().squeeze()
+        self.dim = first_tensor.shape[0]
 
-        if shared_name:
-            # CHILD PROCESS PATH
-            self.shm_matrix = shared_memory.SharedMemory(name=shared_name)
-            self.shm_ids = shared_memory.SharedMemory(name=f"{shared_name}_ids")
-            self._is_owner = False
+        # Stack and normalize embeddings
+        embeddings = torch.stack([doc_embs[rid].detach().cpu().squeeze() for rid in sorted_keys])
+        self._embeddings = torch.nn.functional.normalize(embeddings.float(), p=2, dim=1)
+
+        # Build ID lookup
+        self._id_to_idx = {int(rid): i for i, rid in enumerate(sorted_keys)}
+
+        logger.info(f"StarkInMemoryVectorStore initialized: {self.n_docs} docs, dim={self.dim}")
+
+    def search(self, query_vec, limit: int) -> List[Dict]:
+        """Find top-k most similar documents using cosine similarity."""
+        # Ensure query is tensor and normalized
+        if not isinstance(query_vec, torch.Tensor):
+            query = torch.as_tensor(query_vec, dtype=torch.float32)
         else:
-            # PARENT PROCESS PATH
-            shared_name = f"stark_vstore_{os.getpid()}"
-            self.shm_matrix = shared_memory.SharedMemory(create=True, size=matrix_bytes, name=shared_name)
-            self.shm_ids = shared_memory.SharedMemory(create=True, size=id_bytes, name=f"{shared_name}_ids")
-            self._is_owner = True
+            query = query_vec.to(dtype=torch.float32)
 
-        self.matrix = np.ndarray((self.n_docs, self.dim), dtype=self.vec_dtype, buffer=self.shm_matrix.buf)
-        self.ids = np.ndarray((self.n_docs,), dtype=self.id_dtype, buffer=self.shm_ids.buf)
+        query = query.view(1, -1)
+        query = torch.nn.functional.normalize(query, p=2, dim=1)
 
-        if self._is_owner:
-            logger.info(f"Parent process: Populating shared memory for {self.n_docs} embeddings...")
-            tensor_list = [doc_embs[rid] for rid in sorted_keys]
-            stacked_matrix = torch.stack(tensor_list).detach().cpu().numpy().astype(self.vec_dtype).squeeze()
-            faiss.normalize_L2(stacked_matrix)
-            np.copyto(self.matrix, stacked_matrix)
-            np.copyto(self.ids, sorted_keys)
-            logger.info("Parent process: Shared memory populated.")
-        
-        self.index = faiss.IndexFlatIP(self.dim)
-        self.index.add(self.matrix)
+        # Compute similarities via matrix multiplication
+        similarities = torch.mm(query, self._embeddings.t()).squeeze(0)
 
-        self.real_id_to_idx = {int(real_id): i for i, real_id in enumerate(self.ids)}
+        # Get top-k
+        k = min(limit, self.n_docs)
+        scores, indices = torch.topk(similarities, k=k, largest=True)
 
-        # warmup
-        _ = np.sum(self.matrix[0]) 
-        _ = np.sum(self.ids[:min(100, len(self.ids))])
-
-        atexit.register(self.close)
-
-    def search(self, query_vec: np.ndarray, limit: int):
-        # FAISS requires numpy on CPU
-        query_vec_cpu = np.asarray(query_vec)
-        q = query_vec_cpu.reshape(1, -1).astype('float32')
-        faiss.normalize_L2(q)
-        scores, indices = self.index.search(q, min(limit, self.n_docs))
-        
+        # Convert to list of dicts
         results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx == -1: continue
-            real_id = int(self.ids[idx])
+        for score, idx in zip(scores.tolist(), indices.tolist()):
+            real_id = int(self._ids[idx])
             results.append({'id': real_id, 'score': float(score)})
+
         return results
-    
-    def fetch_batch(self, node_ids) -> Matrix:
-        indices = [self.real_id_to_idx.get(nid, -1) for nid in node_ids]
-        indices_arr = np.array(indices, dtype=np.int64)
 
-        # Use NaN for missing vectors
-        result = np.full((len(node_ids), self.dim), np.nan, dtype=self.vec_dtype)
+    def fetch_batch(self, node_ids) -> torch.Tensor:
+        """Fetch embeddings for multiple documents."""
+        result = torch.full((len(node_ids), self.dim), float('nan'), dtype=torch.float32)
 
-        mask = (indices_arr >= 0)
-        
-        if np.any(mask):
-            valid_internal_indices = indices_arr[mask]
-            result[mask] = self.matrix[valid_internal_indices]
-            
+        for i, nid in enumerate(node_ids):
+            idx = self._id_to_idx.get(nid)
+            if idx is not None:
+                result[i] = self._embeddings[idx]
+
         return result
-    
-    def fetch(self, node_id: int) -> Optional[np.ndarray]:
-        idx = self.real_id_to_idx.get(node_id)
+
+    def fetch(self, node_id: int) -> Optional[torch.Tensor]:
+        """Fetch embedding for a single document."""
+        idx = self._id_to_idx.get(node_id)
         if idx is not None:
-            return self.matrix[idx]
+            return self._embeddings[idx]
         logger.warning(
             f"VectorStore: Node ID {node_id} was requested but not found in the embedding map. "
             "This indicates a mismatch between graph nodes and document embeddings."
@@ -455,58 +452,33 @@ class StarkInMemoryVectorStore(VectorStore):
         return None
 
     def close(self):
-        """
-        Release shared memory resources.
-
-        This method uses atexit.register() for automatic cleanup, but atexit handlers
-        do NOT run on SIGKILL or unexpected crashes. If the process is killed forcefully,
-        shared memory segments may persist in /dev/shm/ (Linux) or equivalent.
-
-        Manual cleanup after crash (Linux):
-            rm /dev/shm/stark_vstore_*
-
-        Manual cleanup after crash (Windows):
-            Shared memory is automatically cleaned up by the OS on Windows.
-
-        Manual cleanup after crash (macOS):
-            rm /var/folders/*/*/stark_vstore_*
-        """
-        for shm_attr in ['shm_matrix', 'shm_ids']:
-            if hasattr(self, shm_attr):
-                shm = getattr(self, shm_attr)
-                shm.close()
-                # Unlink ONLY in the parent process
-                if self._is_owner and os.getpid() == self._parent_pid:
-                    try:
-                        shm.unlink()
-                        logger.info(f"Unlinked {shm_attr}")
-                    except:
-                        pass
+        """No-op for compatibility. Torch tensors don't need explicit cleanup."""
+        pass
 
 
 # --- 3. Embedding Adapter (Pre-computed Lookup) ---
 class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     def __init__(self, query_embs: dict[int, torch.Tensor]):
-        """Standardized NumPy pre-conversion to avoid GIL/Torch overhead."""
+        """Standardized pre-conversion to torch tensors."""
         self.query_embs = {}
         for qid, emb in query_embs.items():
-            if hasattr(emb, 'numpy'):
+            if isinstance(emb, torch.Tensor):
                 # Handle torch tensors (move to CPU if needed)
-                arr = emb.cpu().detach().numpy() if hasattr(emb, 'is_cuda') and emb.is_cuda else emb.numpy()
+                tensor = emb.cpu().detach().squeeze()
             else:
-                arr = np.array(emb)
-            
-            self.query_embs[qid] = arr.squeeze()
+                tensor = torch.as_tensor(emb).squeeze()
 
-    def embed_query(self, query_id: int) -> np.ndarray:
+            self.query_embs[qid] = tensor
+
+    def embed_query(self, query_id: int) -> torch.Tensor:
         return self.query_embs[query_id]
-        
+
     def embed_query_batch(self, query_ids: list[int]) -> Matrix:
         """
         Returns a 2D matrix (N_queries, Dimension) of pre-computed embeddings.
         """
-        # Fetch individual arrays and stack them into a single (N, D) matrix
-        return np.stack([self.query_embs[qid] for qid in query_ids])
+        # Fetch individual tensors and stack them into a single (N, D) tensor
+        return torch.stack([self.query_embs[qid] for qid in query_ids])
 
 
 # --- 4. GPU-Accelerated Vector Store ---
@@ -516,7 +488,7 @@ class StarkGPUVectorStore(VectorStore):
 
     This class wraps GPUVectorStore with STaRK-specific optimizations:
     - Automatic device detection with env var override (SWARM_RAG_DEVICE)
-    - Fallback to FAISS-based store if GPU unavailable
+    - Fallback to PyTorch-based store if GPU unavailable
     - Compatible with existing VectorStore interface
 
     Usage:
@@ -550,21 +522,21 @@ class StarkGPUVectorStore(VectorStore):
             self.n_docs = self._store.n_docs
             self.dim = self._store.dim
         else:
-            logger.info("GPU not available/requested, using FAISS backend")
-            # Fall back to shared-memory FAISS store
+            logger.info("GPU not available/requested, using PyTorch CPU backend")
+            # Fall back to PyTorch-based store
             self._store = StarkInMemoryVectorStore(doc_embs)
             self.n_docs = self._store.n_docs
             self.dim = self._store.dim
 
-        # Build ID lookup
-        self._ids = np.array(sorted(doc_embs.keys()))
-        self.real_id_to_idx = {int(rid): i for i, rid in enumerate(self._ids)}
+        # Build ID lookup using torch
+        self._ids = torch.tensor(sorted(doc_embs.keys()), dtype=torch.long)
+        self.real_id_to_idx = {int(rid): i for i, rid in enumerate(self._ids.tolist())}
 
-    def search(self, query_vec: np.ndarray, limit: int) -> List[Dict]:
+    def search(self, query_vec, limit: int) -> List[Dict]:
         """Find top-k most similar documents."""
         return self._store.search(query_vec, limit)
 
-    def fetch(self, node_id: int) -> Optional[np.ndarray]:
+    def fetch(self, node_id: int) -> Optional[torch.Tensor]:
         """Fetch embedding for a single document."""
         return self._store.fetch(node_id)
 
@@ -577,21 +549,22 @@ class StarkGPUVectorStore(VectorStore):
         Fetch embeddings as GPU tensor (only available when using GPU backend).
 
         Returns:
-            Tuple of (embeddings tensor, valid_ids list) if GPU,
-            or (numpy array, valid_ids) if CPU
+            Tuple of (embeddings tensor, valid_ids tensor/list)
         """
         if self._use_gpu and hasattr(self._store, 'fetch_batch_gpu'):
             return self._store.fetch_batch_gpu(node_ids)
 
-        # Fallback for CPU: return numpy
+        # Fallback for CPU: return tensor
         matrix = self.fetch_batch(node_ids)
-        valid_mask = ~np.isnan(matrix).any(axis=1)
+        if not isinstance(matrix, torch.Tensor):
+            matrix = torch.as_tensor(matrix, dtype=torch.float32)
+        valid_mask = ~torch.isnan(matrix).any(dim=1)
         valid_ids = [nid for i, nid in enumerate(node_ids) if valid_mask[i]]
         return matrix[valid_mask], valid_ids
 
     def compute_similarities(
         self,
-        query_vec: Union[np.ndarray, torch.Tensor],
+        query_vec: Union[torch.Tensor, List],
         candidate_ids: List[int]
     ):
         """
@@ -602,20 +575,26 @@ class StarkGPUVectorStore(VectorStore):
         if self._use_gpu and hasattr(self._store, 'compute_similarities'):
             return self._store.compute_similarities(query_vec, candidate_ids)
 
-        # CPU fallback
+        # CPU fallback using torch
         matrix = self.fetch_batch(candidate_ids)
-        valid_mask = ~np.isnan(matrix).any(axis=1)
+        if not isinstance(matrix, torch.Tensor):
+            matrix = torch.as_tensor(matrix, dtype=torch.float32)
+
+        valid_mask = ~torch.isnan(matrix).any(dim=1)
         valid_ids = [nid for i, nid in enumerate(candidate_ids) if valid_mask[i]]
 
         if len(valid_ids) == 0:
-            return np.array([]), []
+            return torch.tensor([]), []
 
         valid_matrix = matrix[valid_mask]
-        query_vec = np.asarray(query_vec).flatten()
-        query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+
+        if not isinstance(query_vec, torch.Tensor):
+            query_vec = torch.as_tensor(query_vec, dtype=torch.float32)
+        query_vec = query_vec.flatten()
+        query_vec = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
 
         # Cosine similarity
-        similarities = np.dot(valid_matrix, query_vec)
+        similarities = torch.matmul(valid_matrix, query_vec)
         return similarities, valid_ids
 
     @property
@@ -645,13 +624,13 @@ def create_stark_vector_store(
     Args:
         doc_embs: Dictionary mapping doc_id -> embedding tensor
         use_gpu: "auto", "always", "never"
-        shared_name: For shared memory (FAISS backend only)
+        shared_name: Ignored (kept for API compatibility)
 
     Returns:
-        VectorStore instance (GPU or FAISS-backed)
+        VectorStore instance (GPU or PyTorch CPU-backed)
     """
     if use_gpu == "never":
-        return StarkInMemoryVectorStore(doc_embs, shared_name=shared_name)
+        return StarkInMemoryVectorStore(doc_embs)
 
     if use_gpu == "always":
         if not _GPU_AVAILABLE:
@@ -663,4 +642,4 @@ def create_stark_vector_store(
     if device == "cuda" and _GPU_AVAILABLE:
         return StarkGPUVectorStore(doc_embs, use_gpu=True)
 
-    return StarkInMemoryVectorStore(doc_embs, shared_name=shared_name)
+    return StarkInMemoryVectorStore(doc_embs)
