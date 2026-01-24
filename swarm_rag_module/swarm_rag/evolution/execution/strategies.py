@@ -95,9 +95,9 @@ class GeneticStrategies:
     def _mix_params(child: Genome, parent2: Genome):
         """Helper to mix scalar parameters and group ratios uniformly."""
         for key in child.params:
-            if random.random() > 0.5:
+            if key in parent2.params and random.random() > 0.5:
                 child.params[key] = parent2.params[key]
-       
+
         for key in child.group_ratios:
             if key in parent2.group_ratios and random.random() > 0.5:
                 child.group_ratios[key] = parent2.group_ratios[key]
@@ -210,18 +210,6 @@ class GeneticStrategies:
         return winners
 
     @staticmethod
-    @GeneticRegistry.register_selection(GeneticKey.ROULETTE)
-    def roulette_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
-        """
-        Vectorized Roulette Selection (O(N) setup + O(k) sampling).
-        Much faster than calling single roulette k times.
-        """
-        scores = torch.tensor([max(0.001, g.fitness.quality_score) for g in ctx.population])
-        probs = scores / scores.sum()
-        indices = torch.multinomial(probs, num_samples=k, replacement=True)
-        return [ctx.population[i] for i in indices.tolist()]
-
-    @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.BOLTZMANN)
     def boltzmann_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
         """
@@ -281,48 +269,6 @@ class GeneticStrategies:
             ctx.current_temperature = float(torch.clamp(torch.tensor(ctx.current_temperature), min_T, max_T).item())
 
         return selected
-
-    @staticmethod
-    @GeneticRegistry.register_selection(GeneticKey.STOCHASTIC_UNIVERSAL_SAMPLING)
-    def stochastic_universal_sampling(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
-        """
-        Vectorized SUS (Stochastic Universal Sampling).
-        Uses searchsorted for O(log N) lookup instead of O(N) linear scan.
-        """
-        scores = torch.tensor([max(0.001, g.fitness.quality_score) for g in ctx.population])
-
-        cum_scores = torch.cumsum(scores, dim=0)
-        total_fit = cum_scores[-1].item()
-
-        if total_fit <= 0:
-            return random.choices(ctx.population, k=k)
-
-        step = total_fit / k
-        start = random.uniform(0, step)
-        points = torch.tensor([start + i * step for i in range(k)])
-
-        indices = torch.searchsorted(cum_scores, points)
-        indices = torch.clamp(indices, 0, len(ctx.population) - 1)
-        return [ctx.population[i] for i in indices.tolist()]
-
-    @staticmethod
-    @GeneticRegistry.register_selection(GeneticKey.TRUNCATION)
-    def truncation_selection(ctx: EvolutionContext, k: int = 1) -> List[Genome]:
-        """
-        Adaptive Truncation (Batched).
-        """
-        max_gens = ctx.config.n_generations
-        progress = ctx.generation / max(1, max_gens)
-        
-        start_k = 0.5 
-        end_k = 0.1    
-        current_k = start_k - ((start_k - end_k) * progress)
-        
-        pop_size = len(ctx.population)
-        cutoff = max(1, int(pop_size * current_k))
-        
-        pool = ctx.population[:cutoff]
-        return random.choices(pool, k=k)
 
     # --- CROSSOVER ---
 
