@@ -8,7 +8,7 @@ import os
 import random
 import pickle
 import numpy as np
-from typing import List, Any, Union, Dict
+from typing import List, Any, Optional
 import logging
 
 from ..interfaces.enums import GeneticKey
@@ -22,7 +22,6 @@ from .types.config import (
     EvolutionConfig,
     EvolutionContext,
     DEFAULT_CONFIG,
-    DEFAULT_EVO_CONFIG,
 )
 
 from .execution.evaluator import PopulationEvaluator
@@ -54,15 +53,11 @@ class EvolutionEngine:
     specialized retrieval strategies, with optional LLM-guided mutations.
 
     Example:
-        # Using new dataclass config
         config = EvolutionConfig(
             n_generations=100,
             map_elites=MapElitesConfig(bins=[20, 15]),
             llm=LLMConfig(enabled=True)
         )
-
-        # Or using legacy flat dict
-        config = {"n_generations": 100, "map_elites_enabled": True, ...}
 
         engine = EvolutionEngine(
             retriever=retriever,
@@ -86,7 +81,7 @@ class EvolutionEngine:
         train_ground_truth: List[List[Any]],
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
-        config: Union[EvolutionConfig, Dict[str, Any]] = None,
+        config: Optional[EvolutionConfig] = None,
         genome_factory: "GenomeFactory" = None,
         overwrite_logs: bool = True,
     ):
@@ -101,15 +96,11 @@ class EvolutionEngine:
             train_ground_truth: Training ground truth
             val_query_ids: Validation query IDs
             val_ground_truth: Validation ground truth
-            config: Evolution configuration (EvolutionConfig dataclass or legacy dict)
+            config: Evolution configuration (EvolutionConfig dataclass)
             genome_factory: Optional pre-configured genome factory
             overwrite_logs: Whether to overwrite existing log files
         """
-        # Normalize config to EvolutionConfig dataclass
-        self.evo_config = self._normalize_config(config)
-
-        # Get flat dict for backwards compatibility with existing code
-        self._flat_config = self.evo_config.to_flat_dict()
+        self.evo_config = config if config is not None else DEFAULT_CONFIG
 
         self.train_query_ids = train_query_ids
         self.train_gt = train_ground_truth
@@ -195,20 +186,6 @@ class EvolutionEngine:
         # For checkpoint restoration
         self.restored_best_genome = None
 
-    def _normalize_config(self, config) -> EvolutionConfig:
-        """Convert config to EvolutionConfig dataclass if needed."""
-        if config is None:
-            return DEFAULT_CONFIG
-
-        if isinstance(config, EvolutionConfig):
-            return config
-
-        # Legacy flat dict - convert to dataclass
-        if isinstance(config, dict):
-            return EvolutionConfig.from_flat_dict(config)
-
-        raise TypeError(f"config must be EvolutionConfig or dict, got {type(config)}")
-
     def _initialize_llm_provider(self):
         """Initialize LLM provider for LLM-guided mutations."""
         from .llm.factory import LLMProviderFactory
@@ -264,7 +241,7 @@ class EvolutionEngine:
         train_ground_truth: List[List[Any]],
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
-        config: Union[EvolutionConfig, Dict[str, Any]],
+        config: EvolutionConfig,
     ) -> "EvolutionEngine":
         """
         Factory method: Creates a NEW engine instance and restores state from disk.
@@ -322,9 +299,3 @@ class EvolutionEngine:
 
         print(f"  State restored. Resuming from Generation {state['generation']}")
         return engine
-
-    # Backwards compatibility property
-    @property
-    def config(self) -> Dict[str, Any]:
-        """Get flat config dict for backwards compatibility."""
-        return self._flat_config

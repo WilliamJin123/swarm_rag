@@ -6,7 +6,8 @@ import random
 import pickle
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any, Union, Dict
+from datetime import datetime
+from typing import List, Optional, Any
 
 import numpy as np
 
@@ -61,12 +62,6 @@ class BaseOrchestrator(ABC):
         self.logger: Optional[logging.Logger] = None
         self.restored_best_genome: Optional[Genome] = None
 
-    # Property for backwards compatibility
-    @property
-    def config(self) -> Dict[str, Any]:
-        """Get config as flat dict for backwards compatibility."""
-        return self.evo_config.to_flat_dict()
-
     def setup_logging(self) -> logging.Logger:
         """
         Configures logging for the evolution run.
@@ -83,7 +78,10 @@ class BaseOrchestrator(ABC):
 
         # File handler for detailed logs
         log_path = self.evo_config.checkpoint.log_path
-        log_file_path = log_path.replace(".json", ".log").replace(".jsonl", ".log")
+        # Fix replacement order and add timestamp for unique log files per run
+        base_log = log_path.replace(".jsonl", "").replace(".json", "")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file_path = f"{base_log}_{timestamp}.log"
         log_dir = os.path.dirname(log_file_path)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
