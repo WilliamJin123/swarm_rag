@@ -10,7 +10,7 @@ Provides multiple fitness calculation modes for MAP-Elites evolution:
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 from swarm_rag.evolution.types.fitness_results import FitnessResult
 from swarm_rag.evolution.types.genome import Genome
@@ -31,48 +31,6 @@ class MetricConfig:
     weight: float = 1.0
     threshold: float = 0.5  # Target threshold to achieve
     min_acceptable: float = 0.1  # Below this is penalized
-    difficulty: float = 1.0  # Scaling factor for curriculum
-
-
-@dataclass
-class CurriculumSchedule:
-    """
-    Curriculum learning schedule for progressive difficulty.
-
-    Defines how metric weights change across generations.
-    """
-    # Phase boundaries (generation numbers)
-    phase_boundaries: List[int] = field(default_factory=lambda: [15, 40, 70])
-
-    # Weight schedules per metric per phase
-    # Keys: metric names, Values: list of weights per phase
-    # Phases: [early, mid, late, final]
-    weight_schedules: Dict[str, List[float]] = field(default_factory=lambda: {
-        "Hit@1": [0.10, 0.15, 0.25, 0.35],
-        "Hit@5": [0.20, 0.25, 0.30, 0.25],
-        "MRR": [0.30, 0.35, 0.30, 0.25],
-        "Recall@20": [0.40, 0.25, 0.15, 0.15],
-    })
-
-    def get_weights_for_generation(self, generation: int) -> Dict[str, float]:
-        """Get metric weights for a specific generation."""
-        # Determine phase
-        phase = 0
-        for i, boundary in enumerate(self.phase_boundaries):
-            if generation >= boundary:
-                phase = i + 1
-
-        # Cap at last phase
-        phase = min(phase, len(self.phase_boundaries))
-
-        weights = {}
-        for metric, schedule in self.weight_schedules.items():
-            if phase < len(schedule):
-                weights[metric] = schedule[phase]
-            else:
-                weights[metric] = schedule[-1]  # Use last value
-
-        return weights
 
 
 @dataclass
@@ -87,10 +45,6 @@ class FitnessConfig:
         "MRR": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.20),
         "Recall@20": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.30),
     })
-
-    # Curriculum learning
-    use_curriculum: bool = False
-    curriculum: CurriculumSchedule = field(default_factory=CurriculumSchedule)
 
     # Mode-specific parameters
     threshold_bonus_amount: float = 0.05  # Bonus per threshold met
@@ -117,11 +71,11 @@ class FitnessCalculator:
         calc = FitnessCalculator(weights={"Recall@20": 0.7, "MRR": 0.3})
 
         # Full config
-        config = FitnessConfig(mode=FitnessMode.HYBRID, use_curriculum=True)
+        config = FitnessConfig(mode=FitnessMode.HYBRID)
         calc = FitnessCalculator(config=config)
 
         # Factory function
-        calc = create_fitness_calculator(mode="hybrid", use_curriculum=True)
+        calc = create_fitness_calculator(mode="hybrid")
     """
 
     def __init__(
@@ -170,13 +124,13 @@ class FitnessCalculator:
         Args:
             metrics: Dict of metric name -> value
             genome: The genome being evaluated
-            generation: Current generation (for curriculum learning)
+            generation: Current generation (unused, kept for API compatibility)
 
         Returns:
             FitnessResult with quality, stability, and cost scores
         """
-        # Get effective weights (potentially modified by curriculum)
-        effective_weights = self._get_effective_weights(generation)
+        # Get weights from config
+        effective_weights = self._get_weights()
 
         # Calculate quality based on mode
         mode = self.config.mode
@@ -204,12 +158,8 @@ class FitnessCalculator:
             cost_score=cost
         )
 
-    def _get_effective_weights(self, generation: int) -> Dict[str, float]:
-        """Get weights, potentially modified by curriculum."""
-        if self.config.use_curriculum:
-            return self.config.curriculum.get_weights_for_generation(generation)
-
-        # Use static weights from metric configs
+    def _get_weights(self) -> Dict[str, float]:
+        """Get weights from metric configs."""
         return {
             name: cfg.weight
             for name, cfg in self.config.metric_configs.items()
@@ -369,7 +319,6 @@ class FitnessCalculator:
 def create_fitness_calculator(
     mode: str = "weighted_sum",
     weights: Optional[Dict[str, float]] = None,
-    use_curriculum: bool = False,
     thresholds: Optional[Dict[str, float]] = None
 ) -> FitnessCalculator:
     """
@@ -379,7 +328,6 @@ def create_fitness_calculator(
         mode: Fitness mode name (weighted_sum, min_metric, geometric_mean,
               threshold_bonus, hybrid)
         weights: Optional custom weights per metric
-        use_curriculum: Whether to use curriculum learning
         thresholds: Optional custom thresholds per metric
 
     Returns:
@@ -413,7 +361,6 @@ def create_fitness_calculator(
     config = FitnessConfig(
         mode=mode_enum,
         metric_configs=default_configs,
-        use_curriculum=use_curriculum
     )
 
     return FitnessCalculator(config=config)

@@ -23,7 +23,6 @@ from swarm_rag.evolution.execution.fitness import (
     FitnessConfig,
     FitnessMode,
     MetricConfig,
-    CurriculumSchedule,
     create_fitness_calculator,
 )
 from swarm_rag.eval import Evaluator
@@ -40,12 +39,6 @@ from swarm_rag.evolution.types.config import (
 
 # Import storage
 from swarm_rag.evolution.storage import RunManager
-
-# Import archive comparator config
-from swarm_rag.evolution.map_elites.archive import (
-    ArchiveComparatorConfig,
-    ArchiveComparisonMode,
-)
 
 # Import STaRK integrations
 from swarm_rag.integrations.stark import (
@@ -84,7 +77,6 @@ CONFIG = {
     "mutation_strategy": "guided_mutation",
     "creation_strategy": "baseline_seeded_initialization",
     "fitness_mode": "hybrid",
-    "use_curriculum": True,
 
     # GPU mode: "auto", "always", "never"
     "use_gpu": "auto",
@@ -151,7 +143,6 @@ def run_evolution(
     creation_strategy: str = "baseline_seeded_initialization",
     use_gpu: str = "auto",
     fitness_mode: str = "hybrid",
-    use_curriculum: bool = True,
 ):
     """
     Run MAP-Elites evolutionary optimization.
@@ -181,7 +172,6 @@ def run_evolution(
         creation_strategy: Strategy for initial population
         use_gpu: GPU mode - "auto" (detect), "always" (require), "never" (CPU only)
         fitness_mode: Fitness calculation mode (hybrid recommended)
-        use_curriculum: Enable curriculum learning (progressive weight schedule)
     """
     print(f"\n{'='*60}")
     print("MAP-ELITES EVOLUTION")
@@ -191,7 +181,6 @@ def run_evolution(
     print(f"Batch Size: {pop_size}")
     print(f"Initial Fill: {initial_fill}")
     print(f"Fitness Mode: {fitness_mode}")
-    print(f"Curriculum: {use_curriculum}")
     print(f"Creation Strategy: {creation_strategy}")
     print(f"Mutation Strategy: {mutation_strategy}")
     print(f"LLM Enabled: {llm_enabled}")
@@ -284,11 +273,10 @@ def run_evolution(
             "MRR": 0.25,
             "Recall@20": 0.25,
         },
-        use_curriculum=use_curriculum,
         thresholds={
             "Hit@1": 0.50,
-            "Hit@5": 0.70,
-            "MRR": 0.80,
+            "Hit@5": 0.75,    # updated from 0.70
+            "MRR": 0.70,      # updated from 0.80
             "Recall@20": 0.80,
         }
     )

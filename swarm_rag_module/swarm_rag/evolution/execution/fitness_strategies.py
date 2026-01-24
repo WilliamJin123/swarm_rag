@@ -154,17 +154,3 @@ class ParetoStrategy(FitnessStrategy):
                 next_obj = objectives[sorted_front[i+1], m_idx]
                 distances[sorted_front[i]] += (next_obj - prev_obj) / norm
 
-class PhasedStrategy(FitnessStrategy):
-    """
-    Starts with Pareto (Exploration) and switches to Lexicographic (Exploitation).
-    """
-    def __init__(self, switch_gen: int = 10):
-        self.switch_gen = switch_gen
-        self.pareto = ParetoStrategy()
-        self.lex = LexicographicStrategy()
-        
-    def assign_fitness(self, population: List[Genome], generation: int = 0) -> None:
-        if generation < self.switch_gen:
-            self.pareto.assign_fitness(population, generation)
-        else:
-            self.lex.assign_fitness(population, generation)

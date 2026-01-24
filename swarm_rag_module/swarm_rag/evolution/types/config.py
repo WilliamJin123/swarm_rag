@@ -55,6 +55,7 @@ class MapElitesConfig:
     ranges: List[Tuple[float, float]] = field(default_factory=lambda: [(10.0, 150.0), (5.0, 60.0)])
     initial_fill: int = 100
     batch_size: int = 30  # offspring per generation
+    comparison_mode: str = "quality_only"  # quality_only, weighted_composite, metric_threshold, lexicographic
 
 
 @dataclass
@@ -253,8 +254,7 @@ class EvolutionConfig:
     """
     # Core loop settings
     n_generations: int = 50
-    fitness_strategy: str = "lexicographic"  # lexicographic, pareto, phased
-    phased_switch_gen: int = 25  # Only used if fitness_strategy == "phased"
+    fitness_strategy: str = "lexicographic"  # lexicographic, pareto
 
     # Nested configs
     resources: ResourceConfig = field(default_factory=ResourceConfig)
