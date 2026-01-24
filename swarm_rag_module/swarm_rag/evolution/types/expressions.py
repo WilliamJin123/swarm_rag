@@ -72,12 +72,12 @@ class ExpressionNode:
                 denom = torch.where(right_tensor == 0, torch.tensor(1e-8), right_tensor) if isinstance(right_tensor, torch.Tensor) else (right if right != 0 else 1e-8)
                 return left / denom
             elif self.value == 'max':
-                left_tensor = torch.as_tensor(left) if not isinstance(left, torch.Tensor) else left
-                right_tensor = torch.as_tensor(right) if not isinstance(right, torch.Tensor) else right
+                left_tensor = left if isinstance(left, torch.Tensor) else torch.tensor(float(left))
+                right_tensor = right if isinstance(right, torch.Tensor) else torch.tensor(float(right))
                 return torch.maximum(left_tensor, right_tensor)
             elif self.value == 'min':
-                left_tensor = torch.as_tensor(left) if not isinstance(left, torch.Tensor) else left
-                right_tensor = torch.as_tensor(right) if not isinstance(right, torch.Tensor) else right
+                left_tensor = left if isinstance(left, torch.Tensor) else torch.tensor(float(left))
+                right_tensor = right if isinstance(right, torch.Tensor) else torch.tensor(float(right))
                 return torch.minimum(left_tensor, right_tensor)
 
         return 0.0
@@ -187,7 +187,7 @@ class ExpressionNode:
         This is used for fast compilation into a lambda function.
         """
         if self.type == 'const':
-            return str(self.value)
+            return f"torch.tensor({self.value})"
 
         elif self.type == 'feature':
             # e.g., "node.degree" -> "node_degree"
@@ -196,7 +196,7 @@ class ExpressionNode:
 
         elif self.type == 'func':
             if not self.children:
-                return "0.0"
+                return "torch.tensor(0.0)"
             child_code = self.children[0].to_code_string()
 
             if self.value == 'square':
@@ -222,7 +222,7 @@ class ExpressionNode:
             if len(self.children) < 2:
                 if len(self.children) == 1 and self.value == '-':
                     return f"(-{self.children[0].to_code_string()})"
-                return "0.0"
+                return "torch.tensor(0.0)"
 
             left_code = self.children[0].to_code_string()
             right_code = self.children[1].to_code_string()
@@ -236,13 +236,13 @@ class ExpressionNode:
             elif self.value == '/':
                 return f"({left_code} / ({right_code} + 1e-8))"
             elif self.value == 'max':
-                return f"torch.maximum({left_code}, {right_code})"
+                return f"torch.maximum(torch.as_tensor({left_code}), torch.as_tensor({right_code}))"
             elif self.value == 'min':
-                return f"torch.minimum({left_code}, {right_code})"
+                return f"torch.minimum(torch.as_tensor({left_code}), torch.as_tensor({right_code}))"
             else:
                 return left_code
 
-        return "0.0"
+        return "torch.tensor(0.0)"
     
     def compile(self, arg_names: List[str]) -> Callable:
         """
