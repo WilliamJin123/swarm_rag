@@ -8,15 +8,13 @@ Memory footprint: ~65MB for prime dataset (129K nodes, 16M edges)
 vs ~17GB for dense format (99.6% reduction)
 """
 
-from typing import Dict, List, Optional, Tuple, Union, TYPE_CHECKING
-import numpy as np
+from typing import Dict, List, Optional, Tuple, Union, Sequence
+
+import torch
 import scipy.sparse as sp
 
 from ..interfaces.abstract_classes import GraphStore
 from ..utils.device import get_device
-
-if TYPE_CHECKING:
-    import torch
 
 import logging
 logger = logging.getLogger(__name__)
@@ -49,9 +47,9 @@ class GPUGraphStore(GraphStore):
 
     def __init__(
         self,
-        crow_indices: "torch.Tensor",
-        col_indices: "torch.Tensor",
-        degree_tensor: "torch.Tensor",
+        crow_indices: torch.Tensor,
+        col_indices: torch.Tensor,
+        degree_tensor: torch.Tensor,
         n_nodes: int,
         avg_degree: float,
         device: str = None
@@ -68,8 +66,6 @@ class GPUGraphStore(GraphStore):
             avg_degree: Average degree of the graph
             device: Target device ("cuda" or "cpu")
         """
-        import torch
-
         self._device = device or get_device()
         self._n_nodes = n_nodes
         self._avg_degree = avg_degree
@@ -127,8 +123,6 @@ class GPUGraphStore(GraphStore):
         Returns:
             GPUGraphStore instance
         """
-        import torch
-
         if not adj_dict:
             raise ValueError("Cannot create store from empty adjacency dict")
 
@@ -136,8 +130,8 @@ class GPUGraphStore(GraphStore):
         nodes = sorted(adj_dict.keys())
         n_nodes = max(nodes) + 1 if nodes else 0
 
-        # Build CSR format directly
-        indptr = np.zeros(n_nodes + 1, dtype=np.int64)
+        # Build CSR format directly using lists (then convert to tensors)
+        indptr = [0] * (n_nodes + 1)
         total_edges = 0
 
         # First pass: compute degrees and indptr
@@ -147,27 +141,28 @@ class GPUGraphStore(GraphStore):
             indptr[node_id + 1] = indptr[node_id] + deg
             total_edges += deg
 
-        # Allocate indices array
-        indices = np.zeros(total_edges, dtype=np.int64)
+        # Allocate indices list
+        indices = [0] * total_edges
 
         # Second pass: fill indices
         for node_id in range(n_nodes):
             neighbors = adj_dict.get(node_id, [])
             if neighbors:
                 start = indptr[node_id]
-                indices[start:start + len(neighbors)] = neighbors
+                for i, neighbor in enumerate(neighbors):
+                    indices[start + i] = neighbor
 
         # Compute degrees
-        degrees = np.diff(indptr).astype(np.int32)
+        degrees = [indptr[i + 1] - indptr[i] for i in range(n_nodes)]
 
         if avg_degree is None:
-            non_zero_nodes = np.sum(degrees > 0)
+            non_zero_nodes = sum(1 for d in degrees if d > 0)
             avg_degree = total_edges / non_zero_nodes if non_zero_nodes > 0 else 0.0
 
         return cls(
-            crow_indices=torch.from_numpy(indptr),
-            col_indices=torch.from_numpy(indices),
-            degree_tensor=torch.from_numpy(degrees),
+            crow_indices=torch.tensor(indptr, dtype=torch.long),
+            col_indices=torch.tensor(indices, dtype=torch.long),
+            degree_tensor=torch.tensor(degrees, dtype=torch.int32),
             n_nodes=n_nodes,
             avg_degree=avg_degree,
             device=device
@@ -191,31 +186,29 @@ class GPUGraphStore(GraphStore):
         Returns:
             GPUGraphStore instance
         """
-        import torch
-
         n_nodes = csr_matrix.shape[0]
 
-        # Directly use CSR components - no dense conversion needed!
-        indptr = csr_matrix.indptr.astype(np.int64)
-        indices = csr_matrix.indices.astype(np.int64)
+        # Convert CSR components directly to torch tensors
+        indptr = torch.tensor(csr_matrix.indptr, dtype=torch.long)
+        indices = torch.tensor(csr_matrix.indices, dtype=torch.long)
 
         # Compute degrees from CSR structure
-        degrees = np.diff(indptr).astype(np.int32)
+        degrees = indptr[1:] - indptr[:-1]
 
         if avg_degree is None:
-            non_zero = np.sum(degrees > 0)
-            avg_degree = float(np.sum(degrees)) / non_zero if non_zero > 0 else 0.0
+            non_zero = (degrees > 0).sum().item()
+            avg_degree = float(degrees.sum().item()) / non_zero if non_zero > 0 else 0.0
 
         return cls(
-            crow_indices=torch.from_numpy(indptr),
-            col_indices=torch.from_numpy(indices),
-            degree_tensor=torch.from_numpy(degrees),
+            crow_indices=indptr,
+            col_indices=indices,
+            degree_tensor=degrees.to(torch.int32),
             n_nodes=n_nodes,
             avg_degree=avg_degree,
             device=device
         )
 
-    def get_neighbors(self, node_id: int) -> np.ndarray:
+    def get_neighbors(self, node_id: int) -> torch.Tensor:
         """
         Get neighbors for a single node (GraphStore interface).
 
@@ -223,23 +216,23 @@ class GPUGraphStore(GraphStore):
             node_id: Node ID to get neighbors for
 
         Returns:
-            Array of neighbor node IDs
+            Tensor of neighbor node IDs
         """
         if node_id < 0 or node_id >= self._n_nodes:
-            return np.array([], dtype=np.int64)
+            return torch.tensor([], dtype=torch.long)
 
         start = self._crow_indices[node_id].item()
         end = self._crow_indices[node_id + 1].item()
 
         if start == end:
-            return np.array([], dtype=np.int64)
+            return torch.tensor([], dtype=torch.long)
 
-        return self._col_indices[start:end].cpu().numpy()
+        return self._col_indices[start:end].cpu()
 
     def get_neighbors_batch(
         self,
-        node_ids: Union[List[int], np.ndarray, "torch.Tensor"]
-    ) -> Tuple["torch.Tensor", "torch.Tensor"]:
+        node_ids: Union[List[int], torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Batch neighbor lookup for multiple nodes.
 
@@ -247,7 +240,7 @@ class GPUGraphStore(GraphStore):
         for multiple nodes using vectorized CSR extraction.
 
         Args:
-            node_ids: Tensor/array/list of node IDs
+            node_ids: Tensor/list of node IDs
 
         Returns:
             Tuple of:
@@ -256,13 +249,9 @@ class GPUGraphStore(GraphStore):
                 - mask: Boolean tensor of shape (batch_size, batch_max_degree)
                   True where valid neighbors exist
         """
-        import torch
-
         # Convert to tensor on device
         if isinstance(node_ids, torch.Tensor):
             ids = node_ids.to(device=self._device, dtype=torch.long)
-        elif isinstance(node_ids, np.ndarray):
-            ids = torch.from_numpy(node_ids).to(device=self._device, dtype=torch.long)
         else:
             ids = torch.tensor(node_ids, device=self._device, dtype=torch.long)
 
@@ -359,24 +348,20 @@ class GPUGraphStore(GraphStore):
 
     def get_degrees_batch(
         self,
-        node_ids: Union[List[int], np.ndarray, "torch.Tensor"]
-    ) -> "torch.Tensor":
+        node_ids: Union[List[int], torch.Tensor]
+    ) -> torch.Tensor:
         """
         Batch degree lookup for multiple nodes.
 
         Args:
-            node_ids: Tensor/array/list of node IDs
+            node_ids: Tensor/list of node IDs
 
         Returns:
             Tensor of degrees for each node
         """
-        import torch
-
         # Convert to tensor on device
         if isinstance(node_ids, torch.Tensor):
             ids = node_ids.to(device=self._device, dtype=torch.long)
-        elif isinstance(node_ids, np.ndarray):
-            ids = torch.from_numpy(node_ids).to(device=self._device, dtype=torch.long)
         else:
             ids = torch.tensor(node_ids, device=self._device, dtype=torch.long)
 
@@ -412,6 +397,65 @@ class GPUGraphStore(GraphStore):
     def get_avg_degree(self) -> float:
         """Return average graph degree."""
         return self._avg_degree
+
+    # ===== Tensor-native interface methods (GPU-optimized) =====
+
+    def get_neighbors_tensor(
+        self,
+        node_id: int,
+        device: str = None
+    ) -> torch.Tensor:
+        """
+        Get neighbors as tensor on device.
+
+        GPU-optimized: keeps data on GPU when possible.
+
+        Args:
+            node_id: Node to get neighbors for
+            device: Target device (None uses store's device)
+
+        Returns:
+            1D tensor of neighbor IDs on device
+        """
+        target_device = device or self._device
+
+        if node_id < 0 or node_id >= self._n_nodes:
+            return torch.tensor([], device=target_device, dtype=torch.long)
+
+        start = self._crow_indices[node_id].item()
+        end = self._crow_indices[node_id + 1].item()
+
+        if start == end:
+            return torch.tensor([], device=target_device, dtype=torch.long)
+
+        return self._col_indices[start:end].to(target_device)
+
+    def get_neighbors_batch_tensor(
+        self,
+        node_ids: Union[Sequence[int], torch.Tensor],
+        device: str = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Batch neighbor lookup returning tensors.
+
+        Delegates to the optimized get_neighbors_batch method.
+
+        Args:
+            node_ids: Sequence or tensor of node IDs
+            device: Target device (None uses store's device)
+
+        Returns:
+            Tuple of (neighbors tensor, valid mask tensor)
+        """
+        target_device = device or self._device
+        neighbors, mask = self.get_neighbors_batch(node_ids)
+        if device and device != self._device:
+            return neighbors.to(target_device), mask.to(target_device)
+        return neighbors, mask
+
+    def supports_tensor_ops(self) -> bool:
+        """Check if this store has optimized tensor operations."""
+        return True
 
     @property
     def n_nodes(self) -> int:
@@ -456,8 +500,6 @@ class GPUGraphStore(GraphStore):
         Deletes CSR tensors (crow_indices, col_indices, degrees) and clears CUDA cache.
         Safe to call multiple times.
         """
-        import torch
-
         if hasattr(self, '_crow_indices') and self._crow_indices is not None:
             del self._crow_indices
             self._crow_indices = None

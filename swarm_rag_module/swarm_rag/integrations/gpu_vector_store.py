@@ -5,18 +5,46 @@ Replaces FAISS with pure PyTorch operations to avoid CPU-GPU data transfers.
 All operations stay on GPU when available, providing 12-36x speedup for vector search.
 """
 
-from typing import Dict, List, Optional, Tuple, Union, TYPE_CHECKING
-import numpy as np
-from numpy.typing import NDArray
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Union, Sequence, Any
 
-from ..utils.device import get_device, ensure_tensor, to_numpy
+import torch
+
+from ..utils.device import get_device, ensure_tensor
 from ..interfaces.abstract_classes import VectorStore, Matrix
-
-if TYPE_CHECKING:
-    import torch
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TensorSearchResult:
+    """
+    GPU-native search result that stays on device until explicitly converted.
+
+    Provides lazy conversion to dict format for backward compatibility.
+    """
+    ids: torch.Tensor      # Shape: (k,), dtype: long
+    scores: torch.Tensor   # Shape: (k,), dtype: float32
+
+    def to_dicts(self) -> List[Dict[str, Any]]:
+        """Convert to list of dicts for legacy interface compatibility."""
+        ids_cpu = self.ids.cpu().tolist()
+        scores_cpu = self.scores.cpu().tolist()
+        return [
+            {'id': int(i), 'score': float(s)}
+            for i, s in zip(ids_cpu, scores_cpu)
+        ]
+
+    def to_device(self, device: str) -> "TensorSearchResult":
+        """Move result to a different device."""
+        return TensorSearchResult(
+            ids=self.ids.to(device),
+            scores=self.scores.to(device)
+        )
+
+    def __len__(self) -> int:
+        return self.ids.shape[0]
 
 
 class GPUVectorStore(VectorStore):
@@ -42,8 +70,8 @@ class GPUVectorStore(VectorStore):
 
     def __init__(
         self,
-        embeddings: "torch.Tensor",
-        ids: Union[np.ndarray, List[int]],
+        embeddings: torch.Tensor,
+        ids: Union[torch.Tensor, List[int]],
         device: str = None,
         normalize: bool = True
     ):
@@ -52,12 +80,10 @@ class GPUVectorStore(VectorStore):
 
         Args:
             embeddings: Tensor of shape (N, D) containing document embeddings
-            ids: Array/list of document IDs corresponding to each row
+            ids: Tensor/list of document IDs corresponding to each row
             device: Target device ("cuda" or "cpu"), auto-detected if None
             normalize: Whether to L2-normalize embeddings for cosine similarity
         """
-        import torch
-
         self._device = device or get_device()
         self._dtype = torch.float32
 
@@ -75,9 +101,12 @@ class GPUVectorStore(VectorStore):
                 self._embeddings, p=2, dim=1
             )
 
-        # Store IDs
-        self._ids = np.asarray(ids)
-        self._id_to_idx = {int(real_id): i for i, real_id in enumerate(self._ids)}
+        # Store IDs as tensor
+        if isinstance(ids, torch.Tensor):
+            self._ids = ids.to(device='cpu', dtype=torch.long)
+        else:
+            self._ids = torch.tensor(list(ids), dtype=torch.long)
+        self._id_to_idx = {int(real_id): i for i, real_id in enumerate(self._ids.tolist())}
 
         self.n_docs = len(self._ids)
         self.dim = self._embeddings.shape[1]
@@ -90,7 +119,7 @@ class GPUVectorStore(VectorStore):
     @classmethod
     def from_dict(
         cls,
-        doc_embs: Dict[int, Union[np.ndarray, "torch.Tensor"]],
+        doc_embs: Dict[int, Union[list, torch.Tensor]],
         device: str = None
     ) -> "GPUVectorStore":
         """
@@ -103,14 +132,12 @@ class GPUVectorStore(VectorStore):
         Returns:
             GPUVectorStore instance
         """
-        import torch
-
         if not doc_embs:
             raise ValueError("Cannot create store from empty dictionary")
 
         # Sort keys for deterministic ordering
         sorted_ids = sorted(doc_embs.keys())
-        ids = np.array(sorted_ids)
+        ids = torch.tensor(sorted_ids, dtype=torch.long)
 
         # Stack embeddings
         first_emb = doc_embs[sorted_ids[0]]
@@ -120,10 +147,10 @@ class GPUVectorStore(VectorStore):
                 for i in sorted_ids
             ])
         else:
-            embeddings = np.stack([
-                np.asarray(doc_embs[i]).squeeze() for i in sorted_ids
+            # Convert list/array to tensor
+            embeddings = torch.stack([
+                torch.as_tensor(doc_embs[i]).squeeze() for i in sorted_ids
             ])
-            embeddings = torch.from_numpy(embeddings)
 
         # Ensure 2D: (n_docs, dim)
         if embeddings.dim() == 1:
@@ -135,7 +162,7 @@ class GPUVectorStore(VectorStore):
 
     def search(
         self,
-        query_vec: Union[np.ndarray, "torch.Tensor"],
+        query_vec: Union[list, torch.Tensor],
         limit: int
     ) -> List[Dict]:
         """
@@ -148,10 +175,8 @@ class GPUVectorStore(VectorStore):
         Returns:
             List of dicts with 'id' and 'score' keys, sorted by score descending
         """
-        import torch
-
         # Ensure query is on device and normalized
-        if isinstance(query_vec, np.ndarray):
+        if not isinstance(query_vec, torch.Tensor):
             query = torch.tensor(
                 query_vec, device=self._device, dtype=self._dtype
             )
@@ -171,8 +196,8 @@ class GPUVectorStore(VectorStore):
         scores, indices = torch.topk(similarities, k=k, largest=True)
 
         # Convert to list of dicts
-        scores_cpu = scores.cpu().numpy()
-        indices_cpu = indices.cpu().numpy()
+        scores_cpu = scores.cpu().tolist()
+        indices_cpu = indices.cpu().tolist()
 
         results = []
         for score, idx in zip(scores_cpu, indices_cpu):
@@ -183,7 +208,7 @@ class GPUVectorStore(VectorStore):
 
     def search_batch(
         self,
-        query_vecs: Union[np.ndarray, "torch.Tensor"],
+        query_vecs: Union[list, torch.Tensor],
         limit: int
     ) -> List[List[Dict]]:
         """
@@ -196,10 +221,8 @@ class GPUVectorStore(VectorStore):
         Returns:
             List of result lists, one per query
         """
-        import torch
-
         # Convert and normalize queries
-        if isinstance(query_vecs, np.ndarray):
+        if not isinstance(query_vecs, torch.Tensor):
             queries = torch.tensor(
                 query_vecs, device=self._device, dtype=self._dtype
             )
@@ -217,8 +240,8 @@ class GPUVectorStore(VectorStore):
         scores, indices = torch.topk(similarities, k=k, dim=1, largest=True)
 
         # Convert to list of results
-        scores_cpu = scores.cpu().numpy()
-        indices_cpu = indices.cpu().numpy()
+        scores_cpu = scores.cpu().tolist()
+        indices_cpu = indices.cpu().tolist()
 
         all_results = []
         for q_idx in range(len(queries)):
@@ -230,7 +253,7 @@ class GPUVectorStore(VectorStore):
 
         return all_results
 
-    def fetch(self, node_id: int) -> Optional[np.ndarray]:
+    def fetch(self, node_id: int) -> Optional[torch.Tensor]:
         """
         Fetch embedding vector for a single document.
 
@@ -238,14 +261,14 @@ class GPUVectorStore(VectorStore):
             node_id: Document ID
 
         Returns:
-            Embedding vector as numpy array, or None if not found
+            Embedding vector as tensor, or None if not found
         """
         idx = self._id_to_idx.get(node_id)
         if idx is None:
             logger.warning(f"Document ID {node_id} not found in store")
             return None
 
-        return self._embeddings[idx].cpu().numpy()
+        return self._embeddings[idx].cpu()
 
     def fetch_batch(self, node_ids: List[int]) -> Matrix:
         """
@@ -255,13 +278,11 @@ class GPUVectorStore(VectorStore):
             node_ids: List of document IDs
 
         Returns:
-            2D numpy array of shape (len(node_ids), dim).
+            2D tensor of shape (len(node_ids), dim).
             Missing documents have NaN values.
         """
-        import torch
-
-        # Create result array with NaN for missing
-        result = np.full((len(node_ids), self.dim), np.nan, dtype=np.float32)
+        # Create result tensor with NaN for missing
+        result = torch.full((len(node_ids), self.dim), float('nan'), dtype=torch.float32)
 
         # Find valid indices
         valid_pairs = []  # (output_idx, internal_idx)
@@ -277,7 +298,7 @@ class GPUVectorStore(VectorStore):
             )
 
             # Batch index and transfer to CPU
-            fetched = self._embeddings[int_indices_tensor].cpu().numpy()
+            fetched = self._embeddings[int_indices_tensor].cpu()
 
             for i, out_idx in enumerate(out_indices):
                 result[out_idx] = fetched[i]
@@ -286,8 +307,8 @@ class GPUVectorStore(VectorStore):
 
     def fetch_batch_gpu(
         self,
-        doc_ids: Union[List[int], "torch.Tensor"]
-    ) -> Tuple["torch.Tensor", "torch.Tensor"]:
+        doc_ids: Union[List[int], torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Fetch embeddings for batch of doc IDs, keeping everything on GPU.
 
@@ -297,8 +318,6 @@ class GPUVectorStore(VectorStore):
         Returns:
             Tuple of (embeddings tensor, valid_ids tensor) - both on GPU
         """
-        import torch
-
         # Convert to tensor if needed
         if isinstance(doc_ids, torch.Tensor):
             ids_tensor = doc_ids.to(device=self._device, dtype=torch.long)
@@ -310,12 +329,12 @@ class GPUVectorStore(VectorStore):
         if not hasattr(self, '_id_lookup_tensor') or self._id_lookup_tensor is None:
             # Build lookup tensor: maps real_id -> internal_idx
             # For IDs not in store, we'll filter them out
-            max_id = int(self._ids.max()) + 1
+            max_id = int(self._ids.max().item()) + 1
             self._id_lookup_tensor = torch.full(
                 (max_id,), -1, device=self._device, dtype=torch.long
             )
             id_indices = torch.arange(len(self._ids), device=self._device)
-            ids_on_gpu = torch.tensor(self._ids, device=self._device, dtype=torch.long)
+            ids_on_gpu = self._ids.to(device=self._device, dtype=torch.long)
             self._id_lookup_tensor[ids_on_gpu] = id_indices
             self._max_valid_id = max_id
 
@@ -348,11 +367,148 @@ class GPUVectorStore(VectorStore):
 
         return embeddings, valid_ids
 
+    # ===== Tensor-native interface methods (GPU-optimized) =====
+
+    def search_tensor(
+        self,
+        query_vec: Union[list, torch.Tensor],
+        limit: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        GPU-native search returning tensors instead of dicts.
+
+        All computation stays on GPU - no CPU round-trips.
+
+        Args:
+            query_vec: Query vector (list or tensor)
+            limit: Maximum results to return
+
+        Returns:
+            Tuple of (ids_tensor, scores_tensor) on device
+        """
+        # Ensure query is on device and normalized
+        if not isinstance(query_vec, torch.Tensor):
+            query = torch.tensor(
+                query_vec, device=self._device, dtype=self._dtype
+            )
+        else:
+            query = query_vec.to(device=self._device, dtype=self._dtype)
+
+        # Flatten and normalize
+        query = query.view(-1)
+        query = torch.nn.functional.normalize(query.unsqueeze(0), p=2, dim=1)
+
+        # Compute similarities via matrix multiplication
+        similarities = torch.mm(query, self._embeddings.t()).squeeze(0)
+
+        # Get top-k on GPU
+        k = min(limit, self.n_docs)
+        scores, indices = torch.topk(similarities, k=k, largest=True)
+
+        # Map internal indices to real IDs on GPU
+        if not hasattr(self, '_ids_tensor') or self._ids_tensor is None:
+            self._ids_tensor = self._ids.to(device=self._device, dtype=torch.long)
+
+        real_ids = self._ids_tensor[indices]
+
+        return real_ids, scores
+
+    def search_tensor_result(
+        self,
+        query_vec: Union[list, torch.Tensor],
+        limit: int
+    ) -> TensorSearchResult:
+        """
+        Search returning TensorSearchResult for lazy conversion.
+
+        Args:
+            query_vec: Query vector
+            limit: Maximum results
+
+        Returns:
+            TensorSearchResult with ids and scores on GPU
+        """
+        ids, scores = self.search_tensor(query_vec, limit)
+        return TensorSearchResult(ids=ids, scores=scores)
+
+    def fetch_batch_tensor(
+        self,
+        node_ids: Union[Sequence[Any], torch.Tensor],
+        device: str = None
+    ) -> torch.Tensor:
+        """
+        Fetch embeddings as tensor on specified device.
+
+        GPU-optimized: avoids CPU round-trips when node_ids is a tensor.
+
+        Args:
+            node_ids: Sequence or tensor of node IDs
+            device: Target device (None uses store's device)
+
+        Returns:
+            Tensor of shape (N, D) on device. NaN for invalid indices.
+        """
+        target_device = device or self._device
+
+        # Use GPU-native path if input is tensor
+        if isinstance(node_ids, torch.Tensor):
+            embeddings, valid_ids = self.fetch_batch_gpu(node_ids)
+            # If all requested IDs were valid, return directly
+            if valid_ids.shape[0] == node_ids.shape[0]:
+                return embeddings.to(target_device)
+
+            # Otherwise, need to build result with NaN for missing
+            result = torch.full(
+                (node_ids.shape[0], self.dim),
+                float('nan'),
+                device=target_device,
+                dtype=self._dtype
+            )
+            # Map valid results back to original positions
+            # This requires knowing which input positions were valid
+            node_ids_cpu = node_ids.cpu().tolist()
+            valid_ids_set = set(valid_ids.cpu().tolist())
+            valid_mask = torch.tensor(
+                [nid in valid_ids_set for nid in node_ids_cpu],
+                device=target_device
+            )
+            result[valid_mask] = embeddings.to(target_device)
+            return result
+
+        # List/sequence path
+        node_ids_list = list(node_ids)
+        result = torch.full(
+            (len(node_ids_list), self.dim),
+            float('nan'),
+            device=target_device,
+            dtype=self._dtype
+        )
+
+        valid_pairs = []
+        for out_idx, nid in enumerate(node_ids_list):
+            int_idx = self._id_to_idx.get(nid)
+            if int_idx is not None:
+                valid_pairs.append((out_idx, int_idx))
+
+        if valid_pairs:
+            out_indices, int_indices = zip(*valid_pairs)
+            int_indices_tensor = torch.tensor(
+                int_indices, device=self._device, dtype=torch.long
+            )
+            fetched = self._embeddings[int_indices_tensor]
+            result[list(out_indices)] = fetched.to(target_device)
+
+        return result
+
+    def supports_tensor_ops(self) -> bool:
+        """Check if this store has optimized tensor operations."""
+        return True
+
     def compute_similarities(
         self,
-        query_vec: Union[np.ndarray, "torch.Tensor"],
-        candidate_ids: Union[List[int], "torch.Tensor"]
-    ) -> Tuple["torch.Tensor", "torch.Tensor"]:
+        query_vec: Union[list, torch.Tensor],
+        candidate_ids: Union[List[int], torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute similarities between query and specific candidates.
 
@@ -365,8 +521,6 @@ class GPUVectorStore(VectorStore):
         Returns:
             Tuple of (similarity scores tensor, valid_ids tensor) - both on GPU
         """
-        import torch
-
         # Get candidate embeddings (stays on GPU)
         candidate_embs, valid_ids = self.fetch_batch_gpu(candidate_ids)
 
@@ -374,7 +528,7 @@ class GPUVectorStore(VectorStore):
             return torch.empty(0, device=self._device), valid_ids
 
         # Ensure query is on device and normalized
-        if isinstance(query_vec, np.ndarray):
+        if not isinstance(query_vec, torch.Tensor):
             query = torch.tensor(
                 query_vec, device=self._device, dtype=self._dtype
             ).view(1, -1)
@@ -400,7 +554,7 @@ class GPUVectorStore(VectorStore):
         return self._device == "cuda"
 
     @property
-    def embeddings(self) -> "torch.Tensor":
+    def embeddings(self) -> torch.Tensor:
         """Return raw embeddings tensor (for advanced use)."""
         return self._embeddings
 
@@ -425,8 +579,6 @@ class GPUVectorStore(VectorStore):
         Deletes embedding tensors and lookup tensors, then clears CUDA cache.
         Safe to call multiple times.
         """
-        import torch
-
         if hasattr(self, '_embeddings') and self._embeddings is not None:
             del self._embeddings
             self._embeddings = None
@@ -449,4 +601,4 @@ class GPUVectorStore(VectorStore):
             pass
 
 
-__all__ = ['GPUVectorStore']
+__all__ = ['GPUVectorStore', 'TensorSearchResult']
