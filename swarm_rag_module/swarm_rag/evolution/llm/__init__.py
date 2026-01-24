@@ -3,22 +3,25 @@ LLM-guided evolution module.
 
 All LLM API calls flow through LLMClient (client.py).
 
-Three-tier architecture:
-    Tier 1 - Strategic Oracle: Archive-level steering (every N generations)
-    Tier 2 - Tactical Advisor: Per-genome diagnosis and intent prescription
-    Tier 2.5 - Creative Synthesizer: Optional custom expression generation
-    Tier 3 - Constrained Executor: Deterministic intent-to-mutation (NO LLM)
-
-Key Components:
+Architecture:
+- LLMMutationEngine: Main interface for LLM-guided mutations (orchestrates all tiers)
 - LLMClient: Single source of truth for all LLM API calls
 - EvolutionJournal: Tracks mutation history for learning loops
-- SafeExpressionBuilder: Template-based expression generation
-- MutationIntent: Enum of possible mutation goals
+- DecisionTracker: Captures agent decision data for behavioral analysis
 """
 
 # LLM Client (single source of truth for all API calls)
 from .client import LLMClient, LLMCallResult, SUPPORTED_PROVIDERS
 from .factory import LLMClientFactory
+
+# Decision Tracker
+from .decision_tracker import (
+    DecisionTracker,
+    SmartDecisionTracker,  # Alias for backwards compatibility
+    AgentDecision,
+    TrajectoryMetrics,
+    QueryDecisionContext,
+)
 
 # Intents and data classes
 from .intents import (
@@ -53,21 +56,7 @@ from .expression_builder import (
     RANKING_TEMPLATES,
 )
 
-# Strategic Oracle (Tier 1)
-from .strategic_oracle import (
-    StrategicOracle,
-    StrategicContext,
-    build_strategic_context,
-)
-
-# Tactical Advisor (Tier 2)
-from .tactical_advisor import (
-    TacticalAdvisor,
-    TacticalContext,
-    build_tactical_context,
-)
-
-# Constrained Executor (Tier 3)
+# Constrained Executor and LLM Mutation Engine
 from .constrained_executor import (
     ConstrainedExecutor,
     ExecutionResult,
@@ -75,7 +64,12 @@ from .constrained_executor import (
     ThreeTierMutator,
 )
 
-# Creative Synthesizer (Tier 2.5)
+# LLMMutationEngine is the main interface (alias for ThreeTierMutator)
+LLMMutationEngine = ThreeTierMutator
+
+# Internal tier components (used by LLMMutationEngine)
+from .strategic_oracle import StrategicOracle, StrategicContext, build_strategic_context
+from .tactical_advisor import TacticalAdvisor, TacticalContext, build_tactical_context
 from .creative_synthesizer import (
     CreativeSynthesizer,
     CreativeProposal,
@@ -93,11 +87,20 @@ from .parsers import ExpressionParser
 from .utils import genome_to_json_context
 
 __all__ = [
+    # Main interface
+    "LLMMutationEngine",
+    "ThreeTierMutator",  # Alias for backwards compatibility
     # LLM Client
     "LLMClient",
     "LLMCallResult",
     "LLMClientFactory",
     "SUPPORTED_PROVIDERS",
+    # Decision Tracker
+    "DecisionTracker",
+    "SmartDecisionTracker",
+    "AgentDecision",
+    "TrajectoryMetrics",
+    "QueryDecisionContext",
     # Intents
     "MutationIntent",
     "EvolutionMode",
@@ -122,20 +125,17 @@ __all__ = [
     "MOVEMENT_TEMPLATES",
     "DEPOSIT_TEMPLATES",
     "RANKING_TEMPLATES",
-    # Strategic Oracle
-    "StrategicOracle",
-    "StrategicContext",
-    "build_strategic_context",
-    # Tactical Advisor
-    "TacticalAdvisor",
-    "TacticalContext",
-    "build_tactical_context",
-    # Constrained Executor
+    # Executor
     "ConstrainedExecutor",
     "ExecutionResult",
     "ParameterBounds",
-    "ThreeTierMutator",
-    # Creative Synthesizer
+    # Tier components (internal)
+    "StrategicOracle",
+    "StrategicContext",
+    "build_strategic_context",
+    "TacticalAdvisor",
+    "TacticalContext",
+    "build_tactical_context",
     "CreativeSynthesizer",
     "CreativeProposal",
     "CreativeModeContext",
