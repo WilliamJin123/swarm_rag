@@ -30,6 +30,12 @@ from .embedding_cache import (
     EmbeddingCacheProvider,
     EmbeddingCacheStats,
 )
+from .shared_precompute import (
+    SharedPrecomputeContext,
+    prepare_shared_context,
+    get_unique_pool_sizes,
+    BatchedRetrievalResults,
+)
 
 __all__ = [
     # Core
@@ -53,4 +59,9 @@ __all__ = [
     "QueryEmbeddingCache",
     "EmbeddingCacheProvider",
     "EmbeddingCacheStats",
+    # Shared pre-computation
+    "SharedPrecomputeContext",
+    "prepare_shared_context",
+    "get_unique_pool_sizes",
+    "BatchedRetrievalResults",
 ]
