@@ -1598,6 +1598,421 @@ class SwarmRetriever:
 
         return results
 
+    def retrieve_with_precomputed(
+        self,
+        query_embedding: torch.Tensor,
+        initial_pool: List[int],
+        agent_groups: Optional[List[AgentGroupConfig]] = None,
+        seed: Optional[int] = None,
+        n_agents: Optional[int] = None,
+        steps: Optional[int] = None,
+        decay: Optional[float] = None,
+        drop_zone_inc: Optional[float] = None,
+        start_subset: Optional[int] = None,
+        top_k: Optional[int] = None,
+        movement_strategies: Optional[Dict] = None,
+        ranking_strategies: Optional[Dict] = None,
+        deposit_strategies: Optional[Dict] = None,
+        decision_tracker: Optional[Any] = None,
+    ) -> List[Dict]:
+        """
+        Retrieve using pre-computed query embedding and initial pool.
+
+        This method skips the embedding lookup and initial search steps,
+        using pre-computed data from SharedPrecomputeContext. This provides
+        significant speedup when evaluating multiple genomes on the same queries.
+
+        Args:
+            query_embedding: Pre-computed query embedding tensor (1D or 2D with shape (1, dim))
+            initial_pool: Pre-computed initial candidate pool (list of IDs)
+            agent_groups: Optional agent group configurations
+            seed: Random seed for reproducibility
+            n_agents: Number of agents
+            steps: Number of traversal steps
+            decay: Pheromone decay rate
+            drop_zone_inc: Drop zone increment
+            start_subset: Size of starting subset
+            top_k: Number of results to return
+            movement_strategies: Movement strategy configuration
+            ranking_strategies: Ranking strategy configuration
+            deposit_strategies: Deposit strategy configuration
+            decision_tracker: Optional decision tracker for LLM context
+
+        Returns:
+            List of top-k results with scores
+        """
+        # Handle explicit seeding for this run
+        if seed is not None:
+            py_rng = random.Random(seed)
+            torch_gen = torch.Generator()
+            torch_gen.manual_seed(seed)
+        else:
+            py_rng = self.py_rng
+            torch_gen = self._torch_gen
+
+        params = self._resolve_params(
+            n_agents=n_agents,
+            steps=steps,
+            decay=decay,
+            drop_zone_inc=drop_zone_inc,
+            start_subset=start_subset,
+            top_k=top_k,
+            ranking_strategies=ranking_strategies,
+            movement_strategies=movement_strategies,
+            deposit_strategies=deposit_strategies,
+        )
+
+        resolved_agents = self._prepare_agents(
+            agent_groups=agent_groups,
+            n_agents=params['n_agents'],
+            movement_strategies=params['movement_strategies'],
+            deposit_strategies=params['deposit_strategies'],
+        )
+
+        # Use the pre-computed query embedding directly
+        query_vec = torch.as_tensor(query_embedding, dtype=torch.float32)
+        if query_vec.ndim == 2:
+            query_vec = query_vec.squeeze(0)
+        query_vec = query_vec.flatten()
+        query_vec = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
+
+        # Use the pre-computed initial pool
+        if not initial_pool:
+            return []
+
+        return self._retrieve_with_pool_internal(
+            query_vec=query_vec,
+            initial_pool=initial_pool,
+            resolved_agents=resolved_agents,
+            py_rng=py_rng,
+            torch_gen=torch_gen,
+            decision_tracker=decision_tracker,
+            **params
+        )
+
+    def retrieve_batch_with_precomputed(
+        self,
+        query_embeddings: torch.Tensor,
+        initial_pools: List[List[int]],
+        agent_groups: Optional[List[AgentGroupConfig]] = None,
+        seed: Optional[int] = None,
+        n_agents: Optional[int] = None,
+        steps: Optional[int] = None,
+        decay: Optional[float] = None,
+        drop_zone_inc: Optional[float] = None,
+        start_subset: Optional[int] = None,
+        top_k: Optional[int] = None,
+        movement_strategies: Optional[Dict] = None,
+        ranking_strategies: Optional[Dict] = None,
+        deposit_strategies: Optional[Dict] = None,
+        max_workers: Optional[int] = 4,
+        **kwargs
+    ) -> List[List[Dict]]:
+        """
+        Batch retrieve using pre-computed query embeddings and initial pools.
+
+        This method provides significant speedup by using pre-computed data
+        from SharedPrecomputeContext, eliminating redundant embedding lookups
+        and initial searches across multiple genome evaluations.
+
+        Args:
+            query_embeddings: Pre-computed query embeddings tensor (n_queries, dim)
+            initial_pools: Pre-computed initial pools, one per query
+            agent_groups: Optional agent group configurations
+            seed: Base random seed for reproducibility
+            n_agents: Number of agents
+            steps: Number of traversal steps
+            decay: Pheromone decay rate
+            drop_zone_inc: Drop zone increment
+            start_subset: Size of starting subset
+            top_k: Number of results to return
+            movement_strategies: Movement strategy configuration
+            ranking_strategies: Ranking strategy configuration
+            deposit_strategies: Deposit strategy configuration
+            max_workers: Maximum parallel workers (CPU mode)
+            **kwargs: Additional arguments
+
+        Returns:
+            List of result lists, one per query
+        """
+        if len(query_embeddings) == 0:
+            return []
+
+        base_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+
+        params = self._resolve_params(
+            n_agents=n_agents,
+            steps=steps,
+            decay=decay,
+            drop_zone_inc=drop_zone_inc,
+            start_subset=start_subset,
+            top_k=top_k,
+            ranking_strategies=ranking_strategies,
+            movement_strategies=movement_strategies,
+            deposit_strategies=deposit_strategies,
+            **kwargs
+        )
+
+        resolved_agents = self._prepare_agents(
+            agent_groups=agent_groups,
+            n_agents=params['n_agents'],
+            movement_strategies=params['movement_strategies'],
+            deposit_strategies=params['deposit_strategies'],
+        )
+
+        # Process based on device mode
+        if self._use_gpu or max_workers <= 1:
+            # Sequential processing for GPU (CUDA thread-locality)
+            return self._retrieve_batch_precomputed_sequential(
+                query_embeddings,
+                initial_pools,
+                resolved_agents,
+                base_seed=base_seed,
+                **params
+            )
+        else:
+            # Parallel processing for CPU
+            return self._retrieve_batch_precomputed_parallel(
+                query_embeddings,
+                initial_pools,
+                resolved_agents,
+                base_seed=base_seed,
+                max_workers=max_workers,
+                **params
+            )
+
+    def _retrieve_batch_precomputed_sequential(
+        self,
+        query_embeddings: torch.Tensor,
+        initial_pools: List[List[int]],
+        resolved_agents: List[Tuple[Callable, Callable]],
+        base_seed: int,
+        **kwargs
+    ) -> List[List[Dict]]:
+        """Process pre-computed queries sequentially."""
+        results = []
+        total = len(query_embeddings)
+        gid = kwargs.get('genome_id', '')
+        if gid:
+            gid = f"[{gid}]"
+
+        for i, (vec, pool) in enumerate(zip(query_embeddings, initial_pools)):
+            if (i + 1) % 10 == 0 or (i + 1) == total:
+                logger.info(f"    [Retriever] {gid} Precomputed Sequential: {i+1}/{total}")
+
+            q_seed = base_seed + i
+            py_rng = random.Random(q_seed)
+            torch_gen = torch.Generator()
+            torch_gen.manual_seed(q_seed)
+
+            # Normalize query vector
+            query_vec = torch.as_tensor(vec, dtype=torch.float32).flatten()
+            query_vec = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
+
+            if not pool:
+                results.append([])
+                continue
+
+            result = self._retrieve_with_pool_internal(
+                query_vec=query_vec,
+                initial_pool=pool,
+                resolved_agents=resolved_agents,
+                py_rng=py_rng,
+                torch_gen=torch_gen,
+                **kwargs
+            )
+            results.append(result)
+
+        return results
+
+    def _retrieve_batch_precomputed_parallel(
+        self,
+        query_embeddings: torch.Tensor,
+        initial_pools: List[List[int]],
+        resolved_agents: List[Tuple[Callable, Callable]],
+        max_workers: int,
+        base_seed: int,
+        **kwargs
+    ) -> List[List[Dict]]:
+        """Process pre-computed queries in parallel."""
+        def process(idx: int, vec: torch.Tensor, pool: List[int]) -> tuple[int, List[Dict]]:
+            task_seed = base_seed + idx
+            task_py_rng = random.Random(task_seed)
+            task_torch_gen = torch.Generator()
+            task_torch_gen.manual_seed(task_seed)
+
+            query_vec = torch.as_tensor(vec, dtype=torch.float32).flatten()
+            query_vec = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
+
+            if not pool:
+                return idx, []
+
+            result = self._retrieve_with_pool_internal(
+                query_vec=query_vec,
+                initial_pool=pool,
+                resolved_agents=resolved_agents,
+                py_rng=task_py_rng,
+                torch_gen=task_torch_gen,
+                **kwargs
+            )
+            return idx, result
+
+        total = len(query_embeddings)
+        completed = 0
+        gid = kwargs.get('genome_id', '')
+        if gid:
+            gid = f"[{gid}]"
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures_to_index = {
+                executor.submit(process, i, vec, pool): i
+                for i, (vec, pool) in enumerate(zip(query_embeddings, initial_pools))
+            }
+
+            results = [None] * total
+            for future in as_completed(futures_to_index):
+                completed += 1
+                if completed % 10 == 0 or completed == total:
+                    logger.info(f"    [Retriever] {gid} Precomputed Parallel: {completed}/{total}")
+
+                try:
+                    idx, result = future.result()
+                    results[idx] = result
+                except Exception as e:
+                    idx = futures_to_index[future]
+                    logger.error(f"Query {idx} failed: {e}")
+                    results[idx] = []
+
+            return results
+
+    def _retrieve_with_pool_internal(
+        self,
+        query_vec: torch.Tensor,
+        initial_pool: List[int],
+        resolved_agents: List[Tuple[Callable, Callable]],
+        py_rng: random.Random,
+        torch_gen: torch.Generator,
+        steps: int,
+        decay: float,
+        drop_zone_inc: float,
+        start_subset: int,
+        top_k: int,
+        ranking_strategies: Dict,
+        decision_tracker: Optional[Any] = None,
+        **kwargs
+    ) -> List[Dict]:
+        """
+        Internal retrieval using a pre-computed initial pool.
+
+        Shared implementation used by both retrieve_with_precomputed
+        and _retrieve_with_pool.
+        """
+        n_agents = len(resolved_agents)
+
+        # Pre-compose ranking strategy
+        ranking_func = self._compose_strategy(ranking_strategies, "ranking")
+
+        if not initial_pool:
+            return []
+
+        drop_zone = initial_pool[:start_subset]
+        dz_len = len(drop_zone)
+
+        # Cache warming
+        if self.cache_neighbors:
+            with ThreadPoolExecutor(max_workers=min(4, dz_len)) as ex:
+                list(ex.map(self._get_cached_neighbors, drop_zone))
+
+        # Spawn agents
+        weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
+        agent_locations = torch.tensor(
+            py_rng.choices(drop_zone, weights=weights, k=n_agents),
+            dtype=torch.long
+        )
+        agent_trajectories = [[loc.item()] for loc in agent_locations]
+        query_pheromones = self.base_pheromones.copy()
+
+        # Initialize decision tracking if provided
+        if decision_tracker is not None:
+            decision_tracker.start_query(
+                query_id=id(query_vec),
+                n_agents=n_agents,
+                n_steps=steps
+            )
+
+        # Check if we can use batched GPU processing
+        use_batched = (
+            self._use_gpu and
+            hasattr(self.graph_store, 'get_neighbors_batch') and
+            getattr(self.graph_store, 'is_gpu', False) and
+            decision_tracker is None
+        )
+
+        # Traversal loop
+        for step in range(steps):
+            pheromone_updates = {}
+            max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
+
+            if use_batched:
+                new_locations, pheromone_updates = self._step_agents_batched(
+                    agent_locations=agent_locations,
+                    query_vec=query_vec,
+                    query_pheromones=query_pheromones,
+                    resolved_agents=resolved_agents,
+                    step=step,
+                    max_pheromone=max_pheromone,
+                    torch_gen=torch_gen,
+                )
+
+                for agent_idx in range(n_agents):
+                    new_loc = new_locations[agent_idx].item() if isinstance(new_locations[agent_idx], torch.Tensor) else new_locations[agent_idx]
+                    old_loc = agent_locations[agent_idx].item() if isinstance(agent_locations[agent_idx], torch.Tensor) else agent_locations[agent_idx]
+                    if new_loc != old_loc:
+                        agent_trajectories[agent_idx].append(new_loc)
+                agent_locations = new_locations
+            else:
+                for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
+                    current_loc = agent_locations[agent_idx].item() if isinstance(agent_locations[agent_idx], torch.Tensor) else agent_locations[agent_idx]
+
+                    result = self._process_agent_step(
+                        agent_id=agent_idx,
+                        current_loc=current_loc,
+                        query_vec=query_vec,
+                        query_pheromones=query_pheromones,
+                        move_func=move_fn,
+                        deposit_func=deposit_fn,
+                        step=step,
+                        max_pheromone=max_pheromone,
+                        torch_gen=torch_gen,
+                        decision_tracker=decision_tracker,
+                    )
+
+                    if result:
+                        next_node = result['new_location']
+                        agent_locations[agent_idx] = next_node
+                        agent_trajectories[agent_idx].append(next_node)
+
+                        deposit = result['deposit']
+                        if deposit > self.PHEROMONE_EPSILON:
+                            pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
+
+            # Update pheromones
+            if query_pheromones:
+                existing_keys = list(query_pheromones.keys())
+                for k in existing_keys:
+                    new_val = query_pheromones[k] * decay
+                    if new_val < self.PHEROMONE_EPSILON:
+                        del query_pheromones[k]
+                    else:
+                        query_pheromones[k] = new_val
+
+            for node_id, amount in pheromone_updates.items():
+                query_pheromones[node_id] += amount
+
+        return self._ranking(
+            agent_trajectories, query_vec, ranking_func, top_k, n_agents
+        )
+
     def _retrieve_with_pool(
         self,
         query_vec: torch.Tensor,
