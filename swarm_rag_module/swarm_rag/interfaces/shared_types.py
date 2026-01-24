@@ -165,10 +165,3 @@ class HeuristicInfo(TypedDict):
     is_vectorized: bool
 
 
-# =============================================================================
-# Backwards Compatibility
-# =============================================================================
-
-# These aliases ensure existing code continues to work
-StrategyDict = Dict[str, Tuple[Any, float]]
-AgentGroups = List[AgentGroupConfig]

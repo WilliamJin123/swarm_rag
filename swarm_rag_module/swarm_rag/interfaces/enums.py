@@ -50,3 +50,4 @@ class GeneticKey(Enum):
     STANDARD_INITIALIZATION = "standard_initialization"
     SHALLOW_GROWTH_INITIALIZATION = "shallow_growth_initialization"
     SEEDED_INITIALIZATION = "seeded_initialization"
+    BASELINE_SEEDED_INITIALIZATION = "baseline_seeded_initialization"

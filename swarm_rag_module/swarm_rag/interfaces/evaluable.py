@@ -9,7 +9,7 @@ This enables:
 2. Supporting multiple retriever backends
 3. Clear separation of concerns between evolution and retrieval
 """
-from typing import Protocol, Dict, Any, List, Optional, runtime_checkable
+from typing import Protocol, Dict, Any, List, runtime_checkable
 
 
 @runtime_checkable
@@ -76,63 +76,5 @@ class EvaluableRetriever(Protocol):
 
         Returns:
             Dictionary mapping metric names to values
-        """
-        ...
-
-
-@runtime_checkable
-class BatchRetrievalBackend(Protocol):
-    """
-    Extended protocol for retrievers supporting batch operations.
-
-    Adds batch retrieval capability for performance optimization.
-    """
-
-    def retrieve_batch(
-        self,
-        queries: List[str],
-        max_workers: int = 1,
-        genome_id: Optional[str] = None,
-        **kwargs
-    ) -> List[List[Any]]:
-        """
-        Retrieve results for multiple queries in batch.
-
-        Args:
-            queries: List of query strings
-            max_workers: Max concurrent workers
-            genome_id: Optional identifier for logging
-            **kwargs: Retriever-specific configuration
-
-        Returns:
-            List of result lists (one per query)
-        """
-        ...
-
-
-@runtime_checkable
-class DecisionTrackingRetriever(Protocol):
-    """
-    Protocol for retrievers supporting decision tracking.
-
-    Enables capture of agent decision data for LLM-guided mutations.
-    """
-
-    def retrieve(
-        self,
-        query: str,
-        decision_tracker: Optional[Any] = None,
-        **kwargs
-    ) -> List[Any]:
-        """
-        Retrieve results for a single query with optional decision tracking.
-
-        Args:
-            query: Query string
-            decision_tracker: Optional DecisionTracker instance
-            **kwargs: Retriever-specific configuration
-
-        Returns:
-            List of retrieved results
         """
         ...

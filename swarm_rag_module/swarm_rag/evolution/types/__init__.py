@@ -15,16 +15,13 @@ from .config import (
     SwarmParamRanges,
     EvolutionContext,
     DEFAULT_CONFIG,
-    # Backwards compatibility
-    EvolutionConfigDict,
-    DEFAULT_EVO_CONFIG,
 )
 from .genome import Genome, SwarmParams, DEFAULT_PARAMS
 from .expressions import ExpressionNode, ExpressionEvolution
 from .fitness_results import FitnessResult
 
 __all__ = [
-    # New config dataclasses
+    # Config dataclasses
     "EvolutionConfig",
     "MapElitesConfig",
     "GeneticConfig",
@@ -36,9 +33,6 @@ __all__ = [
     "SwarmParamRanges",
     "EvolutionContext",
     "DEFAULT_CONFIG",
-    # Backwards compatibility
-    "EvolutionConfigDict",
-    "DEFAULT_EVO_CONFIG",
     # Genome types
     "Genome",
     "SwarmParams",

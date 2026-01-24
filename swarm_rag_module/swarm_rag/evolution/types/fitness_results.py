@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import functools
 import math
-from typing import Dict
+from typing import Dict, Optional
 
 QUALITY_TOLERANCE = 0.005
 STABILITY_TOLERANCE = 0.05
@@ -11,11 +11,21 @@ STABILITY_TOLERANCE = 0.05
 class FitnessResult:
     """
     Multi-objective fitness to support Lexicographic Selection.
+
+    Attributes:
+        quality_score: Primary fitness metric (higher is better)
+        stability_score: Consistency across evaluations (higher is better)
+        cost_score: Computational cost (lower is better)
+        metrics: Optional dict of raw metric values (Hit@1, MRR, etc.)
+        sort_key: Custom sort key for comparison strategies
     """
     quality_score: float = field(default=-math.inf, compare=True)   # maximise
     stability_score: float = field(default=-math.inf, compare=True) # maximise
     cost_score: float = field(default=math.inf, compare=True)      # minimise
-    
+
+    # Raw metric values (optional, used by archive comparator for threshold checks)
+    metrics: Optional[Dict[str, float]] = field(default=None, compare=False)
+
     # Custom sort key for flexible strategies (Lexicographic, Pareto, etc.)
     # Defaults to None, which triggers lazy computation of Lexicographic key
     sort_key: tuple = field(default=None, compare=False)
@@ -66,12 +76,15 @@ class FitnessResult:
         Returns:
             A dictionary of the fitness scores.
         """
-        return {
+        result = {
             "quality_score": self.quality_score,
             "stability_score": self.stability_score,
             "cost_score": self.cost_score,
             "sort_key": self.sort_key
         }
+        if self.metrics is not None:
+            result["metrics"] = self.metrics
+        return result
 
     @staticmethod
     def _precision_from_tolerance(tol: float) -> int:

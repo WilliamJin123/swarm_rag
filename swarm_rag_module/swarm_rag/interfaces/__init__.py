@@ -1,6 +1,6 @@
 from .abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 from .protocols import RetrievalBackend
-from .evaluable import EvaluableRetriever, BatchRetrievalBackend, DecisionTrackingRetriever
+from .evaluable import EvaluableRetriever
 from .shared_types import (
     AgentGroupConfig,
     StrategyConfig,
@@ -19,8 +19,6 @@ __all__ = [
     # Protocols
     "RetrievalBackend",
     "EvaluableRetriever",
-    "BatchRetrievalBackend",
-    "DecisionTrackingRetriever",
     # Shared types
     "AgentGroupConfig",
     "StrategyConfig",

@@ -12,12 +12,7 @@ from .fitness_results import FitnessResult
 from .expressions import ExpressionNode
 
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
-# Import shared types from interfaces to reduce coupling with core
-try:
-    from ...interfaces.shared_types import AgentGroupConfig
-except ImportError:
-    # Fallback to core import for backwards compatibility
-    from ...core.swarm_retriever import AgentGroupConfig
+from ...interfaces.shared_types import AgentGroupConfig
 
 class CompiledStrategies(TypedDict, total=False):
     """
