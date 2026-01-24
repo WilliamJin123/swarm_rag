@@ -449,5 +449,39 @@ class GPUGraphStore(GraphStore):
         self._device = device
         return self
 
+    def close(self):
+        """
+        Release GPU memory held by this store.
+
+        Deletes CSR tensors (crow_indices, col_indices, degrees) and clears CUDA cache.
+        Safe to call multiple times.
+        """
+        import torch
+
+        if hasattr(self, '_crow_indices') and self._crow_indices is not None:
+            del self._crow_indices
+            self._crow_indices = None
+
+        if hasattr(self, '_col_indices') and self._col_indices is not None:
+            del self._col_indices
+            self._col_indices = None
+
+        if hasattr(self, '_degrees') and self._degrees is not None:
+            del self._degrees
+            self._degrees = None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        logger.debug("GPUGraphStore resources released")
+
+    def __del__(self):
+        """Destructor to ensure GPU memory is released."""
+        try:
+            self.close()
+        except Exception:
+            # Ignore errors during interpreter shutdown
+            pass
+
 
 __all__ = ['GPUGraphStore']

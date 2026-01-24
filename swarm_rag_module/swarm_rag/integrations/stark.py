@@ -455,6 +455,22 @@ class StarkInMemoryVectorStore(VectorStore):
         return None
 
     def close(self):
+        """
+        Release shared memory resources.
+
+        This method uses atexit.register() for automatic cleanup, but atexit handlers
+        do NOT run on SIGKILL or unexpected crashes. If the process is killed forcefully,
+        shared memory segments may persist in /dev/shm/ (Linux) or equivalent.
+
+        Manual cleanup after crash (Linux):
+            rm /dev/shm/stark_vstore_*
+
+        Manual cleanup after crash (Windows):
+            Shared memory is automatically cleaned up by the OS on Windows.
+
+        Manual cleanup after crash (macOS):
+            rm /var/folders/*/*/stark_vstore_*
+        """
         for shm_attr in ['shm_matrix', 'shm_ids']:
             if hasattr(self, shm_attr):
                 shm = getattr(self, shm_attr)

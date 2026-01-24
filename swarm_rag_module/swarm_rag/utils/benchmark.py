@@ -289,12 +289,18 @@ def benchmark_vector_search(
 
     benchmarker = Benchmarker(warmup_iterations=warmup, n_iterations=iterations)
 
-    return benchmarker.compare(
+    result = benchmarker.compare(
         name=f"vector_search_{n_docs}docs_{n_queries}queries",
         cpu_func=cpu_search,
         gpu_func=gpu_search,
         n_ops=n_queries
     )
+
+    # Clean up GPU memory after benchmark
+    del doc_tensor, query_tensor
+    torch.cuda.empty_cache()
+
+    return result
 
 
 def benchmark_batch_similarity(
@@ -355,6 +361,10 @@ def benchmark_batch_similarity(
             n_ops=batch_size
         )
         results.append(comparison)
+
+        # Clean up GPU memory between batch sizes
+        del candidates_gpu, queries_gpu
+        torch.cuda.empty_cache()
 
     return results
 
@@ -432,6 +442,10 @@ def benchmark_heuristics(
         gpu_centrality,
         n_ops=n_candidates
     ))
+
+    # Clean up GPU memory after heuristics benchmark
+    del query_gpu, targets_gpu, degrees_gpu
+    torch.cuda.empty_cache()
 
     return results
 

@@ -418,5 +418,35 @@ class GPUVectorStore(VectorStore):
         self._device = device
         return self
 
+    def close(self):
+        """
+        Release GPU memory held by this store.
+
+        Deletes embedding tensors and lookup tensors, then clears CUDA cache.
+        Safe to call multiple times.
+        """
+        import torch
+
+        if hasattr(self, '_embeddings') and self._embeddings is not None:
+            del self._embeddings
+            self._embeddings = None
+
+        if hasattr(self, '_id_lookup_tensor') and self._id_lookup_tensor is not None:
+            del self._id_lookup_tensor
+            self._id_lookup_tensor = None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        logger.debug("GPUVectorStore resources released")
+
+    def __del__(self):
+        """Destructor to ensure GPU memory is released."""
+        try:
+            self.close()
+        except Exception:
+            # Ignore errors during interpreter shutdown
+            pass
+
 
 __all__ = ['GPUVectorStore']

@@ -200,7 +200,9 @@ class EvolutionJournal:
             if removed.was_successful:
                 self._intent_successes[removed.intent] -= 1
 
-        if len(self._recent_diagnoses) > 100:
+        # Bound _recent_diagnoses to prevent unbounded growth
+        max_diagnoses = min(self.max_records, 100)
+        if len(self._recent_diagnoses) > max_diagnoses:
             self._recent_diagnoses.pop(0)
 
         return record
@@ -270,8 +272,9 @@ class EvolutionJournal:
         self.generation_summaries.append(summary)
         self._qd_score_history.append(qd_score)
 
-        # Keep only recent history
-        if len(self._qd_score_history) > 100:
+        # Keep only recent history (bound to max_records to prevent unbounded growth)
+        max_history = min(self.max_records, 100)
+        if len(self._qd_score_history) > max_history:
             self._qd_score_history.pop(0)
 
     def get_success_rate_by_intent(self) -> Dict[MutationIntent, float]:
