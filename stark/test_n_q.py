@@ -118,9 +118,13 @@ def safe_print(text: str) -> None:
         print(text.encode('ascii', 'replace').decode('ascii'))
 
 
-def safe_print_df(df: pd.DataFrame) -> None:
-    """Print DataFrame with ASCII fallback."""
-    safe_print(df.to_string())
+def safe_print_df(df: pd.DataFrame, evaluator: Evaluator = None, style: str = "vertical") -> None:
+    """Print DataFrame with ASCII fallback, using vertical format by default."""
+    if evaluator and hasattr(evaluator, 'format_results'):
+        text = evaluator.format_results(df, style=style)
+    else:
+        text = df.to_string()
+    safe_print(text)
 
 
 def create_vector_store(doc_embs: Dict, device: str):
@@ -387,7 +391,7 @@ def test_stark(
             # Show aggregated results
             agg_df = evaluator.aggregate_results(eval_result["results"])
             print(f"\n  {mode_name} Results (avg latency: {eval_result['avg_latency']:.4f}s):")
-            safe_print_df(agg_df)
+            safe_print_df(agg_df, evaluator)
 
             # Generate plots if requested
             if plot or save_plots:
@@ -467,7 +471,7 @@ def test_stark(
         aggregated_results = reporter.aggregate(evaluator)
         for name, df in aggregated_results.items():
             print(f"\n--- {name} ---")
-            safe_print_df(df)
+            safe_print_df(df, evaluator)
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ from .execution.fitness_strategies import (
 
 # MAP-Elites Imports
 from .map_elites.archive import MapElitesArchive
-from .map_elites.descriptors import DescriptorCalculator
+from .map_elites.descriptors import DescriptorCalculator, DescriptorRegistry
 from .map_elites.loop import MapElitesLoop
 
 # Orchestrator
@@ -159,7 +159,7 @@ class EvolutionEngine:
 
         # Initialize MAP-Elites components (always enabled)
         logger.info("Initializing MAP-Elites archive and breeding loop")
-        descriptor_calc = DescriptorCalculator(
+        descriptor_calc = DescriptorRegistry.create_calculator(
             dimensions=self.evo_config.map_elites.dimensions,
             ranges=self.evo_config.map_elites.ranges,
         )

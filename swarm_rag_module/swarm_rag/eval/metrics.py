@@ -201,3 +201,47 @@ class Evaluator:
             formatted[metric] = " ".join(parts)
 
         return pd.DataFrame([formatted], index=[self.index_name])
+
+    def format_results(self, df: pd.DataFrame, style: str = "vertical") -> str:
+        """
+        Format aggregated results for terminal display.
+
+        Args:
+            df: DataFrame from aggregate_results()
+            style: "vertical" (line-by-line) or "table" (original wide table)
+
+        Returns:
+            Formatted string for terminal display
+        """
+        if style == "table":
+            return df.to_string()
+
+        # Vertical format - each metric on its own line
+        lines = []
+        if len(df) == 0:
+            return "No results"
+
+        idx_name = df.index[0]
+        lines.append(f"[{idx_name}]")
+        lines.append("-" * 50)
+
+        # Group metrics by category for readability
+        metric_groups = {
+            "Hit@K": ["Hit@1", "Hit@5", "Hit@10", "Hit@20"],
+            "Recall@K": ["Recall@1", "Recall@5", "Recall@10", "Recall@20"],
+            "Other": ["MRR", "latency", "Diversity_Node_Types", "Diversity_Count"]
+        }
+
+        for group_name, metrics in metric_groups.items():
+            group_has_values = False
+            group_lines = []
+            for metric in metrics:
+                if metric in df.columns:
+                    val = df[metric].iloc[0]
+                    group_lines.append(f"  {metric:20s}: {val}")
+                    group_has_values = True
+            if group_has_values:
+                lines.append(f"\n{group_name}:")
+                lines.extend(group_lines)
+
+        return "\n".join(lines)
