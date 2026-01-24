@@ -17,41 +17,61 @@ class MutationIntent(Enum):
 
     These represent WHAT we want to achieve, not HOW to achieve it.
     The Constrained Executor translates these into actual parameter changes.
+
+    Simplified from 17 intents to 7 core intents:
+    - EXPLORE: More agents, steps, coverage, dispersion
+    - EXPLOIT: Focus on semantics, reduce exploration
+    - REDUCE_LOOPS: Decrease revisit rate, pheromone repulsion
+    - REDUCE_COST: Fewer agents/steps, efficient execution
+    - IMPROVE_QUALITY: Better recall, semantic focus
+    - IMPROVE_CONNECTIVITY: Avoid dead-ends, prefer hubs
+    - NO_CHANGE: Genome performing well
     """
-    # Exploration-related
-    INCREASE_EXPLORATION = "increase_exploration"
-    REDUCE_EXPLORATION = "reduce_exploration"
+    # Exploration (combines: increase_exploration, improve_coverage, increase_dispersion)
+    EXPLORE = "explore"
 
-    # Loop/revisit-related
+    # Exploitation (combines: reduce_exploration, increase_semantic_focus, speed_convergence)
+    EXPLOIT = "exploit"
+
+    # Loop reduction (combines: reduce_loops, reduce_revisits, slow_convergence)
     REDUCE_LOOPS = "reduce_loops"
-    REDUCE_REVISITS = "reduce_revisits"
 
-    # Coverage-related
-    IMPROVE_COVERAGE = "improve_coverage"
-    INCREASE_DISPERSION = "increase_dispersion"
-
-    # Efficiency-related
+    # Cost reduction (combines: reduce_cost, reduce_latency)
     REDUCE_COST = "reduce_cost"
-    REDUCE_LATENCY = "reduce_latency"
 
-    # Quality-related
+    # Quality improvement
     IMPROVE_QUALITY = "improve_quality"
-    INCREASE_SEMANTIC_FOCUS = "increase_semantic_focus"
 
-    # Dead-end handling
-    AVOID_DEAD_ENDS = "avoid_dead_ends"
+    # Connectivity (combines: avoid_dead_ends, improve_connectivity)
     IMPROVE_CONNECTIVITY = "improve_connectivity"
-
-    # Balance-related
-    BALANCE_GROUPS = "balance_groups"
-    REBALANCE_HEURISTICS = "rebalance_heuristics"
-
-    # Convergence-related
-    SLOW_CONVERGENCE = "slow_convergence"
-    SPEED_CONVERGENCE = "speed_convergence"
 
     # No change needed
     NO_CHANGE = "no_change"
+
+    # Legacy aliases for backwards compatibility
+    @classmethod
+    def from_legacy(cls, value: str) -> "MutationIntent":
+        """Convert legacy intent names to new simplified intents."""
+        LEGACY_MAP = {
+            "increase_exploration": cls.EXPLORE,
+            "improve_coverage": cls.EXPLORE,
+            "increase_dispersion": cls.EXPLORE,
+            "reduce_exploration": cls.EXPLOIT,
+            "increase_semantic_focus": cls.EXPLOIT,
+            "speed_convergence": cls.EXPLOIT,
+            "reduce_revisits": cls.REDUCE_LOOPS,
+            "slow_convergence": cls.REDUCE_LOOPS,
+            "reduce_latency": cls.REDUCE_COST,
+            "avoid_dead_ends": cls.IMPROVE_CONNECTIVITY,
+            "balance_groups": cls.IMPROVE_QUALITY,
+            "rebalance_heuristics": cls.IMPROVE_QUALITY,
+        }
+        if value in LEGACY_MAP:
+            return LEGACY_MAP[value]
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.NO_CHANGE
 
 
 class EvolutionMode(Enum):
@@ -198,26 +218,28 @@ class IntentAction:
 
 
 # ============================================================================
-# Intent-to-Action Mappings
+# Intent-to-Action Mappings (Simplified - 7 intents)
 # ============================================================================
 
 INTENT_ACTIONS: Dict[MutationIntent, IntentAction] = {
-    MutationIntent.INCREASE_EXPLORATION: IntentAction(
+    MutationIntent.EXPLORE: IntentAction(
         param_adjustments={
-            "n_agents": 3,
+            "n_agents": 4,
             "steps": 1,
-            "decay": -0.03,  # Lower decay = more pheromone persistence = more avoidance
+            "decay": -0.03,
+            "initial_pool_size": 5,
         },
-        preferred_templates=["exploration_heavy", "balanced_exploration"],
+        preferred_templates=["exploration_heavy", "balanced_exploration", "coverage_focused"],
         weight_ranges={
             "pheromone_repulsion": (0.2, 0.4),
             "random_jitter": (0.1, 0.25),
             "semantic_similarity": (0.3, 0.5),
+            "node_centrality": (0.1, 0.25),
         },
-        description="Increase exploration by adding agents, steps, and exploration heuristics",
+        description="Increase exploration, coverage, and dispersion",
     ),
 
-    MutationIntent.REDUCE_EXPLORATION: IntentAction(
+    MutationIntent.EXPLOIT: IntentAction(
         param_adjustments={
             "n_agents": -2,
             "steps": -1,
@@ -225,84 +247,36 @@ INTENT_ACTIONS: Dict[MutationIntent, IntentAction] = {
         },
         preferred_templates=["semantic_focused", "exploitation"],
         weight_ranges={
-            "semantic_similarity": (0.6, 0.8),
+            "semantic_similarity": (0.6, 0.85),
             "pheromone_repulsion": (0.05, 0.15),
         },
-        description="Reduce exploration to focus on semantic exploitation",
+        description="Focus on semantic exploitation and faster convergence",
     ),
 
     MutationIntent.REDUCE_LOOPS: IntentAction(
         param_adjustments={
-            "decay": -0.05,  # Lower decay = stronger pheromone = better avoidance
+            "decay": -0.05,
         },
         preferred_templates=["anti_loop", "exploration_heavy"],
         weight_ranges={
             "pheromone_repulsion": (0.3, 0.5),
             "random_jitter": (0.1, 0.2),
+            "semantic_similarity": (0.3, 0.5),
         },
-        description="Reduce revisit loops by increasing pheromone repulsion",
-    ),
-
-    MutationIntent.REDUCE_REVISITS: IntentAction(
-        param_adjustments={
-            "decay": -0.04,
-        },
-        preferred_templates=["anti_loop", "balanced_exploration"],
-        weight_ranges={
-            "pheromone_repulsion": (0.25, 0.45),
-        },
-        description="Reduce revisits with stronger pheromone avoidance",
-    ),
-
-    MutationIntent.IMPROVE_COVERAGE: IntentAction(
-        param_adjustments={
-            "n_agents": 4,
-            "initial_pool_size": 5,
-            "start_subset": 2,
-        },
-        preferred_templates=["coverage_focused", "exploration_heavy"],
-        weight_ranges={
-            "pheromone_repulsion": (0.2, 0.35),
-            "node_centrality": (0.1, 0.25),
-        },
-        description="Improve coverage with more agents and diverse starting points",
-    ),
-
-    MutationIntent.INCREASE_DISPERSION: IntentAction(
-        param_adjustments={
-            "n_agents": 3,
-            "decay": -0.03,
-        },
-        preferred_templates=["dispersion_focused", "exploration_heavy"],
-        weight_ranges={
-            "pheromone_repulsion": (0.3, 0.5),
-            "random_jitter": (0.15, 0.3),
-            "semantic_similarity": (0.2, 0.4),
-        },
-        description="Increase final dispersion with stronger repulsion",
+        description="Reduce revisit loops with stronger pheromone avoidance",
     ),
 
     MutationIntent.REDUCE_COST: IntentAction(
         param_adjustments={
             "n_agents": -3,
             "steps": -1,
+            "initial_pool_size": -5,
         },
-        preferred_templates=["efficient", "semantic_focused"],
+        preferred_templates=["efficient", "semantic_focused", "fast"],
         weight_ranges={
             "semantic_similarity": (0.6, 0.8),
         },
-        description="Reduce cost by decreasing agents and steps",
-    ),
-
-    MutationIntent.REDUCE_LATENCY: IntentAction(
-        param_adjustments={
-            "n_agents": -2,
-            "steps": -1,
-            "initial_pool_size": -5,
-        },
-        preferred_templates=["efficient", "fast"],
-        weight_ranges={},
-        description="Reduce latency by simplifying the search",
+        description="Reduce cost and latency by simplifying the search",
     ),
 
     MutationIntent.IMPROVE_QUALITY: IntentAction(
@@ -310,89 +284,26 @@ INTENT_ACTIONS: Dict[MutationIntent, IntentAction] = {
             "n_agents": 2,
             "steps": 1,
         },
-        preferred_templates=["quality_focused", "semantic_focused"],
+        preferred_templates=["quality_focused", "semantic_focused", "balanced"],
         weight_ranges={
             "semantic_similarity": (0.5, 0.7),
             "node_centrality": (0.1, 0.2),
+            "pheromone_repulsion": (0.15, 0.3),
         },
-        description="Improve quality by increasing semantic focus",
+        description="Improve quality through semantic focus and balanced heuristics",
     ),
 
-    MutationIntent.INCREASE_SEMANTIC_FOCUS: IntentAction(
-        param_adjustments={},
-        preferred_templates=["semantic_focused", "exploitation"],
-        weight_ranges={
-            "semantic_similarity": (0.6, 0.85),
-            "pheromone_repulsion": (0.05, 0.15),
-        },
-        description="Increase weight on semantic similarity",
-    ),
-
-    MutationIntent.AVOID_DEAD_ENDS: IntentAction(
+    MutationIntent.IMPROVE_CONNECTIVITY: IntentAction(
         param_adjustments={
             "initial_pool_size": 5,
             "start_subset": 2,
         },
         preferred_templates=["connectivity_focused", "hub_preferring"],
         weight_ranges={
-            "node_centrality": (0.2, 0.4),
+            "node_centrality": (0.2, 0.45),
             "semantic_similarity": (0.4, 0.6),
         },
-        description="Avoid dead-ends by preferring well-connected nodes",
-    ),
-
-    MutationIntent.IMPROVE_CONNECTIVITY: IntentAction(
-        param_adjustments={
-            "initial_pool_size": 3,
-        },
-        preferred_templates=["hub_preferring", "connectivity_focused"],
-        weight_ranges={
-            "node_centrality": (0.25, 0.45),
-        },
-        description="Improve connectivity by favoring hub nodes",
-    ),
-
-    MutationIntent.BALANCE_GROUPS: IntentAction(
-        param_adjustments={},
-        preferred_templates=[],
-        weight_ranges={},
-        description="Rebalance agent group ratios",
-    ),
-
-    MutationIntent.REBALANCE_HEURISTICS: IntentAction(
-        param_adjustments={},
-        preferred_templates=["balanced", "balanced_exploration"],
-        weight_ranges={
-            "semantic_similarity": (0.3, 0.5),
-            "pheromone_repulsion": (0.15, 0.3),
-            "node_centrality": (0.1, 0.2),
-        },
-        description="Rebalance heuristic weights for better mix",
-    ),
-
-    MutationIntent.SLOW_CONVERGENCE: IntentAction(
-        param_adjustments={
-            "decay": -0.04,
-        },
-        preferred_templates=["exploration_heavy", "anti_loop"],
-        weight_ranges={
-            "pheromone_repulsion": (0.25, 0.4),
-            "random_jitter": (0.1, 0.2),
-            "semantic_similarity": (0.3, 0.5),
-        },
-        description="Slow convergence to allow more exploration",
-    ),
-
-    MutationIntent.SPEED_CONVERGENCE: IntentAction(
-        param_adjustments={
-            "decay": 0.04,
-        },
-        preferred_templates=["semantic_focused", "exploitation"],
-        weight_ranges={
-            "semantic_similarity": (0.6, 0.8),
-            "pheromone_repulsion": (0.05, 0.15),
-        },
-        description="Speed up convergence by focusing on semantics",
+        description="Avoid dead-ends by preferring well-connected hub nodes",
     ),
 
     MutationIntent.NO_CHANGE: IntentAction(
@@ -428,26 +339,11 @@ def get_complementary_intents(primary: MutationIntent) -> List[MutationIntent]:
         List of complementary intents
     """
     COMPLEMENTARY_MAP = {
-        MutationIntent.INCREASE_EXPLORATION: [
-            MutationIntent.REDUCE_LOOPS,
-            MutationIntent.IMPROVE_COVERAGE,
-        ],
-        MutationIntent.REDUCE_LOOPS: [
-            MutationIntent.INCREASE_EXPLORATION,
-            MutationIntent.INCREASE_DISPERSION,
-        ],
-        MutationIntent.IMPROVE_QUALITY: [
-            MutationIntent.INCREASE_SEMANTIC_FOCUS,
-            MutationIntent.AVOID_DEAD_ENDS,
-        ],
-        MutationIntent.REDUCE_COST: [
-            MutationIntent.REDUCE_LATENCY,
-            MutationIntent.SPEED_CONVERGENCE,
-        ],
-        MutationIntent.AVOID_DEAD_ENDS: [
-            MutationIntent.IMPROVE_CONNECTIVITY,
-            MutationIntent.IMPROVE_COVERAGE,
-        ],
+        MutationIntent.EXPLORE: [MutationIntent.REDUCE_LOOPS],
+        MutationIntent.REDUCE_LOOPS: [MutationIntent.EXPLORE],
+        MutationIntent.IMPROVE_QUALITY: [MutationIntent.IMPROVE_CONNECTIVITY],
+        MutationIntent.REDUCE_COST: [MutationIntent.EXPLOIT],
+        MutationIntent.IMPROVE_CONNECTIVITY: [MutationIntent.EXPLORE],
     }
     return COMPLEMENTARY_MAP.get(primary, [])
 
@@ -463,27 +359,8 @@ def get_conflicting_intents(intent: MutationIntent) -> List[MutationIntent]:
         List of conflicting intents that should not be combined
     """
     CONFLICT_MAP = {
-        MutationIntent.INCREASE_EXPLORATION: [
-            MutationIntent.REDUCE_EXPLORATION,
-            MutationIntent.REDUCE_COST,
-            MutationIntent.SPEED_CONVERGENCE,
-        ],
-        MutationIntent.REDUCE_EXPLORATION: [
-            MutationIntent.INCREASE_EXPLORATION,
-            MutationIntent.IMPROVE_COVERAGE,
-            MutationIntent.SLOW_CONVERGENCE,
-        ],
-        MutationIntent.REDUCE_COST: [
-            MutationIntent.INCREASE_EXPLORATION,
-            MutationIntent.IMPROVE_COVERAGE,
-        ],
-        MutationIntent.SLOW_CONVERGENCE: [
-            MutationIntent.SPEED_CONVERGENCE,
-            MutationIntent.REDUCE_EXPLORATION,
-        ],
-        MutationIntent.SPEED_CONVERGENCE: [
-            MutationIntent.SLOW_CONVERGENCE,
-            MutationIntent.INCREASE_EXPLORATION,
-        ],
+        MutationIntent.EXPLORE: [MutationIntent.EXPLOIT, MutationIntent.REDUCE_COST],
+        MutationIntent.EXPLOIT: [MutationIntent.EXPLORE],
+        MutationIntent.REDUCE_COST: [MutationIntent.EXPLORE],
     }
     return CONFLICT_MAP.get(intent, [])

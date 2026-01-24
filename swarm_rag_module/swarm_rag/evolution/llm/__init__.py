@@ -4,11 +4,32 @@ LLM-guided evolution module.
 All LLM API calls flow through LLMClient (client.py).
 
 Architecture:
+- LLMBridge: Single entry point for all LLM features (use this!)
 - LLMMutationEngine: Main interface for LLM-guided mutations (orchestrates all tiers)
 - LLMClient: Single source of truth for all LLM API calls
 - EvolutionJournal: Tracks mutation history for learning loops
 - DecisionTracker: Captures agent decision data for behavioral analysis
+
+Usage:
+    from swarm_rag.evolution.llm import LLMBridge
+
+    # Initialize once at startup
+    bridge = LLMBridge.initialize(llm_config)
+
+    # Use throughout
+    if bridge.is_enabled():
+        journal = bridge.create_journal()
+        tracker = bridge.create_tracker()
 """
+
+# LLM Bridge (recommended entry point)
+from .bridge import (
+    LLMBridge,
+    is_llm_enabled,
+    get_mutator,
+    create_journal,
+    create_tracker,
+)
 
 # LLM Client (single source of truth for all API calls)
 from .client import LLMClient, LLMCallResult, SUPPORTED_PROVIDERS
@@ -87,6 +108,12 @@ from .parsers import ExpressionParser
 from .utils import genome_to_json_context
 
 __all__ = [
+    # Bridge (recommended entry point)
+    "LLMBridge",
+    "is_llm_enabled",
+    "get_mutator",
+    "create_journal",
+    "create_tracker",
     # Main interface
     "LLMMutationEngine",
     "ThreeTierMutator",  # Alias for backwards compatibility
