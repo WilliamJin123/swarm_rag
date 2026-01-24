@@ -6,9 +6,10 @@ Provides trajectory analysis and heuristic score statistics that help the
 LLM understand WHY agents are performing a certain way.
 """
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Union
 from collections import Counter
-import numpy as np
+import random
+import torch
 
 
 @dataclass
@@ -18,9 +19,9 @@ class AgentDecision:
     step: int
     current_node: int
     candidates: List[int]  # neighbor node IDs considered
-    scores: Dict[str, np.ndarray]  # {heuristic_name: scores per candidate}
-    final_scores: np.ndarray  # combined weighted scores
-    probabilities: np.ndarray  # softmax of final_scores
+    scores: Dict[str, torch.Tensor]  # {heuristic_name: scores per candidate}
+    final_scores: torch.Tensor  # combined weighted scores
+    probabilities: torch.Tensor  # softmax of final_scores
     chosen_node: int
     chosen_index: int
     deposit_amount: float
@@ -124,7 +125,6 @@ class DecisionTracker:
         self._query_id: Any = None
         self._n_agents: int = 0
         self._n_steps: int = 0
-        self._rng = np.random.default_rng()
         self._visited_nodes: Dict[int, set] = {}  # For priority mode
 
     def start_query(self, query_id: Any, n_agents: int, n_steps: int):
@@ -143,7 +143,7 @@ class DecisionTracker:
             return False
         if self.sample_rate >= 1.0:
             return True
-        return self._rng.random() < self.sample_rate
+        return random.random() < self.sample_rate
 
     def _should_capture_priority(
         self,
@@ -151,7 +151,7 @@ class DecisionTracker:
         step: int,
         current_node: int,
         chosen_node: int,
-        final_scores: np.ndarray
+        final_scores: Union[torch.Tensor, list]
     ) -> bool:
         """
         Determine if decision should be captured using priority sampling.
@@ -180,8 +180,9 @@ class DecisionTracker:
             self._visited_nodes[agent_id].add(chosen_node)
 
         # 3. Low confidence detection
-        if len(final_scores) >= 2:
-            sorted_scores = np.sort(final_scores)[::-1]
+        scores_tensor = torch.as_tensor(final_scores) if not isinstance(final_scores, torch.Tensor) else final_scores
+        if len(scores_tensor) >= 2:
+            sorted_scores, _ = torch.sort(scores_tensor, descending=True)
             if sorted_scores[0] > 0:
                 score_ratio = sorted_scores[1] / (sorted_scores[0] + 1e-10)
                 if score_ratio > 0.9:
@@ -193,9 +194,9 @@ class DecisionTracker:
 
         # Apply appropriate sample rate
         if is_edge_case:
-            return self._rng.random() < self.priority_sample_rate
+            return random.random() < self.priority_sample_rate
         else:
-            return self._rng.random() < self.sample_rate
+            return random.random() < self.sample_rate
 
     def record_decision(
         self,
@@ -203,8 +204,8 @@ class DecisionTracker:
         step: int,
         current_node: int,
         candidates: List[int],
-        heuristic_scores: Dict[str, np.ndarray],
-        final_scores: np.ndarray,
+        heuristic_scores: Dict[str, Union[torch.Tensor, list]],
+        final_scores: Union[torch.Tensor, list],
         chosen_node: int,
         chosen_index: int,
         deposit: float
@@ -217,7 +218,7 @@ class DecisionTracker:
             step: Current step in traversal (0 to n_steps-1)
             current_node: Node ID where agent is currently located
             candidates: List of neighbor node IDs considered for next move
-            heuristic_scores: Dict mapping heuristic name to score array
+            heuristic_scores: Dict mapping heuristic name to score tensor
             final_scores: Combined weighted scores used for selection
             chosen_node: The node ID that was selected
             chosen_index: Index of chosen_node in candidates list
@@ -234,19 +235,21 @@ class DecisionTracker:
         if not should_capture:
             return
 
+        # Convert final_scores to tensor
+        final_tensor = torch.as_tensor(final_scores) if not isinstance(final_scores, torch.Tensor) else final_scores.clone()
+
         # Compute probabilities from final scores
-        total = np.sum(final_scores) + 1e-10
-        probabilities = final_scores / total
+        total = torch.sum(final_tensor) + 1e-10
+        probabilities = final_tensor / total
 
         decision = AgentDecision(
             agent_id=agent_id,
             step=step,
             current_node=current_node,
             candidates=list(candidates),
-            scores={k: v.copy() if isinstance(v, np.ndarray) else np.array(v)
+            scores={k: torch.as_tensor(v).clone() if not isinstance(v, torch.Tensor) else v.clone()
                    for k, v in heuristic_scores.items()},
-            final_scores=final_scores.copy() if isinstance(final_scores, np.ndarray)
-                        else np.array(final_scores),
+            final_scores=final_tensor,
             probabilities=probabilities,
             chosen_node=chosen_node,
             chosen_index=chosen_index,
@@ -280,7 +283,7 @@ class DecisionTracker:
 
         dead_ends = sum(1 for d in self._decisions if d.chosen_node == d.current_node)
 
-        avg_branch = np.mean([len(d.candidates) for d in self._decisions]) if self._decisions else 0.0
+        avg_branch = float(torch.mean(torch.tensor([len(d.candidates) for d in self._decisions], dtype=torch.float32)).item()) if self._decisions else 0.0
 
         # Convergence detection
         convergence_step = None
@@ -299,9 +302,9 @@ class DecisionTracker:
         final_positions = [traj[-1] for traj in agent_trajectories if traj]
         if final_positions:
             counts = Counter(final_positions)
-            probs = np.array(list(counts.values())) / len(final_positions)
-            max_entropy = np.log(len(agent_trajectories)) if len(agent_trajectories) > 1 else 1.0
-            actual_entropy = -np.sum(probs * np.log(probs + 1e-10))
+            probs = torch.tensor(list(counts.values()), dtype=torch.float32) / len(final_positions)
+            max_entropy = torch.log(torch.tensor(float(len(agent_trajectories)))).item() if len(agent_trajectories) > 1 else 1.0
+            actual_entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
             dispersion = actual_entropy / max_entropy if max_entropy > 0 else 0.0
         else:
             dispersion = 0.0
@@ -332,13 +335,13 @@ class DecisionTracker:
         for name, scores in all_scores.items():
             if not scores:
                 continue
-            arr = np.array(scores)
+            arr = torch.tensor(scores, dtype=torch.float32)
             stats[name] = {
-                "mean": float(np.mean(arr)),
-                "std": float(np.std(arr)),
-                "min": float(np.min(arr)),
-                "max": float(np.max(arr)),
-                "median": float(np.median(arr))
+                "mean": float(torch.mean(arr).item()),
+                "std": float(torch.std(arr).item()),
+                "min": float(torch.min(arr).item()),
+                "max": float(torch.max(arr).item()),
+                "median": float(torch.median(arr).item())
             }
         return stats
 
@@ -353,16 +356,17 @@ class DecisionTracker:
         for d in self._decisions:
             if len(d.final_scores) == 0:
                 continue
-            sorted_indices = np.argsort(d.final_scores)[::-1]
-            rank = np.where(sorted_indices == d.chosen_index)[0]
+            _, sorted_indices = torch.sort(d.final_scores, descending=True)
+            rank = (sorted_indices == d.chosen_index).nonzero(as_tuple=True)[0]
             if len(rank) > 0:
-                ranks.append(rank[0])
-                if rank[0] == 0:
+                rank_val = rank[0].item()
+                ranks.append(rank_val)
+                if rank_val == 0:
                     greedy_matches += 1
 
         n_decisions = len(self._decisions)
         return {
-            "avg_chosen_rank": float(np.mean(ranks)) if ranks else 0.0,
+            "avg_chosen_rank": float(torch.mean(torch.tensor(ranks, dtype=torch.float32)).item()) if ranks else 0.0,
             "greedy_match_rate": greedy_matches / n_decisions if n_decisions > 0 else 0.0,
             "exploration_rate": 1.0 - (greedy_matches / n_decisions) if n_decisions > 0 else 0.0
         }
@@ -582,7 +586,7 @@ class DecisionTracker:
 
         for d in self._decisions:
             if len(d.final_scores) >= 2:
-                sorted_scores = np.sort(d.final_scores)[::-1]
+                sorted_scores, _ = torch.sort(d.final_scores, descending=True)
                 if sorted_scores[0] > 0 and sorted_scores[1] / (sorted_scores[0] + 1e-10) > 0.9:
                     low_confidence += 1
 

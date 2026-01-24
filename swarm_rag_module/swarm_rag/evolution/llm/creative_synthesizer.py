@@ -20,7 +20,7 @@ Trigger conditions:
 LLM calls: synthesize() -> LLMClient.call()
 """
 import logging
-import numpy as np
+import torch
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Set, TYPE_CHECKING
 
@@ -475,7 +475,8 @@ Generate creative expressions for each category. Use ONLY the heuristics listed 
             dummy_features = {h: 0.5 for h in allowed}
             result = node.evaluate(dummy_features)
 
-            if not np.isfinite(result).all() if hasattr(result, '__iter__') else not np.isfinite(result):
+            result_tensor = torch.as_tensor(result) if not isinstance(result, torch.Tensor) else result
+            if not torch.isfinite(result_tensor).all():
                 raise ValueError("Expression produces non-finite values")
 
             # Validation passed
