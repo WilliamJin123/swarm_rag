@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional, List
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
+import torch
 import re
 import os
 
@@ -45,8 +45,10 @@ class EvalReporter:
 
         for ax, metric in zip(axes, metrics):
             values = [r.get(metric, 0) for r in results]
+            values_tensor = torch.tensor(values, dtype=torch.float32)
+            mean_val = torch.mean(values_tensor).item()
             ax.plot(range(1, n_queries + 1), values, marker='o', markersize=3)
-            ax.axhline(y=np.mean(values), color='r', linestyle='--', label=f'Mean: {np.mean(values):.3f}')
+            ax.axhline(y=mean_val, color='r', linestyle='--', label=f'Mean: {mean_val:.3f}')
             ax.set_ylabel(metric)
             ax.legend(loc='upper right')
             ax.grid(True, alpha=0.3)
@@ -70,8 +72,9 @@ class EvalReporter:
         ax.hist(latencies, bins=bins, edgecolor='black', alpha=0.7)
 
         # Add statistical markers
-        mean_lat = np.mean(latencies)
-        median_lat = np.median(latencies)
+        latencies_tensor = torch.tensor(latencies, dtype=torch.float32)
+        mean_lat = torch.mean(latencies_tensor).item()
+        median_lat = torch.median(latencies_tensor).item()
         ax.axvline(mean_lat, color='r', linestyle='--', label=f'Mean: {mean_lat:.3f}s')
         ax.axvline(median_lat, color='g', linestyle='--', label=f'Median: {median_lat:.3f}s')
 
@@ -97,8 +100,9 @@ class EvalReporter:
 
         for k in k_values:
             values = [r.get(f'Recall@{k}', 0) for r in results]
-            means.append(np.mean(values))
-            stds.append(np.std(values))
+            values_tensor = torch.tensor(values, dtype=torch.float32)
+            means.append(torch.mean(values_tensor).item())
+            stds.append(torch.std(values_tensor).item())
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(k_values, means, 'b-o', linewidth=2, markersize=8, label='Mean Recall@K')

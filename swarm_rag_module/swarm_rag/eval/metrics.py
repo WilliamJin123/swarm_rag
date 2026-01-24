@@ -1,5 +1,5 @@
 import pandas as pd
-import numpy as np
+import torch
 from typing import List, Dict, Any, TypedDict, Union
 from .metric_functions import MetricFunctions
 
@@ -27,10 +27,12 @@ Metrics = TypedDict('Metrics', {
 }, total=False)
 
 def iqr(x):
-    return np.percentile(x, 75) - np.percentile(x, 25)
+    t = torch.tensor(x, dtype=torch.float32) if not isinstance(x, torch.Tensor) else x.float()
+    return (torch.quantile(t, 0.75) - torch.quantile(t, 0.25)).item()
 
-def rng(x): # range
-    return np.max(x) - np.min(x)
+def rng(x):  # range
+    t = torch.tensor(x, dtype=torch.float32) if not isinstance(x, torch.Tensor) else x.float()
+    return (torch.max(t) - torch.min(t)).item()
 
 class Evaluator:
     def __init__(
