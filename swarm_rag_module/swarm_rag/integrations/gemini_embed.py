@@ -1,7 +1,7 @@
 from typing import List, Union, Any
 from ..interfaces.abstract_classes import EmbeddingProvider
 from ..utils import fail_on_missing_imports
-import numpy as np
+import torch
 
 try:
     import google.genai as genai
@@ -15,13 +15,13 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         genai.configure(api_key=api_key)
         self.model = model
 
-    def embed_query(self, query: Union[str, Any]) -> np.ndarray:
+    def embed_query(self, query: Union[str, Any]) -> torch.Tensor:
         if not isinstance(query, str):
             query = str(query)
-        return np.array(self.embed_query_batch([query])[0])
+        return self.embed_query_batch([query])[0]
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=60))
-    def embed_query_batch(self, queries: List[Union[str, Any]]) -> List[np.ndarray]:
+    def embed_query_batch(self, queries: List[Union[str, Any]]) -> List[torch.Tensor]:
         # Convert to strings if needed
         texts = [str(q) if not isinstance(q, str) else q for q in queries]
 
@@ -32,5 +32,5 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         )
 
         # The result.embeddings is a list of dicts with 'values'
-        embeddings = [np.array(emb['values']) for emb in result['embeddings']]
+        embeddings = [torch.tensor(emb['values'], dtype=torch.float32) for emb in result['embeddings']]
         return embeddings

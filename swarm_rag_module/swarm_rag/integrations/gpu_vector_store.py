@@ -51,6 +51,8 @@ class GPUVectorStore(VectorStore):
     """
     PyTorch-native vector store with zero CPU-GPU transfers during search.
 
+    Also available as `TorchVectorStore` for device-agnostic code.
+
     Key features:
     - All embeddings stored as normalized GPU tensors
     - Cosine similarity via matrix multiplication (extremely fast on GPU)
@@ -58,8 +60,11 @@ class GPUVectorStore(VectorStore):
     - Compatible with existing VectorStore interface
 
     Usage:
-        # From dictionary of embeddings
-        store = GPUVectorStore.from_dict(doc_embs)
+        # From dictionary of embeddings (auto-detect device)
+        store = GPUVectorStore.from_dict(doc_embs, device="auto")
+
+        # Force CPU
+        store = GPUVectorStore.from_dict(doc_embs, device="cpu")
 
         # Search
         results = store.search(query_vec, k=10)
@@ -601,4 +606,7 @@ class GPUVectorStore(VectorStore):
             pass
 
 
-__all__ = ['GPUVectorStore', 'TensorSearchResult']
+# Device-agnostic alias (GPUVectorStore works on both CPU and GPU)
+TorchVectorStore = GPUVectorStore
+
+__all__ = ['GPUVectorStore', 'TorchVectorStore', 'TensorSearchResult']

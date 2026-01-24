@@ -24,6 +24,8 @@ class GPUGraphStore(GraphStore):
     """
     GPU-accelerated graph store using CSR (Compressed Sparse Row) format.
 
+    Also available as `TorchGraphStore` for device-agnostic code.
+
     Stores adjacency in sparse format for massive memory savings while
     maintaining fast batch neighbor lookups via vectorized operations.
 
@@ -32,10 +34,14 @@ class GPUGraphStore(GraphStore):
     - Batch neighbor lookup via vectorized gather operations
     - Dynamic max_degree per batch (not fixed)
     - Compatible with existing GraphStore interface
+    - Works on both CPU and GPU with same code path
 
     Usage:
-        # From adjacency dict
-        store = GPUGraphStore.from_adjacency_dict(adj_dict)
+        # From adjacency dict (auto-detect device)
+        store = GPUGraphStore.from_adjacency_dict(adj_dict, device="auto")
+
+        # Force CPU
+        store = GPUGraphStore.from_adjacency_dict(adj_dict, device="cpu")
 
         # From CSR matrix
         store = GPUGraphStore.from_csr(csr_matrix)
@@ -526,4 +532,7 @@ class GPUGraphStore(GraphStore):
             pass
 
 
-__all__ = ['GPUGraphStore']
+# Device-agnostic alias (GPUGraphStore works on both CPU and GPU)
+TorchGraphStore = GPUGraphStore
+
+__all__ = ['GPUGraphStore', 'TorchGraphStore']
