@@ -644,6 +644,208 @@ class GeneticStrategies:
 
         return population
 
+    @staticmethod
+    @GeneticRegistry.register_creation(GeneticKey.BASELINE_SEEDED_INITIALIZATION)
+    def baseline_seeded_initialization(ctx: EvolutionContext, count: int) -> List[Genome]:
+        """
+        Seeds the population with genomes matching the baseline from test_n_q.py.
+
+        The baseline config that achieves >20%:
+        - semantic_similarity_unnormalized (0.5 weight)
+        - stark_centrality (0.2 weight)
+        - pheromone_repulsion (0.25 weight)
+        - random_jitter (0.05 weight)
+        - n_agents=25, steps=5, decay=0.5, initial_pool_size=30
+
+        This ensures evolution starts from a known-good solution.
+        """
+        population = []
+        n_groups = ctx.config.genetic.n_agent_groups
+
+        def make_expression_tree(features_weights: List[tuple]) -> ExpressionNode:
+            """
+            Build expression tree from (feature, weight) pairs.
+            Result: (f1 * w1) + (f2 * w2) + ...
+            """
+            if not features_weights:
+                return ExpressionNode("const", 1.0)
+
+            terms = []
+            for feature, weight in features_weights:
+                # feature * weight
+                term = ExpressionNode("op", "*", [
+                    ExpressionNode("feature", feature),
+                    ExpressionNode("const", weight)
+                ])
+                terms.append(term)
+
+            # Combine with + operator
+            if len(terms) == 1:
+                return terms[0]
+
+            result = terms[0]
+            for term in terms[1:]:
+                result = ExpressionNode("op", "+", [result, term])
+
+            return result
+
+        # Baseline params from test_n_q.py
+        baseline_params = {
+            "n_agents": 25,
+            "steps": 5,
+            "decay": 0.5,
+            "initial_pool_size": 30,
+            "start_subset": 10,
+        }
+
+        # Baseline movement strategy
+        # 0.5 * semantic_similarity_unnormalized + 0.2 * stark_centrality +
+        # 0.25 * pheromone_repulsion + 0.05 * random_jitter
+        baseline_movement = [
+            ("semantic_similarity_unnormalized", 0.5),
+            ("stark_centrality", 0.2),
+            ("pheromone_repulsion", 0.25),
+            ("random_jitter", 0.05),
+        ]
+
+        # 1. Pure Baseline (exact match)
+        strategies = {}
+        strategies["ranking"] = ExpressionNode("op", "+", [
+            ExpressionNode("op", "*", [
+                ExpressionNode("feature", "semantic_rank"),
+                ExpressionNode("const", 0.9)
+            ]),
+            ExpressionNode("op", "*", [
+                ExpressionNode("feature", "percentage_visited"),
+                ExpressionNode("const", 0.1)
+            ])
+        ])
+
+        group_ratios = {}
+        for g in range(n_groups):
+            group_ratios[f"g{g}"] = 1.0 / n_groups
+            strategies[f"g{g}_movement"] = make_expression_tree(baseline_movement)
+            strategies[f"g{g}_deposit"] = ExpressionNode("feature", "flat")
+
+        params = baseline_params.copy()
+        population.append(Genome(
+            id="gen0_baseline_exact",
+            params=params,
+            group_ratios=group_ratios,
+            strategies=strategies,
+            mutation_rate=0.15  # Lower mutation to preserve good genes
+        ))
+
+        # 2. Baseline variant with unnormalized semantic for deposit
+        if count > 1:
+            strategies2 = {}
+            strategies2["ranking"] = ExpressionNode("feature", "semantic_rank")
+            group_ratios2 = {}
+            for g in range(n_groups):
+                group_ratios2[f"g{g}"] = 1.0 / n_groups
+                strategies2[f"g{g}_movement"] = make_expression_tree(baseline_movement)
+                strategies2[f"g{g}_deposit"] = ExpressionNode("feature", "semantic_unnormalized")
+
+            population.append(Genome(
+                id="gen0_baseline_variant1",
+                params=baseline_params.copy(),
+                group_ratios=group_ratios2,
+                strategies=strategies2,
+                mutation_rate=0.15
+            ))
+
+        # 3. Baseline without stark_centrality (fallback for graphs without it)
+        if count > 2:
+            no_stark_movement = [
+                ("semantic_similarity_unnormalized", 0.6),
+                ("pheromone_repulsion", 0.3),
+                ("random_jitter", 0.1),
+            ]
+            strategies3 = {}
+            strategies3["ranking"] = ExpressionNode("feature", "semantic_rank")
+            group_ratios3 = {}
+            for g in range(n_groups):
+                group_ratios3[f"g{g}"] = 1.0 / n_groups
+                strategies3[f"g{g}_movement"] = make_expression_tree(no_stark_movement)
+                strategies3[f"g{g}_deposit"] = ExpressionNode("feature", "flat")
+
+            population.append(Genome(
+                id="gen0_baseline_no_stark",
+                params=baseline_params.copy(),
+                group_ratios=group_ratios3,
+                strategies=strategies3,
+                mutation_rate=0.20
+            ))
+
+        # 4. Baseline with more exploration (higher pheromone weight)
+        if count > 3:
+            explore_movement = [
+                ("semantic_similarity_unnormalized", 0.4),
+                ("stark_centrality", 0.15),
+                ("pheromone_repulsion", 0.35),
+                ("random_jitter", 0.1),
+            ]
+            strategies4 = {}
+            strategies4["ranking"] = ExpressionNode("op", "+", [
+                ExpressionNode("op", "*", [
+                    ExpressionNode("feature", "semantic_rank"),
+                    ExpressionNode("const", 0.8)
+                ]),
+                ExpressionNode("op", "*", [
+                    ExpressionNode("feature", "percentage_visited"),
+                    ExpressionNode("const", 0.2)
+                ])
+            ])
+            group_ratios4 = {}
+            for g in range(n_groups):
+                group_ratios4[f"g{g}"] = 1.0 / n_groups
+                strategies4[f"g{g}_movement"] = make_expression_tree(explore_movement)
+                strategies4[f"g{g}_deposit"] = ExpressionNode("feature", "exploration_bonus")
+
+            params4 = baseline_params.copy()
+            params4["steps"] = 7  # More steps for exploration
+            params4["decay"] = 0.8  # Slower decay
+
+            population.append(Genome(
+                id="gen0_baseline_explore",
+                params=params4,
+                group_ratios=group_ratios4,
+                strategies=strategies4,
+                mutation_rate=0.20
+            ))
+
+        # 5. Baseline with more agents
+        if count > 4:
+            strategies5 = {}
+            strategies5["ranking"] = ExpressionNode("feature", "semantic_rank")
+            group_ratios5 = {}
+            for g in range(n_groups):
+                group_ratios5[f"g{g}"] = 1.0 / n_groups
+                strategies5[f"g{g}_movement"] = make_expression_tree(baseline_movement)
+                strategies5[f"g{g}_deposit"] = ExpressionNode("feature", "flat")
+
+            params5 = baseline_params.copy()
+            params5["n_agents"] = 30
+            params5["initial_pool_size"] = 40
+
+            population.append(Genome(
+                id="gen0_baseline_more_agents",
+                params=params5,
+                group_ratios=group_ratios5,
+                strategies=strategies5,
+                mutation_rate=0.15
+            ))
+
+        # Fill remainder with standard random initialization
+        remaining = count - len(population)
+        if remaining > 0:
+            random_pop = GeneticStrategies.standard_initialization(ctx, remaining)
+            for i, g in enumerate(random_pop):
+                g.id = f"gen0_rand_{i}"
+            population.extend(random_pop)
+
+        return population
+
     # --- MUTATION ---
 
     @staticmethod
@@ -759,14 +961,24 @@ class GeneticStrategies:
     def guided_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
         """
         Smart mutation that encourages known good patterns:
-        - Ensures 'semantic_similarity' is present in movement.
+        - Ensures semantic similarity features are present in movement.
         - Ensures 'pheromone_repulsion' (diversity) is occasionally injected.
-        - Prevents 'destructive' loss of key features.
+        - Protects critical features from being lost during mutation.
+
+        Critical features to protect:
+        - semantic_similarity / semantic_similarity_unnormalized
+        - stark_centrality (when present)
+        - pheromone_repulsion
         """
         tau = 0.2
         genome.mutation_rate = genome.mutation_rate * np.exp(tau * np.random.normal(0, 1))
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
+
+        # Critical feature names (protect these during mutation)
+        SEMANTIC_FEATURES = {'semantic_similarity', 'semantic_similarity_unnormalized'}
+        CENTRALITY_FEATURES = {'stark_centrality', 'node_centrality'}
+        DIVERSITY_FEATURES = {'pheromone_repulsion'}
 
         # Standard Parameter Jitter (Same as expression_tree_mutation)
         GeneticStrategies._mutate_params_standard(genome, ctx, rate)
@@ -781,53 +993,96 @@ class GeneticStrategies:
 
                 # Check for critical features
                 all_nodes = ExpressionEvolution.get_all_nodes(tree)
-                has_semantic = any(n.value == 'semantic_similarity' for n in all_nodes)
-                has_pheromone = any(n.value == 'pheromone_repulsion' for n in all_nodes)
-                
-                # A) Injection Logic (If missing, strong chance to add)
+                node_values = {n.value for n in all_nodes}
+
+                has_semantic = bool(node_values & SEMANTIC_FEATURES)
+                has_centrality = bool(node_values & CENTRALITY_FEATURES)
+                has_pheromone = bool(node_values & DIVERSITY_FEATURES)
+
+                # A) Injection Logic (If missing critical features, inject them)
                 injected = False
                 if "movement" in key:
-                    # If missing semantic, 50% chance to force inject it
+                    # If missing semantic signal, 50% chance to inject
                     if not has_semantic and random.random() < 0.5:
-                        # Wrap: (Current + semantic_similarity) / 2
+                        # Prefer unnormalized for baseline compatibility
+                        semantic_feature = "semantic_similarity_unnormalized"
+                        if semantic_feature not in feature_list:
+                            semantic_feature = "semantic_similarity"
+
+                        # Wrap: (Current + semantic * 0.5) / 1.5
                         new_node = ExpressionNode("op", "+", [
-                            tree.copy(), 
-                            ExpressionNode("feature", "semantic_similarity")
+                            tree.copy(),
+                            ExpressionNode("op", "*", [
+                                ExpressionNode("feature", semantic_feature),
+                                ExpressionNode("const", 0.5)
+                            ])
                         ])
                         genome.strategies[key] = ExpressionNode("op", "/", [
                              new_node,
-                             ExpressionNode("const", 2.0)
+                             ExpressionNode("const", 1.5)
                         ])
                         injected = True
-                    
+
                     # If missing diversity, 30% chance to inject
                     elif not has_pheromone and random.random() < 0.3:
-                         # Wrap: Current * pheromone_repulsion
+                        # Wrap: Current * (0.7 + 0.3 * pheromone_repulsion)
+                        pheromone_term = ExpressionNode("op", "+", [
+                            ExpressionNode("const", 0.7),
+                            ExpressionNode("op", "*", [
+                                ExpressionNode("const", 0.3),
+                                ExpressionNode("feature", "pheromone_repulsion")
+                            ])
+                        ])
                         genome.strategies[key] = ExpressionNode("op", "*", [
                             tree.copy(),
-                            ExpressionNode("feature", "pheromone_repulsion")
+                            pheromone_term
                         ])
                         injected = True
-                
+
+                    # If has centrality but missing semantic, 40% chance to add both
+                    elif has_centrality and not has_semantic and random.random() < 0.4:
+                        semantic_feature = "semantic_similarity_unnormalized"
+                        if semantic_feature not in feature_list:
+                            semantic_feature = "semantic_similarity"
+
+                        # Add semantic weighted sum
+                        genome.strategies[key] = ExpressionNode("op", "+", [
+                            ExpressionNode("op", "*", [
+                                tree.copy(),
+                                ExpressionNode("const", 0.4)
+                            ]),
+                            ExpressionNode("op", "*", [
+                                ExpressionNode("feature", semantic_feature),
+                                ExpressionNode("const", 0.6)
+                            ])
+                        ])
+                        injected = True
+
                 # B) Standard Mutation (if not injected)
                 if not injected:
-                    # If we have critical features, we want to be CAREFUL not to delete them.
-                    # We use standard mutation but might revert if it loses the critical feature.
+                    # Save original tree for potential revert
                     original_tree = tree.copy()
-                    
+
                     mutated_tree = ExpressionEvolution.mutate_tree(
                         tree, features=feature_list, mutation_rate=rate, inplace=True
                     )
-                    
-                    # Verification check
-                    if has_semantic:
-                         new_nodes = ExpressionEvolution.get_all_nodes(mutated_tree)
-                         if not any(n.value == 'semantic_similarity' for n in new_nodes):
-                             # Revert! We lost the most important signal.
-                             if random.random() < 0.8: # 80% chance to revert
-                                 genome.strategies[key] = original_tree
-                                 continue
-                    
+
+                    # Verification: Check if we lost critical features
+                    new_nodes = ExpressionEvolution.get_all_nodes(mutated_tree)
+                    new_values = {n.value for n in new_nodes}
+
+                    # Revert if we lost semantic features (very important!)
+                    if has_semantic and not (new_values & SEMANTIC_FEATURES):
+                        if random.random() < 0.85:  # 85% chance to revert
+                            genome.strategies[key] = original_tree
+                            continue
+
+                    # Revert if we lost centrality (moderately important)
+                    if has_centrality and not (new_values & CENTRALITY_FEATURES):
+                        if random.random() < 0.6:  # 60% chance to revert
+                            genome.strategies[key] = original_tree
+                            continue
+
                     genome.strategies[key] = mutated_tree
 
         genome.clear_cache()

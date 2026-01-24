@@ -3,7 +3,7 @@ from typing import Dict, List, Callable
 
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ..types.genome import DEFAULT_PARAMS, Genome, SwarmParams
-from ..types.config import EvolutionConfigDict, EvolutionContext
+from ..types.config import EvolutionContext
 from .strategies import GeneticRegistry
 
 

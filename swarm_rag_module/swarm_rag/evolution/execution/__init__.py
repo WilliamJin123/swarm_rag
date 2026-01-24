@@ -3,7 +3,12 @@ Evolution execution module.
 
 Provides evaluation, genetic strategies, and utilities for the evolution engine.
 """
-from .evaluator import PopulationEvaluator
+from .evaluator import (
+    PopulationEvaluator,
+    EvaluationTier,
+    EvaluationStats,
+    DEFAULT_TIERS,
+)
 from .fitness import FitnessCalculator
 from .strategies import GeneticStrategies, GeneticRegistry
 from .tracker import ProgressTracker
@@ -12,12 +17,7 @@ from .factory import GenomeFactory
 # Import llm_strategies to register LLM mutation with GeneticRegistry
 from . import llm_strategies  # noqa: F401
 
-# New efficiency-focused modules
-from .adaptive_evaluator import (
-    AdaptivePopulationEvaluator,
-    EvaluationTier,
-    EvaluationStats,
-)
+# Efficiency-focused modules
 from .stratified_sampler import (
     StratifiedQuerySampler,
     StratifiedSample,
@@ -32,17 +32,17 @@ from .embedding_cache import (
 )
 
 __all__ = [
-    # Original exports
+    # Core
     "PopulationEvaluator",
     "FitnessCalculator",
     "GeneticStrategies",
     "GeneticRegistry",
     "ProgressTracker",
     "GenomeFactory",
-    # Adaptive evaluation
-    "AdaptivePopulationEvaluator",
+    # Evaluation tiers
     "EvaluationTier",
     "EvaluationStats",
+    "DEFAULT_TIERS",
     # Stratified sampling
     "StratifiedQuerySampler",
     "StratifiedSample",
