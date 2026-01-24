@@ -12,19 +12,12 @@ import time
 import statistics
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Any, Tuple, Union
-import numpy as np
+import torch
 import logging
 
-from .device import get_device, ensure_tensor, to_numpy, clear_device_cache
+from .device import get_device, ensure_tensor, clear_device_cache
 
 logger = logging.getLogger(__name__)
-
-# Optional imports
-try:
-    import torch
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
 
 
 @dataclass
@@ -130,7 +123,7 @@ class Benchmarker:
 
     def _sync_if_needed(self, device: str):
         """Synchronize CUDA if needed for accurate timing."""
-        if self.sync_cuda and device == "cuda" and _TORCH_AVAILABLE:
+        if self.sync_cuda and device == "cuda":
             torch.cuda.synchronize()
 
     def run(
@@ -254,38 +247,37 @@ def benchmark_vector_search(
     Returns:
         ComparisonResult with speedup factor
     """
-    if not _TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch required for vector search benchmark")
-
     logger.info(f"Generating benchmark data: {n_docs} docs, {dim} dim, {n_queries} queries")
 
-    # Generate random data
-    np.random.seed(42)
-    doc_embeddings = np.random.randn(n_docs, dim).astype(np.float32)
-    doc_embeddings = doc_embeddings / np.linalg.norm(doc_embeddings, axis=1, keepdims=True)
+    # Generate random data using PyTorch
+    torch.manual_seed(42)
+    doc_embeddings = torch.randn(n_docs, dim, dtype=torch.float32)
+    doc_embeddings = doc_embeddings / torch.linalg.norm(doc_embeddings, dim=1, keepdim=True)
 
-    query_embeddings = np.random.randn(n_queries, dim).astype(np.float32)
-    query_embeddings = query_embeddings / np.linalg.norm(query_embeddings, axis=1, keepdims=True)
+    query_embeddings = torch.randn(n_queries, dim, dtype=torch.float32)
+    query_embeddings = query_embeddings / torch.linalg.norm(query_embeddings, dim=1, keepdim=True)
 
-    # CPU setup (NumPy)
+    # CPU setup (PyTorch CPU)
     def cpu_search():
         results = []
-        for q in query_embeddings:
-            scores = np.dot(doc_embeddings, q)
-            top_indices = np.argpartition(scores, -top_k)[-top_k:]
-            top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
-            results.append(top_indices)
+        with torch.no_grad():
+            for q in query_embeddings:
+                scores = torch.matmul(doc_embeddings, q)
+                _, top_indices = torch.topk(scores, top_k)
+                results.append(top_indices)
         return results
 
-    # GPU setup (PyTorch)
-    doc_tensor = torch.from_numpy(doc_embeddings).cuda()
-    query_tensor = torch.from_numpy(query_embeddings).cuda()
+    # GPU setup (PyTorch CUDA)
+    doc_tensor = doc_embeddings.cuda()
+    query_tensor = query_embeddings.cuda()
 
     def gpu_search():
-        # Batch matrix multiplication
-        scores = torch.mm(query_tensor, doc_tensor.t())
-        _, top_indices = torch.topk(scores, top_k, dim=1)
-        return top_indices.cpu().numpy()
+        # Use no_grad for inference performance
+        with torch.no_grad():
+            # Batch matrix multiplication
+            scores = torch.mm(query_tensor, doc_tensor.t())
+            _, top_indices = torch.topk(scores, top_k, dim=1)
+            return top_indices.cpu()
 
     benchmarker = Benchmarker(warmup_iterations=warmup, n_iterations=iterations)
 
@@ -323,9 +315,6 @@ def benchmark_batch_similarity(
     Returns:
         List of ComparisonResults for each batch size
     """
-    if not _TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch required for similarity benchmark")
-
     if batch_sizes is None:
         batch_sizes = [1, 10, 50, 100, 500]
 
@@ -335,24 +324,26 @@ def benchmark_batch_similarity(
     for batch_size in batch_sizes:
         logger.info(f"Benchmarking batch size {batch_size}")
 
-        # Generate data
-        np.random.seed(42)
-        candidates = np.random.randn(n_candidates, dim).astype(np.float32)
-        candidates = candidates / np.linalg.norm(candidates, axis=1, keepdims=True)
+        # Generate data using PyTorch
+        torch.manual_seed(42)
+        candidates = torch.randn(n_candidates, dim, dtype=torch.float32)
+        candidates = candidates / torch.linalg.norm(candidates, dim=1, keepdim=True)
 
-        queries = np.random.randn(batch_size, dim).astype(np.float32)
-        queries = queries / np.linalg.norm(queries, axis=1, keepdims=True)
+        queries = torch.randn(batch_size, dim, dtype=torch.float32)
+        queries = queries / torch.linalg.norm(queries, dim=1, keepdim=True)
 
         # CPU
         def cpu_similarity():
-            return np.dot(queries, candidates.T)
+            with torch.no_grad():
+                return torch.mm(queries, candidates.t())
 
         # GPU
-        candidates_gpu = torch.from_numpy(candidates).cuda()
-        queries_gpu = torch.from_numpy(queries).cuda()
+        candidates_gpu = candidates.cuda()
+        queries_gpu = queries.cuda()
 
         def gpu_similarity():
-            return torch.mm(queries_gpu, candidates_gpu.t()).cpu().numpy()
+            with torch.no_grad():
+                return torch.mm(queries_gpu, candidates_gpu.t()).cpu()
 
         comparison = benchmarker.compare(
             name=f"batch_similarity_batch{batch_size}",
@@ -387,31 +378,30 @@ def benchmark_heuristics(
     Returns:
         List of ComparisonResults for each heuristic
     """
-    if not _TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch required for heuristics benchmark")
-
     results = []
     benchmarker = Benchmarker(warmup_iterations=warmup, n_iterations=iterations)
 
-    # Generate data
-    np.random.seed(42)
-    query_np = np.random.randn(dim).astype(np.float32)
-    query_np = query_np / np.linalg.norm(query_np)
+    # Generate data using PyTorch
+    torch.manual_seed(42)
+    query_cpu = torch.randn(dim, dtype=torch.float32)
+    query_cpu = query_cpu / torch.linalg.norm(query_cpu)
 
-    targets_np = np.random.randn(n_candidates, dim).astype(np.float32)
-    targets_np = targets_np / np.linalg.norm(targets_np, axis=1, keepdims=True)
+    targets_cpu = torch.randn(n_candidates, dim, dtype=torch.float32)
+    targets_cpu = targets_cpu / torch.linalg.norm(targets_cpu, dim=1, keepdim=True)
 
-    query_gpu = torch.from_numpy(query_np).cuda()
-    targets_gpu = torch.from_numpy(targets_np).cuda()
+    query_gpu = query_cpu.cuda()
+    targets_gpu = targets_cpu.cuda()
 
     # Semantic similarity
     def cpu_semantic():
-        scores = np.dot(targets_np, query_np)
-        return (scores + 1.0) / 2.0
+        with torch.no_grad():
+            scores = torch.matmul(targets_cpu, query_cpu)
+            return (scores + 1.0) / 2.0
 
     def gpu_semantic():
-        scores = torch.matmul(targets_gpu, query_gpu)
-        return ((scores + 1.0) / 2.0).cpu().numpy()
+        with torch.no_grad():
+            scores = torch.matmul(targets_gpu, query_gpu)
+            return ((scores + 1.0) / 2.0).cpu()
 
     results.append(benchmarker.compare(
         "semantic_similarity",
@@ -420,21 +410,23 @@ def benchmark_heuristics(
         n_ops=n_candidates
     ))
 
-    # Node centrality (pure numpy, no GPU benefit expected)
-    degrees_np = np.random.randint(1, 100, n_candidates).astype(np.float32)
+    # Node centrality
+    degrees_cpu = torch.randint(1, 100, (n_candidates,), dtype=torch.float32)
     avg_degree = 50.0
 
     def cpu_centrality():
-        log_degrees = np.log(1 + degrees_np)
-        log_avg = np.log(1 + avg_degree)
-        return log_degrees / (log_degrees + log_avg + 1e-8)
+        with torch.no_grad():
+            log_degrees = torch.log(1 + degrees_cpu)
+            log_avg = torch.log(torch.tensor(1 + avg_degree))
+            return log_degrees / (log_degrees + log_avg + 1e-8)
 
-    degrees_gpu = torch.from_numpy(degrees_np).cuda()
-    log_avg_t = np.log(1 + avg_degree)
+    degrees_gpu = degrees_cpu.cuda()
+    log_avg_t = torch.log(torch.tensor(1 + avg_degree)).item()
 
     def gpu_centrality():
-        log_degrees = torch.log(1 + degrees_gpu)
-        return (log_degrees / (log_degrees + log_avg_t + 1e-8)).cpu().numpy()
+        with torch.no_grad():
+            log_degrees = torch.log(1 + degrees_gpu)
+            return (log_degrees / (log_degrees + log_avg_t + 1e-8)).cpu()
 
     results.append(benchmarker.compare(
         "node_centrality",
@@ -466,9 +458,6 @@ def run_all_benchmarks(
     Returns:
         Dictionary of benchmark results
     """
-    if not _TORCH_AVAILABLE:
-        raise RuntimeError("PyTorch required for benchmarks")
-
     device = get_device()
     if device != "cuda":
         logger.warning("GPU not available, skipping GPU benchmarks")

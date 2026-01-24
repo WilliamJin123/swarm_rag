@@ -10,8 +10,11 @@ from tqdm.auto import tqdm
 
 # Re-export device utilities
 from .device import (
-    get_device, ensure_tensor, to_numpy,
-    clear_device_cache, get_gpu_memory_info
+    get_device, ensure_tensor,
+    clear_device_cache, get_gpu_memory_info,
+    get_device_from_mode, to_device,
+    smart_convert, move_to_device, tensor_like,
+    is_tensor, supports_gpu
 )
 
 # Re-export benchmark utilities
@@ -107,9 +110,15 @@ __all__ = [
     # Device utilities
     'get_device',
     'ensure_tensor',
-    'to_numpy',
     'clear_device_cache',
     'get_gpu_memory_info',
+    'get_device_from_mode',
+    'to_device',
+    'smart_convert',
+    'move_to_device',
+    'tensor_like',
+    'is_tensor',
+    'supports_gpu',
     # Benchmark utilities
     'Benchmarker',
     'BenchmarkResult',
