@@ -1,5 +1,4 @@
 import random
-import numpy as np
 import pytest
 from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfig
 from swarm_rag.evolution.types.fitness_results import FitnessResult

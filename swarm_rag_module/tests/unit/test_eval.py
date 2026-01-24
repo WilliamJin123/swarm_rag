@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import pandas as pd
-import numpy as np
 
 # Adjust imports to match project structure
 from swarm_rag.eval.metrics import Evaluator, RetrievedNode

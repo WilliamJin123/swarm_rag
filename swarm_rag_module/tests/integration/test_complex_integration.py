@@ -4,12 +4,13 @@ import os
 from pathlib import Path
 import shutil
 import pickle
-import numpy as np
+import tempfile
 from typing import List, Dict, Any
 
 from swarm_rag.evolution.engine import EvolutionEngine
 from swarm_rag.evolution.types.genome import Genome
-from swarm_rag.evolution.types.config import EvolutionConfig
+from swarm_rag.evolution.types.config import EvolutionConfig, StorageConfig
+from swarm_rag.evolution.storage import RunManager
 from swarm_rag.evolution.execution.evaluator import PopulationEvaluator
 from swarm_rag.eval.metrics import Evaluator as BaseEvaluator
 from swarm_rag.evolution.execution.fitness import FitnessCalculator
@@ -39,24 +40,28 @@ class MockBaseEvaluator(BaseEvaluator):
 
 # --- TESTS ---
 
-# Create results directory if it doesn't exist
-RESULTS_DIR = Path(__file__).resolve().parent / "evo_results"
-os.makedirs(RESULTS_DIR, exist_ok=True)
+RESULTS_DIR = None  # Will be set in setup_module
 
-CKPT_FILE = os.path.join(RESULTS_DIR, "complex_test.pkl")
-LOG_FILE = os.path.join(RESULTS_DIR, "complex_log.jsonl")
+def setup_module():
+    global RESULTS_DIR
+    RESULTS_DIR = tempfile.mkdtemp(prefix="evo_complex_test_")
+
+def teardown_module():
+    global RESULTS_DIR
+    if RESULTS_DIR and os.path.exists(RESULTS_DIR):
+        shutil.rmtree(RESULTS_DIR, ignore_errors=True)
 
 def test_variance_calculation_flow():
     print("\n--- Testing Variance/Stability Flow ---")
-    
+
     # 1. Setup
     retriever = MockRetriever()
     base_eval = MockBaseEvaluator(index_name="test")
     # Fitness that cares about Stability
-    fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0}) 
-    
+    fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0})
+
     pop_eval = PopulationEvaluator(retriever, base_eval, fitness_calc)
-    
+
     # 2. Create a dummy genome
     g = Genome(id="unstable_agent")
     class MockStrategy:
@@ -69,37 +74,47 @@ def test_variance_calculation_flow():
     }
     # Manually compile empty cache to pass checks
     g._compiled_cache = {
-        'g0_movement': lambda x: 0, 
+        'g0_movement': lambda x: 0,
         'g0_deposit': lambda x: 0
     }
-    
+
     # 3. Evaluate on 2 queries (One Good, One Bad)
     queries = ["q1", "q2"]
     ground_truth = [[0], [0]]
-    
+
     pop_eval.evaluate([g], queries, ground_truth)
-    
+
     # 4. Check Metrics
     print(f"  Recall Mean: {g.metrics['Recall@20']} (Expected 0.5)")
     print(f"  Variance:    {g.metrics['variance']} (Expected 0.25)")
     print(f"  Stability:   {g.fitness.stability_score} (Expected 0.75)")
-    
+
     assert g.metrics['Recall@20'] == 0.5, "Mean calculation wrong"
     assert g.metrics['variance'] == 0.25, "Variance calculation wrong"
     # Stability = 1.0 - Variance
     assert g.fitness.stability_score == 0.75, "Stability score logic failed"
-    print("  ✓ Stability metrics flow confirmed")
+    print("  Stability metrics flow confirmed")
 
 def test_checkpoint_resume():
     print("\n--- Testing Checkpoint Save & Resume ---")
 
     # 1. Config for Short Run
-    config = EvolutionConfig()
-    config.n_generations = 4
-    config.checkpoint.checkpoint_path = CKPT_FILE
-    config.checkpoint.log_path = LOG_FILE
+    storage = StorageConfig(
+        base_dir=RESULTS_DIR,
+        dataset="test",
+        run_id="complex_test",
+        checkpoint_frequency=1,
+        validation_frequency=1,
+    )
+
+    config = EvolutionConfig(
+        n_generations=4,
+        storage=storage,
+    )
     config.map_elites.batch_size = 4
-    config.checkpoint.plot_path = os.path.join(RESULTS_DIR, "evo_plot_complex.png")
+
+    # Create RunManager
+    run_manager = RunManager(storage)
 
     # 2. Run Initial Engine (Gens 0-1)
     print("  Running initial batch (Gen 0-1)...")
@@ -109,65 +124,66 @@ def test_checkpoint_resume():
         evaluator=MockBaseEvaluator("test"),
         train_query_ids=["q1"], train_ground_truth=[[0]],
         val_query_ids=["v1"], val_ground_truth=[[0]],
-        config=config
+        config=config,
+        run_manager=run_manager,
     )
+    engine.initialize_run()
 
     config.n_generations = 2
     engine.optimize()
 
-    assert os.path.exists(CKPT_FILE), "Checkpoint not created"
+    assert os.path.exists(storage.latest_checkpoint_path), f"Checkpoint not created at {storage.latest_checkpoint_path}"
 
     # 3. Load Checkpoint
     print("  Loading checkpoint...")
-    from dataclasses import replace
-    new_config = EvolutionConfig()
-    new_config.n_generations = 4  # Extend to 4 gens
-    new_config.checkpoint.checkpoint_path = CKPT_FILE
-    new_config.checkpoint.log_path = LOG_FILE
+
+    new_storage = StorageConfig(
+        base_dir=RESULTS_DIR,
+        dataset="test",
+        run_id="complex_test",
+        checkpoint_frequency=1,
+        validation_frequency=1,
+    )
+    new_config = EvolutionConfig(
+        n_generations=4,
+        storage=new_storage,
+    )
     new_config.map_elites.batch_size = 4
-    new_config.checkpoint.plot_path = os.path.join(RESULTS_DIR, "evo_plot_complex.png")
-    
+
+    new_run_manager = RunManager(new_storage)
+
     loaded_engine = EvolutionEngine.load_checkpoint(
-        checkpoint_path=CKPT_FILE,
-        retriever=MockRetriever(), # Re-inject dependencies
+        run_manager=new_run_manager,
+        checkpoint_path=new_storage.latest_checkpoint_path,
+        retriever=MockRetriever(),
         evaluator=MockBaseEvaluator("test"),
         fitness_calculator=FitnessCalculator({'Recall@20': 1.0}),
         train_query_ids=["q1"], train_ground_truth=[[0]],
         val_query_ids=["v1"], val_ground_truth=[[0]],
-        config=new_config # Pass new config
+        config=new_config,
     )
-    
+
     # 4. Verify State
     print(f"  Resumed at Gen: {loaded_engine.evo_context.generation}")
     assert loaded_engine.evo_context.generation == 1, "Did not load the correct generation index"
-    
+
     # 5. Continue Run
     print("  Continuing evolution (Gen 2-3)...")
     loaded_engine.optimize()
-    
+
     # 6. Verify Log has 4 entries (0, 1, 2, 3)
-    with open(LOG_FILE, 'r') as f:
+    with open(new_storage.log_path, 'r') as f:
         lines = f.readlines()
         print(f"  Total log lines: {len(lines)}")
         assert len(lines) >= 4, "Resume did not append to log correctly"
-        
-    print("  ✓ Checkpoint resume successful")
 
-def cleanup():
-    for f in [CKPT_FILE, LOG_FILE, os.path.join(RESULTS_DIR, "evo_plot_complex.png")]:
-        if os.path.exists(f):
-            os.remove(f)
-    # Clean intermediate checkpoints
-    base, ext = os.path.splitext(CKPT_FILE)
-    for f in os.listdir(RESULTS_DIR):
-        if f.startswith(os.path.basename(base)) and f.endswith(ext):
-            os.remove(os.path.join(RESULTS_DIR, f))
+    print("  Checkpoint resume successful")
 
 if __name__ == "__main__":
     try:
+        setup_module()
         test_variance_calculation_flow()
         test_checkpoint_resume()
         print("\nALL COMPLEX INTEGRATION TESTS PASSED")
     finally:
-        # cleanup()
-        pass
+        teardown_module()

@@ -3,11 +3,13 @@ import time
 import shutil
 import os
 import random
+import tempfile
 from typing import List, Dict, Any
 
 from swarm_rag.evolution.engine import EvolutionEngine
 from swarm_rag.evolution.types.genome import Genome, DEFAULT_PARAMS
-from swarm_rag.evolution.types.config import EvolutionConfig
+from swarm_rag.evolution.types.config import EvolutionConfig, StorageConfig
+from swarm_rag.evolution.storage import RunManager
 from swarm_rag.eval.metrics import Evaluator
 from swarm_rag.evolution.execution.fitness import FitnessCalculator
 
@@ -19,7 +21,7 @@ class MockRetriever:
         # Return deterministic "fake" results
         results = []
         n_agents = kwargs.get('n_agents', 0)
-        
+
         for q in queries:
             # Fake nodes [0, 1, 2, 3]
             if n_agents > 20:
@@ -45,81 +47,85 @@ def test_full_evolution_loop():
     print("EVOLUTION ENGINE INTEGRATION TEST")
     print("="*60)
 
-    # 1. Setup Config
-    config = EvolutionConfig()
-    config.n_generations = 3
-    config.map_elites.batch_size = 6
-    config.checkpoint.validation_frequency = 1
-    config.genetic.n_agent_groups = 2
-    config.checkpoint.checkpoint_path = "test_ckpt.pkl"
-    config.checkpoint.log_path = "test_log.jsonl"
-    config.checkpoint.plot_path = "test_plot.png"
-    
-    # 2. Setup Data
-    train_q = ["q1", "q2"]
-    train_gt = [[0], [0]] # Expect node 0
-    val_q = ["v1"]
-    val_gt = [[0]]
+    # Create temp directory for test run
+    test_dir = tempfile.mkdtemp(prefix="evo_test_")
 
-    # 3. Initialize Components
-    retriever = MockRetriever()
-    evaluator = MockEvaluator(index_name="test")
-    # Fitness: We care about Recall
-    fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0})
+    try:
+        # 1. Setup Config with new StorageConfig
+        storage = StorageConfig(
+            base_dir=test_dir,
+            dataset="test",
+            run_id="test_run",
+            validation_frequency=1,
+            checkpoint_frequency=1,
+        )
 
-    engine = EvolutionEngine(
-        retriever=retriever,
-        fitness_calculator=fitness_calc,
-        evaluator=evaluator,
-        train_query_ids=train_q,
-        train_ground_truth=train_gt,
-        val_query_ids=val_q,
-        val_ground_truth=val_gt,
-        config=config
-    )
+        config = EvolutionConfig(
+            n_generations=3,
+            storage=storage,
+        )
+        config.map_elites.batch_size = 6
+        config.genetic.n_agent_groups = 2
 
-    # 4. Run Optimization
-    print("\nStarting Engine...")
-    start = time.time()
-    best_genome = engine.optimize()
-    duration = time.time() - start
-    
-    print(f"\nOptimization Finished in {duration:.2f}s")
-    
-    # 5. Assertions
-    print("\nVerifying Results:")
-    
-    # Check A: Best Genome exists
-    assert best_genome is not None
-    print(f"  ✓ Best Genome ID: {best_genome.id}")
-    print(f"  ✓ Best Fitness: {best_genome.fitness.quality_score}")
-    
-    # Check B: Files created
-    assert os.path.exists(config.checkpoint.log_path), "Log file missing"
-    assert os.path.exists(config.checkpoint.checkpoint_path), "Checkpoint missing"
-    assert os.path.exists(config.checkpoint.plot_path), "Plot missing"
-    print("  ✓ Artifacts created (log, checkpoint, plot)")
+        # 2. Setup Data
+        train_q = ["q1", "q2"]
+        train_gt = [[0], [0]] # Expect node 0
+        val_q = ["v1"]
+        val_gt = [[0]]
 
-    # Check C: Did it actually evolve?
-    # Our MockRetriever gives better score if n_agents > 20.
-    # We hope the GA found that.
-    print(f"  ✓ Best Param n_agents: {best_genome.params['n_agents']}")
-    
-    # Cleanup
-    print("\nCleaning up...")
-    files_to_clean = [
-        config.checkpoint.log_path,
-        config.checkpoint.checkpoint_path,
-        config.checkpoint.plot_path
-    ]
+        # 3. Initialize Components
+        retriever = MockRetriever()
+        evaluator = MockEvaluator(index_name="test")
+        # Fitness: We care about Recall
+        fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0})
 
-    for f in files_to_clean:
-        if f and os.path.exists(f):
-            try:
-                os.remove(f)
-            except PermissionError:
-                print(f"Warning: Could not remove {f} (file in use)")
-    print("  ✓ Cleanup done")
+        # Create RunManager
+        run_manager = RunManager(storage)
+
+        engine = EvolutionEngine(
+            retriever=retriever,
+            fitness_calculator=fitness_calc,
+            evaluator=evaluator,
+            train_query_ids=train_q,
+            train_ground_truth=train_gt,
+            val_query_ids=val_q,
+            val_ground_truth=val_gt,
+            config=config,
+            run_manager=run_manager,
+        )
+        engine.initialize_run()
+
+        # 4. Run Optimization
+        print("\nStarting Engine...")
+        start = time.time()
+        best_genome = engine.optimize()
+        duration = time.time() - start
+
+        print(f"\nOptimization Finished in {duration:.2f}s")
+
+        # 5. Assertions
+        print("\nVerifying Results:")
+
+        # Check A: Best Genome exists
+        assert best_genome is not None
+        print(f"  Best Genome ID: {best_genome.id}")
+        print(f"  Best Fitness: {best_genome.fitness.quality_score}")
+
+        # Check B: Files created
+        assert os.path.exists(storage.log_path), f"Log file missing at {storage.log_path}"
+        assert os.path.exists(storage.latest_checkpoint_path), f"Checkpoint missing at {storage.latest_checkpoint_path}"
+        assert os.path.exists(storage.plot_path), f"Plot missing at {storage.plot_path}"
+        print("  Artifacts created (log, checkpoint, plot)")
+
+        # Check C: Did it actually evolve?
+        print(f"  Best Param n_agents: {best_genome.params['n_agents']}")
+
+    finally:
+        # Cleanup
+        print("\nCleaning up...")
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir, ignore_errors=True)
+        print("  Cleanup done")
 
 if __name__ == "__main__":
     test_full_evolution_loop()

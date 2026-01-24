@@ -1,4 +1,4 @@
-import numpy as np
+import torch
 import random
 from typing import Dict, Any
 
@@ -90,9 +90,9 @@ def test_genome_compiler():
     
     # Mock HeuristicContext
     class MockCtx:
-        query_vec = np.array([1, 0])
-        target_vecs = np.array([[1, 0], [0, 1]]) 
-        # Registry lookups usually return arrays, handled by wrapper
+        query_vec = torch.tensor([1.0, 0.0])
+        target_vecs = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        # Registry lookups usually return tensors, handled by wrapper
     
     # Note: This relies on 'semantic_similarity' being in HeuristicRegistry
     print("  ✓ Compiled function is callable")

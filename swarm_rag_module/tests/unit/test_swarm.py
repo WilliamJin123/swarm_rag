@@ -1,4 +1,4 @@
-import numpy as np
+import torch
 import random
 import time
 from typing import List, Dict, Any, Optional, Union
@@ -12,16 +12,19 @@ class DummyVectorStore(VectorStore):
         self.num_nodes = num_nodes
         self.embedding_dim = embedding_dim
         # Generate deterministic embeddings
-        np.random.seed(42)
+        torch.manual_seed(42)
         self.embeddings = {
-            i: np.random.randn(embedding_dim).astype(np.float32)
+            i: torch.randn(embedding_dim, dtype=torch.float32)
             for i in range(num_nodes)
         }
-        
-    def search(self, query_vec: np.ndarray, limit: int) -> List[Dict[str, Any]]:
+
+    def search(self, query_vec: torch.Tensor, limit: int) -> List[Dict[str, Any]]:
         """Mock search that returns deterministic nodes based on query vector"""
+        # Convert to tensor if needed
+        if not isinstance(query_vec, torch.Tensor):
+            query_vec = torch.as_tensor(query_vec, dtype=torch.float32)
         # Use query vector to seed selection for determinism
-        query_hash = hash(query_vec.tobytes()) % (2**32)
+        query_hash = hash(query_vec.numpy().tobytes()) % (2**32)
         rng = random.Random(query_hash)
 
         results = []
@@ -30,17 +33,26 @@ class DummyVectorStore(VectorStore):
             node_id = rng.randint(0, self.num_nodes - 1)
             if node_id not in seen_ids:
                 seen_ids.add(node_id)
-                score = np.dot(query_vec, self.embeddings[node_id]) / (
-                    np.linalg.norm(query_vec) * np.linalg.norm(self.embeddings[node_id]) + 1e-8
+                emb = self.embeddings[node_id]
+                score = torch.dot(query_vec, emb) / (
+                    torch.linalg.norm(query_vec) * torch.linalg.norm(emb) + 1e-8
                 )
                 results.append({'id': node_id, 'score': float(score)})
         return sorted(results, key=lambda x: x['score'], reverse=True)
-    
-    def fetch_batch(self, node_ids: List[Any]) -> List[Optional[np.ndarray]]:
-        """Fetch embeddings for given node IDs"""
-        return [self.embeddings.get(nid) for nid in node_ids]
 
-    def fetch(self, node_id) -> Optional[np.ndarray]:
+    def fetch_batch(self, node_ids: List[Any]) -> torch.Tensor:
+        """Fetch embeddings for given node IDs, returning stacked tensor matrix"""
+        embeddings = []
+        for nid in node_ids:
+            emb = self.embeddings.get(nid)
+            if emb is not None:
+                embeddings.append(emb)
+            else:
+                # Return NaN vector for missing IDs
+                embeddings.append(torch.full((self.embedding_dim,), float('nan'), dtype=torch.float32))
+        return torch.stack(embeddings)
+
+    def fetch(self, node_id) -> Optional[torch.Tensor]:
         return self.embeddings.get(node_id)
 
 class DegreeView:
@@ -98,21 +110,22 @@ class DummyGraphStore(GraphStore):
 class DummyEmbeddingProvider(EmbeddingProvider):
     def __init__(self, embedding_dim=128):
         self.embedding_dim = embedding_dim
-        np.random.seed(42)
-        
-    def embed_query(self, query: Union[str, Any]) -> np.ndarray:
+        torch.manual_seed(42)
+
+    def embed_query(self, query: Union[str, Any]) -> torch.Tensor:
         """Generate deterministic embedding based on query hash"""
         if isinstance(query, str):
             seed = hash(query) % (2**32)
         else:
             seed = hash(str(query)) % (2**32)
-        
-        np.random.seed(seed)
-        return np.random.randn(self.embedding_dim).astype(np.float32)
-    
-    def embed_query_batch(self, queries: list[Any]) -> List[np.ndarray]:
-        """Generate embeddings for multiple queries"""
-        return [self.embed_query(q) for q in queries]
+
+        torch.manual_seed(seed)
+        return torch.randn(self.embedding_dim, dtype=torch.float32)
+
+    def embed_query_batch(self, queries: list[Any]) -> torch.Tensor:
+        """Generate embeddings for multiple queries, returning stacked tensor matrix"""
+        embeddings = [self.embed_query(q) for q in queries]
+        return torch.stack(embeddings)
     
 
 

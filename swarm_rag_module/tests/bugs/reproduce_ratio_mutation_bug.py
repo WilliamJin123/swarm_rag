@@ -1,7 +1,6 @@
 import random
 import unittest
 from unittest.mock import MagicMock
-import numpy as np
 
 from swarm_rag.evolution.types.genome import Genome
 from swarm_rag.evolution.execution.strategies import GeneticStrategies

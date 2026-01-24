@@ -1,9 +1,9 @@
 """
-Tests for GPU utilities: benchmarking, memory profiling, CuPy integration, and batch optimization.
+Tests for GPU utilities: benchmarking, memory profiling, and batch optimization.
 """
 
 import pytest
-import numpy as np
+import torch
 import time
 from unittest.mock import patch, MagicMock
 
@@ -30,42 +30,29 @@ class TestDeviceUtilities:
         device = get_device(force_cpu=True)
         assert device == "cpu"
 
-    def test_ensure_tensor_numpy_input(self):
-        """Test ensure_tensor with numpy array input."""
+    def test_ensure_tensor_torch_input(self):
+        """Test ensure_tensor with torch tensor input."""
         from swarm_rag.utils.device import ensure_tensor, clear_device_cache
 
         clear_device_cache()
-        arr = np.array([1.0, 2.0, 3.0])
+        original = torch.tensor([1.0, 2.0, 3.0])
 
-        try:
-            import torch
-            tensor = ensure_tensor(arr, device="cpu")
-            assert isinstance(tensor, torch.Tensor)
-            assert tensor.device.type == "cpu"
-            np.testing.assert_array_almost_equal(tensor.numpy(), arr)
-        except ImportError:
-            pytest.skip("PyTorch not available")
+        tensor = ensure_tensor(original, device="cpu")
+        assert isinstance(tensor, torch.Tensor)
+        assert tensor.device.type == "cpu"
+        assert torch.allclose(tensor, original)
 
-    def test_to_numpy_tensor(self):
-        """Test to_numpy with torch tensor."""
-        from swarm_rag.utils.device import to_numpy
+    def test_ensure_tensor_list_input(self):
+        """Test ensure_tensor with list input."""
+        from swarm_rag.utils.device import ensure_tensor, clear_device_cache
 
-        try:
-            import torch
-            tensor = torch.tensor([1.0, 2.0, 3.0])
-            arr = to_numpy(tensor)
-            assert isinstance(arr, np.ndarray)
-            np.testing.assert_array_almost_equal(arr, [1.0, 2.0, 3.0])
-        except ImportError:
-            pytest.skip("PyTorch not available")
+        clear_device_cache()
+        data = [1.0, 2.0, 3.0]
 
-    def test_to_numpy_array(self):
-        """Test to_numpy with numpy array (passthrough)."""
-        from swarm_rag.utils.device import to_numpy
-
-        arr = np.array([1.0, 2.0, 3.0])
-        result = to_numpy(arr)
-        assert result is arr
+        tensor = ensure_tensor(data, device="cpu")
+        assert isinstance(tensor, torch.Tensor)
+        assert tensor.device.type == "cpu"
+        assert torch.allclose(tensor, torch.tensor(data))
 
 
 class TestBenchmarker:
@@ -186,7 +173,7 @@ class TestMemoryProfiler:
 
         with profiler.track("test_operation"):
             # Allocate some memory
-            _ = np.zeros((1000, 1000))
+            _ = torch.zeros((1000, 1000))
 
         assert len(profiler.deltas) == 1
         assert profiler.deltas[0].label == "test_operation"
@@ -200,7 +187,7 @@ class TestMemoryProfiler:
 
         @profiler.profile
         def my_func():
-            return np.zeros((100, 100))
+            return torch.zeros((100, 100))
 
         result = my_func()
         assert result.shape == (100, 100)
@@ -229,7 +216,7 @@ class TestMemoryProfiler:
         from swarm_rag.utils.memory import estimate_tensor_memory
 
         # 1000 x 768 float32 = 3,072,000 bytes = ~2.93 MB
-        mem_mb = estimate_tensor_memory((1000, 768), dtype=np.float32)
+        mem_mb = estimate_tensor_memory((1000, 768), dtype=torch.float32)
         expected_mb = (1000 * 768 * 4) / (1024 * 1024)
         assert abs(mem_mb - expected_mb) < 0.01
 
@@ -238,7 +225,7 @@ class TestMemoryProfiler:
         from swarm_rag.utils.memory import memory_guard
 
         with memory_guard() as profiler:
-            _ = np.zeros((100, 100))
+            _ = torch.zeros((100, 100))
 
         assert len(profiler.snapshots) >= 2  # At least start and end
 
@@ -276,7 +263,8 @@ class TestBatchOptimization:
         )
 
         # Test batch search
-        query_vecs = np.random.randn(3, 768).astype(np.float32)
+        torch.manual_seed(42)
+        query_vecs = torch.randn(3, 768, dtype=torch.float32)
         results = retriever._batch_initial_search(query_vecs, pool_size=10)
 
         assert len(results) == 3
@@ -288,7 +276,8 @@ class TestBatchOptimization:
     def test_compute_batch_similarities_cpu(self):
         """Test _compute_batch_similarities_gpu on CPU."""
         # Create properly shaped mock data
-        mock_embeddings = np.random.randn(10, 768).astype(np.float32)
+        torch.manual_seed(42)
+        mock_embeddings = torch.randn(10, 768, dtype=torch.float32)
 
         mock_vector_store = MagicMock()
         # fetch_batch should return matrix with shape (n_requested, dim)
@@ -315,7 +304,7 @@ class TestBatchOptimization:
         )
 
         # Test batch similarities
-        query_vecs = np.random.randn(2, 768).astype(np.float32)
+        query_vecs = torch.randn(2, 768, dtype=torch.float32)
         candidate_ids = [[1, 2, 3], [4, 5]]
 
         results = retriever._compute_batch_similarities_gpu(query_vecs, candidate_ids)
@@ -323,18 +312,18 @@ class TestBatchOptimization:
         assert len(results) == 2
         # Each result is a tuple of (scores, valid_ids)
         for scores, valid_ids in results:
-            assert isinstance(scores, np.ndarray) or len(scores) == 0
+            assert isinstance(scores, torch.Tensor) or len(scores) == 0
 
 
 class TestHeuristicsGPU:
     """Tests for GPU-aware heuristics."""
 
-    def test_semantic_similarity_numpy(self):
-        """Test semantic_similarity with numpy arrays."""
+    def test_semantic_similarity_torch(self):
+        """Test semantic_similarity with torch tensors."""
         from swarm_rag.core.heuristics import Heuristics, HeuristicContext
 
-        query = np.array([1.0, 0.0, 0.0])
-        targets = np.array([
+        query = torch.tensor([1.0, 0.0, 0.0])
+        targets = torch.tensor([
             [1.0, 0.0, 0.0],  # Same direction
             [0.0, 1.0, 0.0],  # Orthogonal
         ])
@@ -350,22 +339,19 @@ class TestHeuristicsGPU:
         # Normalized: [-1,1] -> [0,1]
         # Same direction: cos=1 -> normalized=1
         # Orthogonal: cos=0 -> normalized=0.5
-        assert abs(scores[0] - 1.0) < 0.01
-        assert abs(scores[1] - 0.5) < 0.01
+        if isinstance(scores, torch.Tensor):
+            scores = scores.cpu()
+        assert abs(float(scores[0]) - 1.0) < 0.01
+        assert abs(float(scores[1]) - 0.5) < 0.01
 
-    def test_semantic_similarity_torch(self):
-        """Test semantic_similarity with torch tensors."""
-        try:
-            import torch
-        except ImportError:
-            pytest.skip("PyTorch not available")
-
+    def test_semantic_similarity_orthogonal(self):
+        """Test semantic_similarity with orthogonal vectors."""
         from swarm_rag.core.heuristics import Heuristics, HeuristicContext
 
         query = torch.tensor([1.0, 0.0, 0.0])
         targets = torch.tensor([
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],  # Orthogonal
+            [-1.0, 0.0, 0.0],  # Opposite direction
         ])
 
         ctx = HeuristicContext(
@@ -376,38 +362,46 @@ class TestHeuristicsGPU:
 
         scores = Heuristics.semantic_similarity(ctx)
 
-        # Should work with torch tensors
         if isinstance(scores, torch.Tensor):
-            scores = scores.numpy()
+            scores = scores.cpu()
+        # Orthogonal: cos=0 -> normalized=0.5
+        assert abs(float(scores[0]) - 0.5) < 0.01
+        # Opposite: cos=-1 -> normalized=0
+        assert abs(float(scores[1]) - 0.0) < 0.01
 
-        assert abs(scores[0] - 1.0) < 0.01
-        assert abs(scores[1] - 0.5) < 0.01
-
-    def test_dot_product_mixed_types(self):
-        """Test _dot_product with mixed numpy/torch inputs."""
+    def test_dot_product_torch(self):
+        """Test _dot_product with torch tensors."""
         from swarm_rag.core.heuristics import _dot_product
 
-        a_np = np.array([1.0, 2.0, 3.0])
-        b_np = np.array([4.0, 5.0, 6.0])
+        a = torch.tensor([1.0, 2.0, 3.0])
+        b = torch.tensor([4.0, 5.0, 6.0])
 
-        result = _dot_product(a_np, b_np)
-        expected = np.dot(a_np, b_np)
+        result = _dot_product(a, b)
+        expected = 1*4 + 2*5 + 3*6  # 32
 
         assert abs(float(result) - expected) < 1e-6
 
-        try:
-            import torch
-            a_torch = torch.tensor([1.0, 2.0, 3.0])
-            b_torch = torch.tensor([4.0, 5.0, 6.0])
-
-            result = _dot_product(a_torch, b_torch)
-            assert abs(float(result) - expected) < 1e-6
-        except ImportError:
-            pass
-
 
 class TestGPUVectorStore:
-    """Tests for GPUVectorStore."""
+    """Tests for GPUVectorStore (also known as TorchVectorStore)."""
+
+    def test_torch_vector_store_alias(self):
+        """Test that TorchVectorStore is an alias for GPUVectorStore."""
+        try:
+            from swarm_rag.integrations.gpu_vector_store import GPUVectorStore, TorchVectorStore
+        except ImportError:
+            pytest.skip("PyTorch not available")
+
+        assert TorchVectorStore is GPUVectorStore
+
+    def test_torch_graph_store_alias(self):
+        """Test that TorchGraphStore is an alias for GPUGraphStore."""
+        try:
+            from swarm_rag.integrations.gpu_graph_store import GPUGraphStore, TorchGraphStore
+        except ImportError:
+            pytest.skip("PyTorch not available")
+
+        assert TorchGraphStore is GPUGraphStore
 
     def test_gpu_vector_store_creation(self):
         """Test GPUVectorStore creation."""
@@ -428,11 +422,7 @@ class TestGPUVectorStore:
 
     def test_gpu_vector_store_search(self):
         """Test GPUVectorStore search."""
-        try:
-            import torch
-            from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
-        except ImportError:
-            pytest.skip("PyTorch not available")
+        from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
 
         # Create test data with known relationships
         embeddings = torch.zeros(10, 64)
@@ -442,7 +432,7 @@ class TestGPUVectorStore:
         store = GPUVectorStore(embeddings, ids, device="cpu")
 
         # Query similar to doc 0
-        query = np.array([1.0] + [0.0] * 63, dtype=np.float32)
+        query = torch.tensor([1.0] + [0.0] * 63, dtype=torch.float32)
         results = store.search(query, limit=5)
 
         assert len(results) == 5
@@ -469,11 +459,7 @@ class TestGPUVectorStore:
 
     def test_gpu_vector_store_fetch_batch(self):
         """Test GPUVectorStore.fetch_batch."""
-        try:
-            import torch
-            from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
-        except ImportError:
-            pytest.skip("PyTorch not available")
+        from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
 
         embeddings = torch.randn(10, 64)
         ids = list(range(10))
@@ -484,7 +470,7 @@ class TestGPUVectorStore:
 
         assert result.shape == (3, 64)
         # Check no NaN for valid IDs
-        assert not np.isnan(result).any()
+        assert not torch.isnan(result).any()
 
 
 if __name__ == "__main__":

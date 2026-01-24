@@ -1,5 +1,4 @@
 import random
-import numpy as np
 from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfig
 from swarm_rag.evolution.types.genome import Genome, DEFAULT_PARAMS
 from swarm_rag.evolution.execution.factory import GenomeFactory
