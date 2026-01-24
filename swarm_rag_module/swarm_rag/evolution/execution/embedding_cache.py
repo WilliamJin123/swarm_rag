@@ -181,15 +181,33 @@ class QueryEmbeddingCache:
             if self._embedding_dim is None:
                 self._embedding_dim = embedding.shape[0]
 
-    def get(self, query: str) -> Optional[np.ndarray]:
+    def get(self, query: str, as_tensor: bool = False) -> Optional[np.ndarray]:
         """
         Get embedding for a query from cache.
 
-        Returns None if not cached (miss).
+        Args:
+            query: Query string
+            as_tensor: If True, return torch.Tensor on GPU if available.
+                       If False (default), return numpy array.
+
+        Returns:
+            Embedding as numpy array or torch tensor, None if not cached and no embedding_fn.
         """
         if query in self._cache:
             self.stats.cache_hits += 1
-            return self._cache[query]
+            emb = self._cache[query]
+
+            if as_tensor and _TORCH_AVAILABLE:
+                if isinstance(emb, torch.Tensor):
+                    return emb
+                # Convert numpy to tensor on GPU if available
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                return torch.tensor(emb, device=device, dtype=torch.float32)
+
+            # Return as numpy (default)
+            if isinstance(emb, torch.Tensor):
+                return emb.cpu().numpy()
+            return emb
 
         self.stats.cache_misses += 1
 
@@ -199,13 +217,22 @@ class QueryEmbeddingCache:
             embedding = self.embedding_fn(query)
             self.stats.total_embedding_time += time.time() - start
 
+            # Store as numpy in cache (canonical format)
             if _TORCH_AVAILABLE and isinstance(embedding, torch.Tensor):
-                embedding = embedding.cpu().numpy()
+                embedding_np = embedding.cpu().numpy()
             elif not isinstance(embedding, np.ndarray):
-                embedding = np.array(embedding)
+                embedding_np = np.array(embedding)
+            else:
+                embedding_np = embedding
 
-            self._cache[query] = embedding
-            return embedding
+            self._cache[query] = embedding_np
+
+            # Return in requested format
+            if as_tensor and _TORCH_AVAILABLE:
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                return torch.tensor(embedding_np, device=device, dtype=torch.float32)
+
+            return embedding_np
 
         return None
 
@@ -255,7 +282,11 @@ class QueryEmbeddingCache:
         """Dimension of cached embeddings."""
         return self._embedding_dim
 
-    def get_all_embeddings_matrix(self, queries: List[str]) -> np.ndarray:
+    def get_all_embeddings_matrix(
+        self,
+        queries: List[str],
+        as_tensor: bool = False
+    ) -> np.ndarray:
         """
         Get embeddings for queries as a single matrix.
 
@@ -263,23 +294,47 @@ class QueryEmbeddingCache:
 
         Args:
             queries: Ordered list of queries
+            as_tensor: If True, return torch.Tensor on GPU if available.
 
         Returns:
-            np.ndarray of shape (len(queries), embedding_dim)
+            np.ndarray or torch.Tensor of shape (len(queries), embedding_dim)
         """
         embeddings = []
         for q in queries:
-            emb = self.get(q)
+            emb = self.get(q)  # Get as numpy first
             if emb is not None:
                 embeddings.append(emb)
             else:
                 # Return zero vector for missing
                 if self._embedding_dim:
-                    embeddings.append(np.zeros(self._embedding_dim))
+                    embeddings.append(np.zeros(self._embedding_dim, dtype=np.float32))
                 else:
                     raise ValueError(f"Cannot get embedding for '{q}' and dimension unknown")
 
-        return np.vstack(embeddings)
+        matrix = np.vstack(embeddings)
+
+        if as_tensor and _TORCH_AVAILABLE:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            return torch.tensor(matrix, device=device, dtype=torch.float32)
+
+        return matrix
+
+    def get_batch_tensor(self, queries: List[str]) -> Optional["torch.Tensor"]:
+        """
+        Get embeddings for queries as a GPU tensor.
+
+        Convenience method for GPU-accelerated operations.
+
+        Args:
+            queries: List of query strings
+
+        Returns:
+            torch.Tensor on GPU if available, None if torch not available
+        """
+        if not _TORCH_AVAILABLE:
+            return None
+
+        return self.get_all_embeddings_matrix(queries, as_tensor=True)
 
 
 class EmbeddingCacheProvider:

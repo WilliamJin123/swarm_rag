@@ -381,7 +381,76 @@ class PopulationEvaluator:
         results: List[List[Any]],
         ground_truth: List[List[Any]]
     ) -> Dict[str, float]:
-        """Compute aggregated metrics for results so far."""
+        """Compute aggregated metrics for results so far using batch operations."""
+        n_queries = min(len(results), len(ground_truth))
+        if n_queries == 0:
+            return {}
+
+        # Try batch computation first (much faster for large batches)
+        try:
+            return self._compute_metrics_batch(results[:n_queries], ground_truth[:n_queries])
+        except Exception as e:
+            logger.debug(f"Batch metrics failed, falling back to sequential: {e}")
+            # Fall back to sequential computation
+            return self._compute_metrics_sequential(results, ground_truth)
+
+    def _compute_metrics_batch(
+        self,
+        results: List[List[Any]],
+        ground_truth: List[List[Any]]
+    ) -> Dict[str, float]:
+        """Compute metrics using batch operations for better performance."""
+        from ...eval.metric_functions import MetricFunctions
+
+        n_queries = len(results)
+        if n_queries == 0:
+            return {}
+
+        # Determine max retrieved items
+        max_retrieved = max((len(r) for r in results), default=0)
+        if max_retrieved == 0:
+            return {}
+
+        # Extract IDs as numpy array, padding with -1 for missing values
+        retrieved_ids = np.full((n_queries, max_retrieved), -1, dtype=np.int64)
+
+        for i, items in enumerate(results):
+            for j, item in enumerate(items):
+                if isinstance(item, dict):
+                    retrieved_ids[i, j] = int(item.get('id', -1))
+                else:
+                    try:
+                        retrieved_ids[i, j] = int(item)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Convert ground truth to sets of integers
+        gt_sets = []
+        for gt in ground_truth:
+            try:
+                gt_sets.append(set(int(g) for g in gt))
+            except (ValueError, TypeError):
+                gt_sets.append(set(str(g) for g in gt))
+
+        # Use batch metric computation
+        metrics = MetricFunctions.compute_all_metrics_batch(
+            retrieved_ids,
+            gt_sets,
+            k_values=self.evaluator.k_values
+        )
+
+        # Add variance estimates (using simplified calculation)
+        for key in list(metrics.keys()):
+            metrics[f"var_{key}"] = 0.0  # Simplified - full variance would need per-query scores
+
+        return metrics
+
+    def _compute_metrics_sequential(
+        self,
+        results: List[List[Any]],
+        ground_truth: List[List[Any]]
+    ) -> Dict[str, float]:
+        """Fallback sequential metric computation."""
         all_metrics = []
         for i, retrieved_items in enumerate(results):
             if i >= len(ground_truth):

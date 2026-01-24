@@ -286,41 +286,73 @@ class GPUVectorStore(VectorStore):
 
     def fetch_batch_gpu(
         self,
-        node_ids: List[int]
-    ) -> Tuple["torch.Tensor", List[int]]:
+        doc_ids: Union[List[int], "torch.Tensor"]
+    ) -> Tuple["torch.Tensor", "torch.Tensor"]:
         """
-        Fetch embeddings as GPU tensor, returning only valid entries.
+        Fetch embeddings for batch of doc IDs, keeping everything on GPU.
 
         Args:
-            node_ids: List of document IDs
+            doc_ids: List or GPU tensor of document IDs
 
         Returns:
-            Tuple of (embeddings tensor, valid_ids list)
+            Tuple of (embeddings tensor, valid_ids tensor) - both on GPU
         """
         import torch
 
-        valid_pairs = []
-        for nid in node_ids:
-            int_idx = self._id_to_idx.get(nid)
-            if int_idx is not None:
-                valid_pairs.append((nid, int_idx))
+        # Convert to tensor if needed
+        if isinstance(doc_ids, torch.Tensor):
+            ids_tensor = doc_ids.to(device=self._device, dtype=torch.long)
+        else:
+            ids_tensor = torch.tensor(doc_ids, device=self._device, dtype=torch.long)
 
-        if not valid_pairs:
-            return torch.empty(0, self.dim, device=self._device), []
+        # Build reverse mapping tensor for GPU-native lookup
+        # This avoids Python dict lookups
+        if not hasattr(self, '_id_lookup_tensor') or self._id_lookup_tensor is None:
+            # Build lookup tensor: maps real_id -> internal_idx
+            # For IDs not in store, we'll filter them out
+            max_id = int(self._ids.max()) + 1
+            self._id_lookup_tensor = torch.full(
+                (max_id,), -1, device=self._device, dtype=torch.long
+            )
+            id_indices = torch.arange(len(self._ids), device=self._device)
+            ids_on_gpu = torch.tensor(self._ids, device=self._device, dtype=torch.long)
+            self._id_lookup_tensor[ids_on_gpu] = id_indices
+            self._max_valid_id = max_id
 
-        valid_ids, int_indices = zip(*valid_pairs)
-        int_indices_tensor = torch.tensor(
-            int_indices, device=self._device, dtype=torch.long
-        )
+        # Filter valid IDs (within range and exists in store)
+        valid_range_mask = (ids_tensor >= 0) & (ids_tensor < self._max_valid_id)
+        ids_in_range = ids_tensor[valid_range_mask]
 
-        embeddings = self._embeddings[int_indices_tensor]
-        return embeddings, list(valid_ids)
+        if ids_in_range.numel() == 0:
+            return (
+                torch.empty((0, self.dim), device=self._device, dtype=torch.float32),
+                torch.empty(0, device=self._device, dtype=torch.long)
+            )
+
+        # GPU lookup of internal indices
+        internal_indices = self._id_lookup_tensor[ids_in_range]
+
+        # Filter out IDs not in store (-1 means not found)
+        valid_mask = internal_indices >= 0
+        valid_internal_indices = internal_indices[valid_mask]
+        valid_ids = ids_in_range[valid_mask]
+
+        if valid_internal_indices.numel() == 0:
+            return (
+                torch.empty((0, self.dim), device=self._device, dtype=torch.float32),
+                torch.empty(0, device=self._device, dtype=torch.long)
+            )
+
+        # Direct GPU indexing - no CPU transfer
+        embeddings = self._embeddings[valid_internal_indices]
+
+        return embeddings, valid_ids
 
     def compute_similarities(
         self,
         query_vec: Union[np.ndarray, "torch.Tensor"],
-        candidate_ids: List[int]
-    ) -> Tuple["torch.Tensor", List[int]]:
+        candidate_ids: Union[List[int], "torch.Tensor"]
+    ) -> Tuple["torch.Tensor", "torch.Tensor"]:
         """
         Compute similarities between query and specific candidates.
 
@@ -328,18 +360,18 @@ class GPUVectorStore(VectorStore):
 
         Args:
             query_vec: Query embedding
-            candidate_ids: List of candidate document IDs
+            candidate_ids: List or tensor of candidate document IDs
 
         Returns:
-            Tuple of (similarity scores tensor, valid_ids list)
+            Tuple of (similarity scores tensor, valid_ids tensor) - both on GPU
         """
         import torch
 
         # Get candidate embeddings (stays on GPU)
         candidate_embs, valid_ids = self.fetch_batch_gpu(candidate_ids)
 
-        if len(valid_ids) == 0:
-            return torch.empty(0, device=self._device), []
+        if valid_ids.numel() == 0:
+            return torch.empty(0, device=self._device), valid_ids
 
         # Ensure query is on device and normalized
         if isinstance(query_vec, np.ndarray):
