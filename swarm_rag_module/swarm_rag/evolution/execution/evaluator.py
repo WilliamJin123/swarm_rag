@@ -4,18 +4,29 @@ Population Evaluator with Adaptive Multi-Tier Evaluation.
 Implements progressive evaluation to reduce wasted computation on poor-performing
 genomes. Most bad genomes are filtered at early tiers with small sample sizes,
 while promising genomes get full evaluation.
+
+Optimization features:
+- Shared pre-computation: Query embeddings and initial pools computed once per generation
+- Cross-genome metric batching: Single GPU call for metrics across all genomes
+- CPU thread pool capping: Prevents worker over-subscription
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import logging
 import torch
-from typing import List, Any, Optional, Dict, Tuple
+from typing import List, Any, Optional, Dict, Tuple, Set
 from dataclasses import dataclass, field
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
 from .fitness import FitnessCalculator
 from ..types.genome import GenomeCompiler, Genome
+from .shared_precompute import (
+    SharedPrecomputeContext,
+    prepare_shared_context,
+    get_unique_pool_sizes,
+    BatchedRetrievalResults
+)
 
 
 logger = logging.getLogger(__name__)
@@ -30,11 +41,12 @@ class EvaluationTier:
 
 
 # Default evaluation tiers - progressively filter out bad genomes
+# Final tier uses a large number to ensure all available queries are used
 DEFAULT_TIERS: List[EvaluationTier] = [
-    EvaluationTier(queries=10, threshold=0.05, name="quick_filter"),
-    EvaluationTier(queries=30, threshold=0.15, name="promising"),
-    EvaluationTier(queries=60, threshold=0.25, name="competitive"),
-    EvaluationTier(queries=100, threshold=None, name="full"),
+    EvaluationTier(queries=5, threshold=0.10, name="quick_filter"),
+    EvaluationTier(queries=15, threshold=0.25, name="promising"),
+    EvaluationTier(queries=40, threshold=0.50, name="competitive"),
+    EvaluationTier(queries=100_000, threshold=None, name="full"),  # Use all available
 ]
 
 
@@ -88,6 +100,8 @@ class PopulationEvaluator:
         tiers: List[EvaluationTier] = None,
         enable_adaptive: bool = True,
         device: Any = None,  # torch.device or str
+        enable_shared_precompute: bool = True,
+        enable_cross_genome_metric_batch: bool = True,
     ):
         self.retriever = retriever
         self.evaluator = evaluator
@@ -102,6 +116,10 @@ class PopulationEvaluator:
         self.tiers = tiers or DEFAULT_TIERS
         self.enable_adaptive = enable_adaptive
 
+        # Optimization flags
+        self.enable_shared_precompute = enable_shared_precompute
+        self.enable_cross_genome_metric_batch = enable_cross_genome_metric_batch
+
         # Store device, auto-detect if not provided
         if device is None:
             from ...utils.device import get_device
@@ -113,6 +131,9 @@ class PopulationEvaluator:
         # Track evaluation statistics
         self.stats = EvaluationStats()
         self._reset_stats()
+
+        # Cached shared context (reused within a generation)
+        self._shared_context: Optional[SharedPrecomputeContext] = None
 
     def _reset_stats(self):
         """Reset evaluation statistics for a new run."""
@@ -128,6 +149,9 @@ class PopulationEvaluator:
     ) -> EvaluationStats:
         """
         Evaluates the population in-place using adaptive progressive sampling.
+
+        When shared_precompute is enabled, this method pre-computes query embeddings
+        and initial pools once, then reuses them across all genome evaluations.
 
         Returns:
             EvaluationStats with information about evaluation efficiency
@@ -146,15 +170,37 @@ class PopulationEvaluator:
 
         logger.info(f"Evaluating {len(unevaluated)} genomes...")
         logger.info(f"  > Concurrency: {batch_size} | Adaptive: {self.enable_adaptive}")
+        logger.info(f"  > Shared precompute: {self.enable_shared_precompute} | Cross-genome batch: {self.enable_cross_genome_metric_batch}")
         if self.enable_adaptive:
             logger.info(f"  > Tiers: {[(t.queries, t.threshold) for t in self.tiers]}")
 
+        # Prepare shared context if enabled
+        shared_context = None
+        if self.enable_shared_precompute and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+            shared_context = self._prepare_shared_context(unevaluated, queries, ground_truth)
+            self._shared_context = shared_context
+
         total_queries_used = 0
 
-        for i in range(0, len(unevaluated), batch_size):
-            batch = unevaluated[i:i + batch_size]
-            queries_used = self._evaluate_batch(batch, queries, ground_truth)
-            total_queries_used += queries_used
+        if shared_context is not None and not self.enable_adaptive:
+            # Use optimized path with shared context (non-adaptive mode)
+            total_queries_used = self._evaluate_all_with_shared(
+                unevaluated, queries, ground_truth, shared_context
+            )
+        else:
+            # Standard batch evaluation (with or without shared context for adaptive)
+            for i in range(0, len(unevaluated), batch_size):
+                batch = unevaluated[i:i + batch_size]
+                if shared_context is not None:
+                    queries_used = self._evaluate_batch_with_shared(
+                        batch, queries, ground_truth, shared_context
+                    )
+                else:
+                    queries_used = self._evaluate_batch(batch, queries, ground_truth)
+                total_queries_used += queries_used
+
+        # Clear shared context after evaluation
+        self._shared_context = None
 
         # Compute stats
         max_queries = len(queries) * len(unevaluated)
@@ -168,6 +214,457 @@ class PopulationEvaluator:
             logger.info(f"  > Tier exits: {self.stats.tier_exits}")
 
         return self.stats
+
+    def _prepare_shared_context(
+        self,
+        genomes: List[Genome],
+        queries: List[str],
+        ground_truth: List[List[Any]]
+    ) -> SharedPrecomputeContext:
+        """
+        Prepare shared pre-computed context for all genomes.
+
+        This method computes query embeddings and initial pools ONCE,
+        eliminating redundant computation across genome evaluations.
+        """
+        # Extract unique initial_pool_size values from genomes
+        unique_pool_sizes = get_unique_pool_sizes(genomes, self.compiler)
+        logger.info(f"  > Pre-computing shared context for {len(unique_pool_sizes)} unique pool sizes...")
+
+        return prepare_shared_context(
+            retriever=self.retriever,
+            queries=queries,
+            ground_truth=ground_truth,
+            unique_pool_sizes=unique_pool_sizes,
+            device=self.device
+        )
+
+    def _evaluate_all_with_shared(
+        self,
+        genomes: List[Genome],
+        queries: List[str],
+        ground_truth: List[List[Any]],
+        shared_context: SharedPrecomputeContext
+    ) -> int:
+        """
+        Evaluate all genomes using shared context and cross-genome metric batching.
+
+        This is the most optimized path when:
+        1. Shared precompute is enabled
+        2. Adaptive evaluation is disabled (full evaluation for all)
+        3. Cross-genome metric batching is enabled
+
+        Returns total queries used.
+        """
+        logger.info("  > Using optimized evaluation with shared context...")
+
+        n_genomes = len(genomes)
+        n_queries = len(queries)
+        total_queries_used = 0
+
+        # Collect all retrieval results
+        batched_results = BatchedRetrievalResults()
+
+        for genome_idx, genome in enumerate(genomes):
+            retriever_kwargs = self.compiler.compile(genome)
+            pool_size = retriever_kwargs.get('initial_pool_size', 30)
+
+            # Get pre-computed initial pools for this pool size
+            initial_pools = shared_context.initial_pools.get(pool_size, [])
+            if not initial_pools:
+                # Fallback if pool size not pre-computed
+                logger.warning(f"Pool size {pool_size} not pre-computed, using standard path")
+                queries_used, _ = self._evaluate_single_full(genome, queries, ground_truth)
+                total_queries_used += queries_used
+                continue
+
+            start_time = time.time()
+
+            # Use pre-computed embeddings and pools
+            results = self.retriever.retrieve_batch_with_precomputed(
+                query_embeddings=shared_context.query_embeddings,
+                initial_pools=initial_pools,
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=genome.id,
+                **retriever_kwargs
+            )
+
+            batched_results.add_genome_results(genome.id, results)
+            total_queries_used += n_queries
+
+            # Store retrieval time for later
+            genome._retrieval_time = time.time() - start_time
+
+            logger.debug(f"  > Genome '{genome.id}' ({genome_idx + 1}/{n_genomes}) retrieval complete")
+
+        # Batch compute metrics across all genomes
+        if self.enable_cross_genome_metric_batch:
+            self._batch_compute_metrics_all_genomes(
+                genomes, batched_results, shared_context.ground_truth_sets
+            )
+        else:
+            # Compute metrics individually
+            for genome in genomes:
+                results = batched_results.results_by_genome.get(genome.id, [])
+                if results:
+                    metrics = self._compute_metrics_cumulative(results, ground_truth)
+                    retrieval_time = getattr(genome, '_retrieval_time', 0.0)
+                    metrics['latency'] = retrieval_time / max(1, len(results))
+                    metrics['complexity'] = float(genome.complexity())
+
+                    genome.metrics = metrics
+                    genome.fitness = self.fitness_calc.calculate(metrics, genome)
+                    genome.evaluated = True
+
+                    self.stats.tier_exits["full"] = self.stats.tier_exits.get("full", 0) + 1
+
+        return total_queries_used
+
+    def _evaluate_batch_with_shared(
+        self,
+        batch: List[Genome],
+        queries: List[str],
+        ground_truth: List[List[Any]],
+        shared_context: SharedPrecomputeContext
+    ) -> int:
+        """
+        Evaluate a batch using shared pre-computed context.
+
+        This method uses pre-computed query embeddings and initial pools
+        for faster evaluation, while still supporting adaptive tiers.
+        """
+        logger.debug(f"  > Starting batch of {len(batch)} genomes with shared context...")
+
+        total_queries_used = 0
+        completed_count = 0
+
+        # GPU mode: sequential evaluation
+        if self.device == "cuda":
+            for genome in batch:
+                queries_used, exit_tier = self._evaluate_single_with_shared(
+                    genome, queries, ground_truth, shared_context
+                )
+                total_queries_used += queries_used
+                completed_count += 1
+
+                if exit_tier in self.stats.tier_exits:
+                    self.stats.tier_exits[exit_tier] += 1
+
+                self._log_genome_result(genome, exit_tier, completed_count, len(batch))
+
+            return total_queries_used
+
+        # CPU mode: parallel evaluation
+        with ThreadPoolExecutor(max_workers=min(len(batch), self.concurrent_evaluations)) as executor:
+            future_to_genome = {
+                executor.submit(
+                    self._evaluate_single_with_shared, g, queries, ground_truth, shared_context
+                ): g
+                for g in batch
+            }
+
+            for future in as_completed(future_to_genome):
+                genome = future_to_genome[future]
+                completed_count += 1
+
+                queries_used, exit_tier = future.result()
+                total_queries_used += queries_used
+
+                if exit_tier in self.stats.tier_exits:
+                    self.stats.tier_exits[exit_tier] += 1
+
+                self._log_genome_result(genome, exit_tier, completed_count, len(batch))
+
+        return total_queries_used
+
+    def _evaluate_single_with_shared(
+        self,
+        genome: Genome,
+        queries: List[str],
+        ground_truth: List[List[Any]],
+        shared_context: SharedPrecomputeContext
+    ) -> Tuple[int, str]:
+        """
+        Evaluate a single genome using shared pre-computed context.
+
+        Uses pre-computed query embeddings and initial pools when available.
+        """
+        if not self.enable_adaptive:
+            return self._evaluate_single_full_with_shared(
+                genome, queries, ground_truth, shared_context
+            )
+
+        retriever_kwargs = self.compiler.compile(genome)
+        pool_size = retriever_kwargs.get('initial_pool_size', 30)
+        decision_tracker = self._create_decision_tracker()
+
+        start_time = time.time()
+        all_results = []
+        queries_evaluated = 0
+        exit_tier = "full"
+
+        for tier in self.tiers:
+            tier_end = min(tier.queries, len(queries))
+            tier_start = queries_evaluated
+
+            if tier_start >= tier_end:
+                continue
+
+            # Get pre-computed data for this tier
+            tier_embeddings = shared_context.query_embeddings[tier_start:tier_end]
+            initial_pools = shared_context.initial_pools.get(pool_size, [])
+            tier_pools = initial_pools[tier_start:tier_end] if initial_pools else []
+
+            if tier_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+                # Use pre-computed path
+                tier_results = self.retriever.retrieve_batch_with_precomputed(
+                    query_embeddings=tier_embeddings,
+                    initial_pools=tier_pools,
+                    max_workers=self.max_workers_per_retrieval,
+                    genome_id=f"{genome.id}_tier_{tier.name}",
+                    **retriever_kwargs
+                )
+            else:
+                # Fallback to standard batch
+                tier_queries = queries[tier_start:tier_end]
+                tier_results = self.retriever.retrieve_batch(
+                    queries=tier_queries,
+                    max_workers=self.max_workers_per_retrieval,
+                    genome_id=f"{genome.id}_tier_{tier.name}",
+                    **retriever_kwargs
+                )
+
+            all_results.extend(tier_results)
+            queries_evaluated = tier_end
+
+            # Compute metrics and check early exit
+            current_metrics = self._compute_metrics_cumulative(
+                all_results, ground_truth[:queries_evaluated]
+            )
+
+            if tier.threshold is not None:
+                elapsed = time.time() - start_time
+                current_metrics['latency'] = elapsed / max(1, queries_evaluated)
+                current_metrics['complexity'] = float(genome.complexity())
+
+                current_fitness = self.fitness_calc.calculate(current_metrics, genome)
+
+                if current_fitness.quality_score < tier.threshold:
+                    exit_tier = tier.name
+                    genome.metrics = current_metrics
+                    genome.fitness = current_fitness
+                    genome.evaluated = True
+
+                    if decision_tracker is not None:
+                        genome.decision_context = decision_tracker.to_summary_dict()
+
+                    return queries_evaluated, exit_tier
+
+        # Full evaluation completed
+        total_latency = time.time() - start_time
+        final_metrics = self._compute_metrics_cumulative(all_results, ground_truth[:queries_evaluated])
+        final_metrics['latency'] = total_latency / max(1, queries_evaluated)
+        final_metrics['complexity'] = float(genome.complexity())
+
+        genome.metrics = final_metrics
+        genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
+        genome.evaluated = True
+
+        if decision_tracker is not None:
+            genome.decision_context = decision_tracker.to_summary_dict()
+
+        return queries_evaluated, exit_tier
+
+    def _evaluate_single_full_with_shared(
+        self,
+        genome: Genome,
+        queries: List[str],
+        ground_truth: List[List[Any]],
+        shared_context: SharedPrecomputeContext
+    ) -> Tuple[int, str]:
+        """Full evaluation using shared pre-computed context."""
+        retriever_kwargs = self.compiler.compile(genome)
+        pool_size = retriever_kwargs.get('initial_pool_size', 30)
+        decision_tracker = self._create_decision_tracker()
+
+        start_time = time.time()
+
+        initial_pools = shared_context.initial_pools.get(pool_size, [])
+
+        if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+            results = self.retriever.retrieve_batch_with_precomputed(
+                query_embeddings=shared_context.query_embeddings,
+                initial_pools=initial_pools,
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=genome.id,
+                **retriever_kwargs
+            )
+        else:
+            # Fallback
+            results = self.retriever.retrieve_batch(
+                queries=queries,
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=genome.id,
+                **retriever_kwargs
+            )
+
+        total_latency = time.time() - start_time
+
+        metrics = self._compute_metrics_cumulative(results, ground_truth)
+        metrics['latency'] = total_latency / max(1, len(queries))
+        metrics['complexity'] = float(genome.complexity())
+
+        genome.metrics = metrics
+        genome.fitness = self.fitness_calc.calculate(metrics, genome)
+        genome.evaluated = True
+
+        if decision_tracker is not None:
+            genome.decision_context = decision_tracker.to_summary_dict()
+
+        return len(queries), "full"
+
+    def _batch_compute_metrics_all_genomes(
+        self,
+        genomes: List[Genome],
+        batched_results: BatchedRetrievalResults,
+        ground_truth_sets: List[Set[Any]]
+    ):
+        """
+        Compute metrics for all genomes in a single batched GPU call.
+
+        This provides significant speedup by:
+        1. Stacking all retrieval results into a single tensor
+        2. Single call to compute_all_metrics_batch_gpu_vectorized
+        3. Reshaping and assigning back to individual genomes
+        """
+        from ...eval.metric_functions import MetricFunctions
+
+        logger.info("  > Computing metrics across all genomes in batch...")
+
+        # Prepare flattened tensor for batch computation
+        max_k = 20  # Standard max k for metrics
+        retrieved_ids, genome_query_indices = batched_results.prepare_for_batch_metrics(max_k)
+
+        if retrieved_ids.numel() == 0:
+            logger.warning("No retrieval results to compute metrics for")
+            return
+
+        n_total = len(genome_query_indices)
+        n_queries_per_genome = len(ground_truth_sets)
+
+        # Expand ground truth sets for all genomes
+        # Each genome evaluates against the same ground truth
+        n_genomes = len(genomes)
+        expanded_gt_sets = ground_truth_sets * n_genomes
+
+        # Compute metrics in batch
+        if self.device == "cuda":
+            try:
+                retrieved_ids_gpu = retrieved_ids.to(device="cuda")
+                # Use vectorized GPU computation
+                if hasattr(MetricFunctions, 'compute_all_metrics_batch_gpu_vectorized'):
+                    all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu_vectorized(
+                        retrieved_ids_gpu,
+                        expanded_gt_sets[:n_total],
+                        k_values=self.evaluator.k_values,
+                        device="cuda"
+                    )
+                else:
+                    all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu(
+                        retrieved_ids_gpu,
+                        expanded_gt_sets[:n_total],
+                        k_values=self.evaluator.k_values,
+                        device="cuda"
+                    )
+            except Exception as e:
+                logger.debug(f"GPU batch metrics failed, falling back to CPU: {e}")
+                all_metrics_per_query = MetricFunctions.compute_all_metrics_batch(
+                    retrieved_ids,
+                    expanded_gt_sets[:n_total],
+                    k_values=self.evaluator.k_values
+                )
+        else:
+            all_metrics_per_query = MetricFunctions.compute_all_metrics_batch(
+                retrieved_ids,
+                expanded_gt_sets[:n_total],
+                k_values=self.evaluator.k_values
+            )
+
+        # Assign metrics back to individual genomes
+        genome_id_to_genome = {g.id: g for g in genomes}
+
+        # Group indices by genome
+        genome_indices: Dict[str, List[int]] = {}
+        for idx, (genome_id, query_idx) in enumerate(genome_query_indices):
+            if genome_id not in genome_indices:
+                genome_indices[genome_id] = []
+            genome_indices[genome_id].append(idx)
+
+        # Aggregate metrics per genome
+        for genome_id, indices in genome_indices.items():
+            genome = genome_id_to_genome.get(genome_id)
+            if genome is None:
+                continue
+
+            # Average metrics across queries for this genome
+            aggregated = {}
+            for metric_name in all_metrics_per_query.keys():
+                if metric_name.startswith('per_query_'):
+                    # Per-query scores - average them
+                    base_name = metric_name.replace('per_query_', '')
+                    scores = all_metrics_per_query[metric_name]
+                    if isinstance(scores, torch.Tensor):
+                        genome_scores = scores[indices]
+                        aggregated[base_name] = float(genome_scores.mean().item())
+                        aggregated[f"var_{base_name}"] = float(genome_scores.var().item()) if len(indices) > 1 else 0.0
+                else:
+                    # Already aggregated
+                    aggregated[metric_name] = all_metrics_per_query[metric_name]
+
+            # If metrics are already averaged (not per-query), use as-is
+            if not aggregated:
+                aggregated = dict(all_metrics_per_query)
+
+            # Add latency and complexity
+            retrieval_time = getattr(genome, '_retrieval_time', 0.0)
+            aggregated['latency'] = retrieval_time / max(1, len(indices))
+            aggregated['complexity'] = float(genome.complexity())
+
+            # Add variance for main metric
+            priority_keys = ["Recall@10", "Hit@10", "MRR", "Recall@5", "Hit@5"]
+            main_key = next((k for k in priority_keys if f"var_{k}" in aggregated), None)
+            if main_key:
+                aggregated["variance"] = aggregated[f"var_{main_key}"]
+
+            genome.metrics = aggregated
+            genome.fitness = self.fitness_calc.calculate(aggregated, genome)
+            genome.evaluated = True
+
+            self.stats.tier_exits["full"] = self.stats.tier_exits.get("full", 0) + 1
+
+        logger.info(f"  > Batch metrics computed for {len(genomes)} genomes")
+
+    def _log_genome_result(
+        self,
+        genome: Genome,
+        exit_tier: str,
+        completed_count: int,
+        batch_size: int
+    ):
+        """Log evaluation result for a genome."""
+        qual = genome.fitness.quality_score
+        stab = genome.fitness.stability_score
+        cost = genome.fitness.cost_score
+        h1 = genome.metrics.get("Hit@1", 0.0)
+        h5 = genome.metrics.get("Hit@5", 0.0)
+        mrr = genome.metrics.get("MRR", 0.0)
+        r20 = genome.metrics.get("Recall@20", 0.0)
+
+        logger.info(
+            f"  > Finished '{genome.id}' ({completed_count}/{batch_size}) | "
+            f"Tier: {exit_tier} | Fitness(Q/S/C): {qual:.4f}/{stab:.4f}/{cost:.1f} | "
+            f"H@1: {h1:.4f} | H@5: {h5:.4f} | MRR: {mrr:.4f} | R@20: {r20:.4f}"
+        )
 
     def _evaluate_batch(
         self,
@@ -200,19 +697,13 @@ class PopulationEvaluator:
                 if exit_tier in self.stats.tier_exits:
                     self.stats.tier_exits[exit_tier] += 1
 
-                qual = genome.fitness.quality_score
-                cost = genome.fitness.cost_score
-                r20 = genome.metrics.get("Recall@20", 0.0)
-
-                logger.info(
-                    f"  > Finished '{genome.id}' ({completed_count}/{len(batch)}) | "
-                    f"Tier: {exit_tier} | Qual: {qual:.4f} | Cost: {cost:.1f} | R@20: {r20:.4f}"
-                )
+                self._log_genome_result(genome, exit_tier, completed_count, len(batch))
 
             return total_queries_used
 
         # CPU mode: parallel evaluation with ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+        # Cap workers at concurrent_evaluations to prevent over-subscription
+        with ThreadPoolExecutor(max_workers=min(len(batch), self.concurrent_evaluations)) as executor:
             future_to_genome = {
                 executor.submit(self._evaluate_single, g, queries, ground_truth): g
                 for g in batch
@@ -229,14 +720,7 @@ class PopulationEvaluator:
                 if exit_tier in self.stats.tier_exits:
                     self.stats.tier_exits[exit_tier] += 1
 
-                qual = genome.fitness.quality_score
-                cost = genome.fitness.cost_score
-                r20 = genome.metrics.get("Recall@20", 0.0)
-
-                logger.info(
-                    f"  > Finished '{genome.id}' ({completed_count}/{len(batch)}) | "
-                    f"Tier: {exit_tier} | Qual: {qual:.4f} | Cost: {cost:.1f} | R@20: {r20:.4f}"
-                )
+                self._log_genome_result(genome, exit_tier, completed_count, len(batch))
 
         return total_queries_used
 
@@ -317,14 +801,16 @@ class PopulationEvaluator:
 
             # Check early exit threshold
             if tier.threshold is not None:
+                # Add latency/complexity BEFORE fitness calculation so cost_score is correct
+                elapsed = time.time() - start_time
+                current_metrics['latency'] = elapsed / max(1, queries_evaluated)
+                current_metrics['complexity'] = float(genome.complexity())
+
                 current_fitness = self.fitness_calc.calculate(current_metrics, genome)
 
                 if current_fitness.quality_score < tier.threshold:
                     # Early exit - this genome isn't promising
                     exit_tier = tier.name
-                    total_latency = time.time() - start_time
-                    current_metrics['latency'] = total_latency / max(1, queries_evaluated)
-                    current_metrics['complexity'] = float(genome.complexity())
 
                     genome.metrics = current_metrics
                     genome.fitness = current_fitness
