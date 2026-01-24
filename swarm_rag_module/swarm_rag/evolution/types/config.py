@@ -67,16 +67,6 @@ class SwarmParamRanges:
     start_subset: Tuple[int, int] = (5, 15)
     drop_zone_inc: Tuple[float, float] = (0.05, 0.2)
 
-    def to_dict(self) -> Dict[str, Tuple]:
-        """Convert to dict format for backwards compatibility."""
-        return {
-            "n_agents": self.n_agents,
-            "steps": self.steps,
-            "decay": self.decay,
-            "initial_pool_size": self.initial_pool_size,
-            "start_subset": self.start_subset,
-            "drop_zone_inc": self.drop_zone_inc,
-        }
 
 
 @dataclass
@@ -200,186 +190,6 @@ class EvolutionConfig:
     creative_mode: CreativeModeConfig = field(default_factory=CreativeModeConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
 
-    def to_flat_dict(self) -> Dict[str, Any]:
-        """
-        Convert to flat dict format for backwards compatibility.
-
-        This allows gradual migration of code that uses config["key"] access.
-        Can be removed once all callsites are updated.
-        """
-        return {
-            # Resource Management
-            "concurrent_evaluations": self.resources.concurrent_evaluations,
-            "max_workers_per_retrieval": self.resources.max_workers_per_retrieval,
-
-            # Loop Control
-            "n_generations": self.n_generations,
-            "population_size": self.map_elites.batch_size,  # mapped for compatibility
-
-            # Strategy Names
-            "creation_strategy": self.genetic.creation_strategy,
-            "selection_strategy": self.genetic.selection_strategy,
-            "crossover_strategy": self.genetic.crossover_strategy,
-            "mutation_strategy": self.genetic.mutation_strategy,
-            "fitness_strategy": self.fitness_strategy,
-
-            # Genetic Settings
-            "base_mutation_rate": self.genetic.base_mutation_rate,
-            "crossover_rate": self.genetic.crossover_rate,
-            "expr_max_depth": self.genetic.expr_max_depth,
-            "mutation_max_expr_size": self.genetic.mutation_max_expr_size,
-            "n_agent_groups": self.genetic.n_agent_groups,
-            "selection_k": self.genetic.selection_k,
-            "phased_switch_gen": self.phased_switch_gen,
-
-            # Boltzmann Settings
-            "boltzmann_temperature": self.genetic.boltzmann.temperature,
-            "boltzmann_alpha": self.genetic.boltzmann.alpha,
-            "boltzmann_min_temp": self.genetic.boltzmann.min_temp,
-            "boltzmann_max_temp": self.genetic.boltzmann.max_temp,
-            "boltzmann_adaptive": self.genetic.boltzmann.adaptive,
-            "boltzmann_diversity_threshold": self.genetic.boltzmann.diversity_threshold,
-
-            # Parameter Ranges
-            "swarmrag_param_ranges": self.genetic.param_ranges.to_dict(),
-
-            # Validation & Logging
-            "validation_frequency": self.checkpoint.validation_frequency,
-            "log_path": self.checkpoint.log_path,
-            "plot_path": self.checkpoint.plot_path,
-            "plot_title": self.checkpoint.plot_title,
-            "checkpoint_frequency": self.checkpoint.checkpoint_frequency,
-            "checkpoint_path": self.checkpoint.checkpoint_path,
-
-            # LLM Settings
-            "llm_provider": self.llm.provider,
-            "llm_model": self.llm.model,
-            "llm_env_path": self.llm.env_path,
-
-            # MAP-Elites (always enabled)
-            "map_elites_enabled": True,
-            "map_elites_dims": self.map_elites.dimensions,
-            "map_elites_bins": self.map_elites.bins,
-            "map_elites_ranges": self.map_elites.ranges,
-            "map_elites_initial_fill": self.map_elites.initial_fill,
-
-            # Creative Mode Settings
-            "creative_mode_enabled": self.creative_mode.enabled,
-            "creative_mode_trigger_stagnation": self.creative_mode.trigger_stagnation,
-            "creative_mode_trigger_fill_rate": self.creative_mode.trigger_fill_rate,
-            "creative_mode_periodic_interval": self.creative_mode.periodic_interval,
-            "creative_mode_max_per_generation": self.creative_mode.max_creative_per_generation,
-            "creative_mode_complexity_limit": self.creative_mode.complexity_limit,
-            "creative_mode_fallback_on_failure": self.creative_mode.fallback_on_failure,
-        }
-
-    @classmethod
-    def from_flat_dict(cls, flat: Dict[str, Any]) -> "EvolutionConfig":
-        """
-        Create EvolutionConfig from legacy flat dict.
-
-        Useful for loading old presets or checkpoint files.
-        """
-        config = cls()
-
-        # Core settings
-        config.n_generations = flat.get("n_generations", config.n_generations)
-        config.fitness_strategy = flat.get("fitness_strategy", config.fitness_strategy)
-        config.phased_switch_gen = flat.get("phased_switch_gen", config.phased_switch_gen)
-
-        # Resources
-        config.resources.concurrent_evaluations = flat.get(
-            "concurrent_evaluations", config.resources.concurrent_evaluations
-        )
-        config.resources.max_workers_per_retrieval = flat.get(
-            "max_workers_per_retrieval", config.resources.max_workers_per_retrieval
-        )
-
-        # MAP-Elites
-        config.map_elites.dimensions = flat.get("map_elites_dims", config.map_elites.dimensions)
-        config.map_elites.bins = flat.get("map_elites_bins", config.map_elites.bins)
-        config.map_elites.ranges = flat.get("map_elites_ranges", config.map_elites.ranges)
-        config.map_elites.initial_fill = flat.get("map_elites_initial_fill", config.map_elites.initial_fill)
-        config.map_elites.batch_size = flat.get("population_size", config.map_elites.batch_size)
-
-        # Genetic
-        config.genetic.creation_strategy = flat.get("creation_strategy", config.genetic.creation_strategy)
-        config.genetic.selection_strategy = flat.get("selection_strategy", config.genetic.selection_strategy)
-        config.genetic.crossover_strategy = flat.get("crossover_strategy", config.genetic.crossover_strategy)
-        config.genetic.mutation_strategy = flat.get("mutation_strategy", config.genetic.mutation_strategy)
-        config.genetic.base_mutation_rate = flat.get("base_mutation_rate", config.genetic.base_mutation_rate)
-        config.genetic.crossover_rate = flat.get("crossover_rate", config.genetic.crossover_rate)
-        config.genetic.expr_max_depth = flat.get("expr_max_depth", config.genetic.expr_max_depth)
-        config.genetic.mutation_max_expr_size = flat.get("mutation_max_expr_size", config.genetic.mutation_max_expr_size)
-        config.genetic.n_agent_groups = flat.get("n_agent_groups", config.genetic.n_agent_groups)
-        config.genetic.selection_k = flat.get("selection_k", config.genetic.selection_k)
-
-        # Boltzmann
-        config.genetic.boltzmann.temperature = flat.get("boltzmann_temperature", config.genetic.boltzmann.temperature)
-        config.genetic.boltzmann.alpha = flat.get("boltzmann_alpha", config.genetic.boltzmann.alpha)
-        config.genetic.boltzmann.min_temp = flat.get("boltzmann_min_temp", config.genetic.boltzmann.min_temp)
-        config.genetic.boltzmann.max_temp = flat.get("boltzmann_max_temp", config.genetic.boltzmann.max_temp)
-        config.genetic.boltzmann.adaptive = flat.get("boltzmann_adaptive", config.genetic.boltzmann.adaptive)
-        config.genetic.boltzmann.diversity_threshold = flat.get(
-            "boltzmann_diversity_threshold", config.genetic.boltzmann.diversity_threshold
-        )
-
-        # Param ranges
-        ranges = flat.get("swarmrag_param_ranges", {})
-        if ranges:
-            config.genetic.param_ranges.n_agents = ranges.get("n_agents", config.genetic.param_ranges.n_agents)
-            config.genetic.param_ranges.steps = ranges.get("steps", config.genetic.param_ranges.steps)
-            config.genetic.param_ranges.decay = ranges.get("decay", config.genetic.param_ranges.decay)
-            config.genetic.param_ranges.initial_pool_size = ranges.get(
-                "initial_pool_size", config.genetic.param_ranges.initial_pool_size
-            )
-            config.genetic.param_ranges.start_subset = ranges.get(
-                "start_subset", config.genetic.param_ranges.start_subset
-            )
-            config.genetic.param_ranges.drop_zone_inc = ranges.get(
-                "drop_zone_inc", config.genetic.param_ranges.drop_zone_inc
-            )
-
-        # Checkpoint
-        config.checkpoint.log_path = flat.get("log_path", config.checkpoint.log_path)
-        config.checkpoint.plot_path = flat.get("plot_path", config.checkpoint.plot_path)
-        config.checkpoint.plot_title = flat.get("plot_title", config.checkpoint.plot_title)
-        config.checkpoint.checkpoint_path = flat.get("checkpoint_path", config.checkpoint.checkpoint_path)
-        config.checkpoint.checkpoint_frequency = flat.get("checkpoint_frequency", config.checkpoint.checkpoint_frequency)
-        config.checkpoint.validation_frequency = flat.get("validation_frequency", config.checkpoint.validation_frequency)
-
-        # LLM
-        config.llm.provider = flat.get("llm_provider", config.llm.provider)
-        config.llm.model = flat.get("llm_model", config.llm.model)
-        config.llm.env_path = flat.get("llm_env_path", config.llm.env_path)
-        # Enable LLM if mutation strategy is llm_mutation
-        if config.genetic.mutation_strategy == "llm_mutation":
-            config.llm.enabled = True
-
-        # Creative Mode
-        config.creative_mode.enabled = flat.get(
-            "creative_mode_enabled", config.creative_mode.enabled
-        )
-        config.creative_mode.trigger_stagnation = flat.get(
-            "creative_mode_trigger_stagnation", config.creative_mode.trigger_stagnation
-        )
-        config.creative_mode.trigger_fill_rate = flat.get(
-            "creative_mode_trigger_fill_rate", config.creative_mode.trigger_fill_rate
-        )
-        config.creative_mode.periodic_interval = flat.get(
-            "creative_mode_periodic_interval", config.creative_mode.periodic_interval
-        )
-        config.creative_mode.max_creative_per_generation = flat.get(
-            "creative_mode_max_per_generation", config.creative_mode.max_creative_per_generation
-        )
-        config.creative_mode.complexity_limit = flat.get(
-            "creative_mode_complexity_limit", config.creative_mode.complexity_limit
-        )
-        config.creative_mode.fallback_on_failure = flat.get(
-            "creative_mode_fallback_on_failure", config.creative_mode.fallback_on_failure
-        )
-
-        return config
 
 
 # =============================================================================
@@ -426,10 +236,6 @@ class EvolutionContext:
     creative_success_count: int = 0        # Successful creative mutations
     creative_failure_count: int = 0        # Failed creative mutations
 
-    def get_flat_config(self) -> Dict[str, Any]:
-        """Get config as flat dict for backwards compatibility."""
-        return self.config.to_flat_dict()
-
     def reset_creative_gen_count(self):
         """Reset the per-generation creative mutation counter."""
         self.creative_mutations_this_gen = 0
@@ -440,21 +246,6 @@ class EvolutionContext:
             return False
         max_per_gen = self.config.creative_mode.max_creative_per_generation
         return self.creative_mutations_this_gen < max_per_gen
-
-
-# =============================================================================
-# Backwards Compatibility Layer
-# =============================================================================
-
-# For code that still imports these (will be removed in future)
-EvolutionConfigDict = Dict[str, Any]  # Type alias for gradual migration
-
-def get_default_flat_config() -> Dict[str, Any]:
-    """Get default config as flat dict (backwards compatibility)."""
-    return DEFAULT_CONFIG.to_flat_dict()
-
-# Alias for old DEFAULT_EVO_CONFIG usage
-DEFAULT_EVO_CONFIG = get_default_flat_config()
 
 
 # =============================================================================
