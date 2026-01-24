@@ -312,25 +312,44 @@ class GPUGraphStore(GraphStore):
         total_neighbors = lengths.sum().item()
 
         if total_neighbors > 0:
+            # Fix: Convert lengths to int32 for repeat_interleave compatibility
+            # torch.repeat_interleave requires int32/int64, but int64 can cause issues on some platforms
+            lengths_int = lengths.int()
+
             # Create row indices via repeat_interleave
             row_indices = torch.repeat_interleave(
                 torch.arange(batch_size, device=self._device),
-                lengths
+                lengths_int
             )
 
             # Create column positions for each row
             # This creates [0,1,2,...,deg[0]-1, 0,1,2,...,deg[1]-1, ...]
             offsets = torch.zeros(total_neighbors, device=self._device, dtype=torch.long)
             cumsum = torch.cumsum(lengths, dim=0)
-            # Mark start of each new row
-            offsets[cumsum[:-1]] = lengths[:-1]
+            # Mark start of each new row - guard against out-of-bounds indexing
+            # This happens when trailing rows have zero length (invalid nodes)
+            if batch_size > 1:
+                # Only set offsets where cumsum index is within bounds
+                valid_offset_mask = cumsum[:-1] < total_neighbors
+                if valid_offset_mask.any():
+                    valid_cumsum_indices = cumsum[:-1][valid_offset_mask]
+                    valid_lengths = lengths[:-1][valid_offset_mask]
+                    offsets[valid_cumsum_indices] = valid_lengths
             col_positions = torch.arange(total_neighbors, device=self._device) - torch.cumsum(offsets, dim=0)
 
             # Gather all neighbor indices at once
             # Build flat indices into col_indices
-            flat_starts = torch.repeat_interleave(starts, lengths)
+            flat_starts = torch.repeat_interleave(starts, lengths_int)
             flat_indices = flat_starts + col_positions
+
+            # Bounds check: ensure flat_indices don't exceed col_indices size
+            max_col_idx = self._col_indices.shape[0] - 1
+            flat_indices = torch.clamp(flat_indices, 0, max_col_idx)
+
             flat_neighbors = self._col_indices[flat_indices]
+
+            # Bounds check: ensure row/col positions are valid for output tensor
+            col_positions = torch.clamp(col_positions, 0, batch_max_degree - 1)
 
             # Scatter into output
             neighbors[row_indices, col_positions] = flat_neighbors

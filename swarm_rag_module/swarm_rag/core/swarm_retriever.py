@@ -724,28 +724,31 @@ class SwarmRetriever:
         agent_has_neighbors = neighbor_mask.any(dim=1)  # (n_agents,)
 
         # Flatten valid neighbors for batch embedding fetch
-        # Create flat list of unique neighbor IDs to minimize fetches
-        flat_neighbors = all_neighbors[neighbor_mask].cpu().numpy()
-        unique_neighbors = np.unique(flat_neighbors[flat_neighbors >= 0])
+        # Use torch.unique() to stay on GPU - no CPU round-trip
+        flat_neighbors_gpu = all_neighbors[neighbor_mask]
+        valid_flat = flat_neighbors_gpu[flat_neighbors_gpu >= 0]
+        unique_neighbors_gpu = torch.unique(valid_flat)
 
-        if len(unique_neighbors) == 0:
+        if unique_neighbors_gpu.numel() == 0:
             # No valid neighbors for any agent
             return agent_locations, {}
 
         # Batch fetch embeddings for all unique neighbors
+        # Pass GPU tensor directly - no CPU transfer needed
         if hasattr(self.vector_store, 'fetch_batch_gpu') and self._use_gpu:
-            unique_embs, valid_unique_ids = self.vector_store.fetch_batch_gpu(unique_neighbors.tolist())
-            if _TORCH_AVAILABLE and not isinstance(unique_embs, torch.Tensor):
+            unique_embs, valid_unique_ids_tensor = self.vector_store.fetch_batch_gpu(unique_neighbors_gpu)
+            if not isinstance(unique_embs, torch.Tensor):
                 unique_embs = torch.tensor(unique_embs, device=device, dtype=torch.float32)
+            # valid_unique_ids is now a tensor
+            valid_unique_ids = valid_unique_ids_tensor
         else:
-            unique_embs_np, valid_unique_ids = self._fetch_vectors_batch(unique_neighbors)
+            unique_neighbors_cpu = unique_neighbors_gpu.cpu().numpy()
+            unique_embs_np, valid_unique_ids_list = self._fetch_vectors_batch(unique_neighbors_cpu)
             unique_embs = torch.tensor(unique_embs_np, device=device, dtype=torch.float32)
+            valid_unique_ids = torch.tensor(valid_unique_ids_list, device=device, dtype=torch.long)
 
-        if len(valid_unique_ids) == 0:
+        if valid_unique_ids.numel() == 0:
             return agent_locations, {}
-
-        # Build ID to embedding index mapping
-        id_to_emb_idx = {int(vid): i for i, vid in enumerate(valid_unique_ids)}
 
         # Convert query to GPU tensor
         query_tensor = torch.tensor(query_vec, device=device, dtype=torch.float32).view(1, -1)
@@ -767,33 +770,60 @@ class SwarmRetriever:
         )
 
         # Fetch degrees for all neighbors (for centrality heuristic)
+        # Fix: Only query degrees for valid neighbors, not padding (-1 values)
+        all_neighbor_degrees = torch.ones(
+            (n_agents, max_degree), device=device, dtype=torch.float32
+        )
         if hasattr(self.graph_store, 'get_degrees_batch'):
-            # Flatten and get all degrees at once
-            all_neighbor_degrees = self.graph_store.get_degrees_batch(
-                all_neighbors.view(-1)
-            ).view(n_agents, max_degree).float()
-        else:
-            all_neighbor_degrees = torch.ones(
-                (n_agents, max_degree), device=device, dtype=torch.float32
-            )
+            # Get valid neighbor IDs and their degrees
+            valid_neighbor_ids = all_neighbors[neighbor_mask]
+            if valid_neighbor_ids.numel() > 0:
+                valid_degrees = self.graph_store.get_degrees_batch(valid_neighbor_ids)
+                all_neighbor_degrees[neighbor_mask] = valid_degrees.float()
 
         # Fill in similarities and pheromones for valid neighbors
-        all_neighbors_cpu = all_neighbors.cpu().numpy()
-        neighbor_mask_cpu = neighbor_mask.cpu().numpy()
+        # Vectorized GPU operations - no nested Python loops
 
-        for agent_idx in range(n_agents):
-            for neighbor_pos in range(max_degree):
-                if not neighbor_mask_cpu[agent_idx, neighbor_pos]:
-                    continue
+        # Build ID-to-embedding-index mapping tensor on GPU
+        if valid_unique_ids.numel() > 0:
+            max_id = int(unique_neighbors_gpu.max().item()) + 1
+            id_to_idx_tensor = torch.full((max_id,), -1, device=device, dtype=torch.long)
+            id_to_idx_tensor[valid_unique_ids] = torch.arange(valid_unique_ids.numel(), device=device)
 
-                neighbor_id = int(all_neighbors_cpu[agent_idx, neighbor_pos])
-                emb_idx = id_to_emb_idx.get(neighbor_id)
+            # Vectorized scatter of similarities
+            valid_neighbor_ids = all_neighbors[neighbor_mask]
+            # Clamp to valid range for indexing (invalid IDs will map to -1)
+            clamped_ids = valid_neighbor_ids.clamp(0, max_id - 1)
+            emb_indices = id_to_idx_tensor[clamped_ids]
 
-                if emb_idx is not None:
-                    neighbor_sims[agent_idx, neighbor_pos] = all_similarities[emb_idx]
+            # Only scatter where we have valid embeddings
+            valid_emb_mask = emb_indices >= 0
+            if valid_emb_mask.any():
+                # Get similarities for valid indices
+                valid_emb_indices = emb_indices[valid_emb_mask]
+                neighbor_sims_flat = neighbor_sims[neighbor_mask]
+                neighbor_sims_flat[valid_emb_mask] = all_similarities[valid_emb_indices]
+                neighbor_sims[neighbor_mask] = neighbor_sims_flat
 
-                # Get pheromone value
-                neighbor_pheromones[agent_idx, neighbor_pos] = query_pheromones.get(neighbor_id, 0.0)
+        # Vectorized pheromone lookup on GPU
+        if query_pheromones:
+            # Build pheromone tensor on GPU (once per step)
+            max_node_id = int(all_neighbors.max().item()) + 1
+            pheromone_tensor = torch.zeros(max_node_id, device=device, dtype=torch.float32)
+
+            # Convert pheromone dict to GPU tensor
+            pheromone_keys = torch.tensor(list(query_pheromones.keys()), device=device, dtype=torch.long)
+            pheromone_vals = torch.tensor(list(query_pheromones.values()), device=device, dtype=torch.float32)
+            # Clamp keys to valid range
+            valid_key_mask = (pheromone_keys >= 0) & (pheromone_keys < max_node_id)
+            if valid_key_mask.any():
+                pheromone_tensor[pheromone_keys[valid_key_mask]] = pheromone_vals[valid_key_mask]
+
+            # Vectorized GPU lookup for all neighbors
+            valid_neighbor_ids = all_neighbors[neighbor_mask]
+            clamped_ids = valid_neighbor_ids.clamp(0, max_node_id - 1)
+            flat_pheromones = pheromone_tensor[clamped_ids]
+            neighbor_pheromones[neighbor_mask] = flat_pheromones
 
         # Compute combined scores using vectorized heuristics
         # Semantic similarity (already computed)
@@ -835,35 +865,55 @@ class SwarmRetriever:
             torch.zeros_like(probs)
         )
 
-        # Sample next nodes using multinomial
+        # Vectorized GPU sampling using torch.multinomial
         # For agents with no valid neighbors, we'll keep them in place
-        new_locations = agent_locations.copy()
-        pheromone_updates = {}
 
-        # Move to CPU for sampling (multinomial is fast enough on CPU)
-        probs_cpu = probs.cpu().numpy()
+        # Prepare for vectorized sampling
+        sampling_probs = probs.clone()
+
+        # Handle agents with no valid probabilities
+        prob_sums = sampling_probs.sum(dim=1)
+        has_valid = prob_sums > 1e-10
+
+        # Initialize chosen positions and new locations
+        chosen_positions = torch.zeros(n_agents, dtype=torch.long, device=device)
+        new_locations_tensor = torch.tensor(agent_locations, device=device, dtype=torch.long)
+
+        # Vectorized sampling for agents with valid probabilities
+        valid_agent_mask = has_valid & agent_has_neighbors
+        if valid_agent_mask.any():
+            # Get valid agents' probabilities
+            valid_probs = sampling_probs[valid_agent_mask]
+            # Normalize (probabilities should already be normalized but ensure it)
+            valid_probs = valid_probs / (valid_probs.sum(dim=1, keepdim=True) + 1e-10)
+
+            # torch.multinomial for vectorized sampling
+            # This samples one index per row based on probabilities
+            sampled_indices = torch.multinomial(valid_probs, num_samples=1).squeeze(-1)
+            chosen_positions[valid_agent_mask] = sampled_indices
+
+            # Gather chosen neighbors using the sampled positions
+            valid_chosen = all_neighbors[valid_agent_mask].gather(
+                1, chosen_positions[valid_agent_mask].unsqueeze(1)
+            ).squeeze(1)
+            new_locations_tensor[valid_agent_mask] = valid_chosen
+
+        # Single CPU transfer at the end for the final locations
+        new_locations = new_locations_tensor.cpu().numpy()
+
+        # Compute pheromone updates
+        pheromone_updates = {}
+        deposit_amount = 1.0
+
+        # Only process agents that actually moved
+        moved_mask = valid_agent_mask.cpu().numpy()
+        new_locs_list = new_locations.tolist()
 
         for agent_idx in range(n_agents):
-            if not agent_has_neighbors[agent_idx]:
-                continue
-
-            agent_probs = probs_cpu[agent_idx]
-            prob_sum = agent_probs.sum()
-
-            if prob_sum < 1e-10:
-                continue
-
-            # Normalize and sample
-            agent_probs = agent_probs / prob_sum
-            chosen_pos = np_rng.choice(max_degree, p=agent_probs)
-            next_node = int(all_neighbors_cpu[agent_idx, chosen_pos])
-
-            new_locations[agent_idx] = next_node
-
-            # Compute deposit (using flat deposit for batched mode)
-            deposit_amount = 1.0
-            if deposit_amount > self.PHEROMONE_EPSILON:
-                pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit_amount
+            if moved_mask[agent_idx]:
+                next_node = new_locs_list[agent_idx]
+                if deposit_amount > self.PHEROMONE_EPSILON:
+                    pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit_amount
 
         return new_locations, pheromone_updates
 
