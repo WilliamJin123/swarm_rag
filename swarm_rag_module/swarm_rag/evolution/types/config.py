@@ -46,6 +46,10 @@ class ResourceConfig:
     min_batch_size: int = 15
     max_batch_size: int = 50
 
+    # Optimization flags for shared pre-computation
+    enable_shared_precompute: bool = True  # Pre-compute query embeddings and initial pools once per generation
+    enable_cross_genome_metric_batch: bool = True  # Batch metric computation across all genomes
+
 
 @dataclass
 class MapElitesConfig:
