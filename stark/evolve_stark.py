@@ -12,7 +12,6 @@ Target Metrics:
 """
 import argparse
 import os
-import json
 import random
 import sys
 
@@ -36,8 +35,11 @@ from swarm_rag.evolution.types.config import (
     GeneticConfig,
     LLMConfig,
     ResourceConfig,
-    CheckpointConfig,
+    StorageConfig,
 )
+
+# Import storage
+from swarm_rag.evolution.storage import RunManager
 
 # Import archive comparator config
 from swarm_rag.evolution.map_elites.archive import (
@@ -114,14 +116,31 @@ def prepare_stark_data(dataset_name: str, split: str, sample_size: int = None):
     return queries, query_ids, answer_ids
 
 
+def list_runs(dataset: str = None):
+    """List all existing runs, optionally filtered by dataset."""
+    runs_dir = os.path.join(BASE_DIR, "runs")
+    runs = RunManager.list_runs(runs_dir, dataset)
+
+    if not runs:
+        print("No runs found.")
+        return
+
+    print(f"\n{'Dataset':<12} {'Run ID':<20} {'Path'}")
+    print("-" * 70)
+    for run in runs:
+        print(f"{run['dataset']:<12} {run['run_id']:<20} {run['path']}")
+    print()
+
+
 def run_evolution(
     dataset_name: str = "prime",
+    run_id: str = None,
+    resume_run: str = None,
     n_gens: int = 100,
     pop_size: int = 30,
     initial_fill: int = 100,
     train_sample_size: int = 200,
     val_sample_size: int = 100,
-    start_from_scratch: bool = False,
     concurrent_evals: int = 4,
     max_workers: int = 4,
     llm_enabled: bool = False,
@@ -129,10 +148,10 @@ def run_evolution(
     llm_model: str = "zai-glm-4.7",
     env_path: str = ".env",
     mutation_strategy: str = "guided_mutation",
-    creation_strategy: str = "baseline_seeded_initialization",  # Use baseline seeding
-    use_gpu: str = "auto",  # GPU mode: "auto", "always", "never"
-    fitness_mode: str = "hybrid",  # weighted_sum, min_metric, geometric_mean, threshold_bonus, hybrid
-    use_curriculum: bool = True,  # Enable curriculum learning
+    creation_strategy: str = "baseline_seeded_initialization",
+    use_gpu: str = "auto",
+    fitness_mode: str = "hybrid",
+    use_curriculum: bool = True,
 ):
     """
     Run MAP-Elites evolutionary optimization.
@@ -145,12 +164,13 @@ def run_evolution(
 
     Args:
         dataset_name: STARK dataset to use (prime, amazon, mag)
+        run_id: Custom run identifier (auto-generated if None)
+        resume_run: Path to existing run directory to resume
         n_gens: Number of generations
         pop_size: Batch size for offspring generation
         initial_fill: Initial population size to seed archive
         train_sample_size: Number of training samples
         val_sample_size: Number of validation samples
-        start_from_scratch: Clear previous checkpoints/logs
         concurrent_evals: Number of concurrent genome evaluations
         max_workers: Workers per retrieval
         llm_enabled: Enable LLM-guided mutations
@@ -158,7 +178,7 @@ def run_evolution(
         llm_model: Model ID for the provider
         env_path: Path to .env file with API keys
         mutation_strategy: Mutation strategy name
-        creation_strategy: Strategy for initial population (baseline_seeded_initialization recommended)
+        creation_strategy: Strategy for initial population
         use_gpu: GPU mode - "auto" (detect), "always" (require), "never" (CPU only)
         fitness_mode: Fitness calculation mode (hybrid recommended)
         use_curriculum: Enable curriculum learning (progressive weight schedule)
@@ -185,6 +205,42 @@ def run_evolution(
     print(f"\nTarget Metrics:")
     print(f"  Hit@1: >50%  |  Hit@5: >70%  |  MRR: >80%  |  Recall@20: >80%")
     print(f"{'='*60}\n")
+
+    # Create storage config
+    storage = StorageConfig(
+        base_dir=os.path.join(BASE_DIR, "runs"),
+        dataset=dataset_name,
+        run_id=run_id,
+        use_gpu=use_gpu,
+        checkpoint_frequency=5,
+        validation_frequency=5,
+        keep_n_checkpoints=10,
+        plot_title=f"{dataset_name.title()} MAP-Elites Evolution",
+    )
+
+    # Create RunManager
+    run_manager = RunManager(storage)
+
+    # Handle resume vs new run
+    if resume_run:
+        # Resuming from existing run - update storage config to point to that run
+        if not os.path.exists(resume_run):
+            print(f"Error: Resume path does not exist: {resume_run}")
+            sys.exit(1)
+
+        # Extract dataset and run_id from path
+        parts = os.path.normpath(resume_run).split(os.sep)
+        if len(parts) >= 2:
+            storage.dataset = parts[-2]
+            storage.run_id = parts[-1]
+            storage._resolve_paths()
+            run_manager = RunManager(storage)
+
+        print(f"Resuming run: {resume_run}")
+        print(f"  Dataset: {storage.dataset}")
+        print(f"  Run ID: {storage.run_id}")
+    else:
+        print(f"New run: {storage.run_dir}")
 
     # Load Data
     skb = load_and_download_skb(dataset_name)
@@ -220,8 +276,6 @@ def run_evolution(
     print(f"Evolution Corpus: {len(train_q)} training queries, {len(val_q)} validation queries.")
 
     # Define Fitness Goals
-    # Target thresholds aligned with goals:
-    # Hit@1: >50%, Hit@5: >70%, MRR: >80%, Recall@20: >80%
     fitness_calc = create_fitness_calculator(
         mode=fitness_mode,
         weights={
@@ -240,15 +294,6 @@ def run_evolution(
     )
 
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
-
-    # Setup directories
-    log_dir = os.path.join(BASE_DIR, "logs")
-    ckpt_dir = os.path.join(BASE_DIR, "checkpoints")
-    best_params_dir = os.path.join(BASE_DIR, "best_params")
-
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(ckpt_dir, exist_ok=True)
-    os.makedirs(best_params_dir, exist_ok=True)
 
     # Build configuration using new dataclass structure
     config = EvolutionConfig(
@@ -269,7 +314,7 @@ def run_evolution(
             creation_strategy=creation_strategy,
             mutation_strategy=mutation_strategy,
             crossover_strategy="uniform_parameter_mix",
-            base_mutation_rate=0.20,  # Slightly lower to preserve good patterns
+            base_mutation_rate=0.20,
             crossover_rate=0.6,
             expr_max_depth=5,
             n_agent_groups=3,
@@ -280,62 +325,47 @@ def run_evolution(
             model=llm_model,
             env_path=env_path,
         ),
-        checkpoint=CheckpointConfig(
-            log_path=os.path.join(log_dir, f"evo_{dataset_name}.jsonl"),
-            plot_path=os.path.join(log_dir, f"plot_{dataset_name}.png"),
-            checkpoint_path=os.path.join(ckpt_dir, f"ckpt_{dataset_name}.pkl"),
-            validation_frequency=5,
-            checkpoint_frequency=5,
-            plot_title=f"{dataset_name.title()} MAP-Elites Evolution",
-        ),
+        storage=storage,
     )
 
     # Enable LLM mutation if requested
     if llm_enabled:
         config.genetic.mutation_strategy = "llm_mutation"
 
-    # Cleanup if starting from scratch
-    if start_from_scratch:
-        print("\n[Scratch Mode] Clearing previous evolution data...")
-        best_params_path = os.path.join(best_params_dir, f"best_params_{dataset_name}.json")
-        files_to_remove = [
-            config.checkpoint.log_path,
-            config.checkpoint.plot_path,
-            config.checkpoint.checkpoint_path,
-            best_params_path,
-        ]
-        # Also clean up intermediate checkpoints
-        for f in os.listdir(ckpt_dir):
-            if f.startswith(f"ckpt_{dataset_name}_gen_"):
-                files_to_remove.append(os.path.join(ckpt_dir, f))
-
-        for fpath in files_to_remove:
-            if os.path.exists(fpath):
-                try:
-                    os.remove(fpath)
-                    print(f"  Deleted: {fpath}")
-                except Exception as e:
-                    print(f"  Error deleting {fpath}: {e}")
-        print("[Scratch Mode] Cleanup complete.\n")
-
     # Check for checkpoint resume
-    ckpt_path = config.checkpoint.checkpoint_path
-    if os.path.exists(ckpt_path) and not start_from_scratch:
-        print(f"Resuming from checkpoint: {ckpt_path}")
-        try:
-            engine = EvolutionEngine.load_checkpoint(
-                checkpoint_path=ckpt_path,
-                retriever=retriever,
-                fitness_calculator=fitness_calc,
-                evaluator=evaluator,
-                train_query_ids=train_q_ids,
-                train_ground_truth=train_gt,
-                val_query_ids=val_q_ids,
-                val_ground_truth=val_gt,
-                config=config,
-            )
-        except Exception as e:
-            print(f"Failed to load checkpoint ({e}). Starting fresh.")
+    if resume_run:
+        checkpoint_path = os.path.join(resume_run, "checkpoints", "latest.pkl")
+        if os.path.exists(checkpoint_path):
+            print(f"Resuming from checkpoint: {checkpoint_path}")
+            try:
+                engine = EvolutionEngine.load_checkpoint(
+                    run_manager=run_manager,
+                    checkpoint_path=checkpoint_path,
+                    retriever=retriever,
+                    fitness_calculator=fitness_calc,
+                    evaluator=evaluator,
+                    train_query_ids=train_q_ids,
+                    train_ground_truth=train_gt,
+                    val_query_ids=val_q_ids,
+                    val_ground_truth=val_gt,
+                    config=config,
+                )
+            except Exception as e:
+                print(f"Failed to load checkpoint ({e}). Starting fresh.")
+                engine = EvolutionEngine(
+                    retriever=retriever,
+                    fitness_calculator=fitness_calc,
+                    evaluator=evaluator,
+                    train_query_ids=train_q_ids,
+                    train_ground_truth=train_gt,
+                    val_query_ids=val_q_ids,
+                    val_ground_truth=val_gt,
+                    config=config,
+                    run_manager=run_manager,
+                )
+                engine.initialize_run()
+        else:
+            print(f"No checkpoint found at {checkpoint_path}. Starting fresh.")
             engine = EvolutionEngine(
                 retriever=retriever,
                 fitness_calculator=fitness_calc,
@@ -345,8 +375,11 @@ def run_evolution(
                 val_query_ids=val_q_ids,
                 val_ground_truth=val_gt,
                 config=config,
+                run_manager=run_manager,
             )
+            engine.initialize_run()
     else:
+        # New run
         engine = EvolutionEngine(
             retriever=retriever,
             fitness_calculator=fitness_calc,
@@ -356,7 +389,9 @@ def run_evolution(
             val_query_ids=val_q_ids,
             val_ground_truth=val_gt,
             config=config,
+            run_manager=run_manager,
         )
+        engine.initialize_run()
 
     print("Starting Evolution Loop...")
     try:
@@ -369,12 +404,7 @@ def run_evolution(
     print("Evolution Complete. Best Genome:")
     if best_genome:
         best_genome.pretty_print()
-
-        # Save the best params for easy copy-pasting
-        best_params_path = os.path.join(best_params_dir, f"best_params_{dataset_name}.json")
-        with open(best_params_path, "w") as f:
-            json.dump(best_genome.to_dict(), f, indent=2)
-        print(f"Saved best genome to {best_params_path}")
+        print(f"Best genome saved to: {run_manager.config.best_genome_path}")
     else:
         print("No best genome found.")
     print("=" * 30)
@@ -387,7 +417,7 @@ if __name__ == "__main__":
         description="Run MAP-Elites evolutionary optimization for SwarmRAG on STaRK datasets"
     )
 
-    # Essential CLI flags (6 total)
+    # Essential CLI flags
     parser.add_argument(
         "--dataset",
         type=str,
@@ -398,17 +428,41 @@ if __name__ == "__main__":
     parser.add_argument("--train_ss", type=int, default=200, help="Number of training samples")
     parser.add_argument("--val_ss", type=int, default=100, help="Number of validation samples")
     parser.add_argument("--llm", action="store_true", help="Enable LLM-guided mutations")
-    parser.add_argument("--scratch", action="store_true", help="Clear previous checkpoints/logs")
+
+    # New storage-related arguments
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Custom run identifier (auto-generated timestamp if not provided)",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to run directory to resume (e.g., stark/runs/prime/20240123_143022)",
+    )
+    parser.add_argument(
+        "--list-runs",
+        action="store_true",
+        help="List all existing runs and exit",
+    )
 
     args = parser.parse_args()
+
+    # Handle --list-runs
+    if args.list_runs:
+        list_runs(args.dataset if args.dataset != "prime" else None)
+        sys.exit(0)
 
     # Merge CLI args with CONFIG dict
     run_evolution(
         dataset_name=args.dataset,
+        run_id=args.run_id,
+        resume_run=args.resume,
         n_gens=args.gens,
         train_sample_size=args.train_ss,
         val_sample_size=args.val_ss,
-        start_from_scratch=args.scratch,
         llm_enabled=args.llm,
         **CONFIG,
     )
