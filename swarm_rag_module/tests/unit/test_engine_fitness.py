@@ -7,7 +7,6 @@ from swarm_rag.evolution.engine import EvolutionEngine
 from swarm_rag.evolution.execution.fitness_strategies import (
     LexicographicStrategy,
     ParetoStrategy,
-    PhasedStrategy
 )
 from swarm_rag.evolution.types.config import EvolutionConfig, StorageConfig
 from swarm_rag.evolution.storage import RunManager
@@ -41,8 +40,6 @@ class TestEngineFitnessStrategy(unittest.TestCase):
         config = EvolutionConfig(storage=storage)
         if 'fitness_strategy' in overrides:
             config.fitness_strategy = overrides['fitness_strategy']
-        if 'phased_switch_gen' in overrides:
-            config.phased_switch_gen = overrides['phased_switch_gen']
         return config, storage
 
     def test_default_strategy(self):
@@ -87,9 +84,9 @@ class TestEngineFitnessStrategy(unittest.TestCase):
         self.assertIsInstance(engine.fitness_strategy, ParetoStrategy)
         print("Config 'pareto' loads ParetoStrategy")
 
-    def test_phased_strategy_config(self):
-        """Test that 'phased' config loads PhasedStrategy with correct switch gen"""
-        config, storage = self._get_config(fitness_strategy="phased", phased_switch_gen=42)
+    def test_phased_falls_back_to_lexicographic(self):
+        """Test that legacy 'phased' config falls back to LexicographicStrategy"""
+        config, storage = self._get_config(fitness_strategy="phased")
         run_manager = RunManager(storage)
 
         engine = EvolutionEngine(
@@ -105,9 +102,9 @@ class TestEngineFitnessStrategy(unittest.TestCase):
             overwrite_logs=True
         )
 
-        self.assertIsInstance(engine.fitness_strategy, PhasedStrategy)
-        self.assertEqual(engine.fitness_strategy.switch_gen, 42)
-        print("Config 'phased' loads PhasedStrategy with correct generation")
+        # Phased was removed, should fall back to Lexicographic
+        self.assertIsInstance(engine.fitness_strategy, LexicographicStrategy)
+        print("Legacy 'phased' config falls back to LexicographicStrategy")
 
 if __name__ == "__main__":
     unittest.main()

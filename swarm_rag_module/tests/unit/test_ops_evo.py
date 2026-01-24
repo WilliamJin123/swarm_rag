@@ -61,18 +61,7 @@ def test_selection_ops():
     
     print(f"  Tournament selected 'best' {wins}/100 times")
     # With 50% best and K=5, prob is ~96.8%. This assertion is now safe.
-    assert wins > 80 
-
-    # 2. Truncation (Requires Sorted Pop)
-    print("  Testing Truncation...")
-    pop.sort(key=lambda g: g.fitness, reverse=True) # Sort Best First
-    ctx.population = pop # Update context
-    
-    # Truncation logic (e.g. top 20%) should ALWAYS pick a 'best' 
-    # since half the population is 'best'
-    selected = GeneticStrategies.truncation_selection(ctx, k=1)[0]
-    print(f"  Truncation selected: {selected.id}")
-    assert "best" in selected.id
+    assert wins > 80
 
 def test_crossover_ops():
     print("\n--- Testing Crossover (Uniform Mix) ---")

@@ -32,11 +32,14 @@ from .execution.factory import GenomeFactory
 from .execution.fitness_strategies import (
     LexicographicStrategy,
     ParetoStrategy,
-    PhasedStrategy,
 )
 
 # MAP-Elites Imports
-from .map_elites.archive import MapElitesArchive
+from .map_elites.archive import (
+    MapElitesArchive,
+    ArchiveComparatorConfig,
+    ArchiveComparisonMode,
+)
 from .map_elites.descriptors import DescriptorCalculator, DescriptorRegistry
 from .map_elites.loop import MapElitesLoop
 
@@ -176,10 +179,14 @@ class EvolutionEngine:
             dimensions=self.evo_config.map_elites.dimensions,
             ranges=self.evo_config.map_elites.ranges,
         )
+        comparator_config = ArchiveComparatorConfig(
+            mode=ArchiveComparisonMode(self.evo_config.map_elites.comparison_mode)
+        )
         self.map_elites_archive = MapElitesArchive(
             descriptor_calc=descriptor_calc,
             bins=self.evo_config.map_elites.bins,
             ranges=self.evo_config.map_elites.ranges,
+            comparator_config=comparator_config,
         )
         self.map_elites_loop = MapElitesLoop(self.evo_context)
 
@@ -219,9 +226,8 @@ class EvolutionEngine:
 
         if strategy_name == "pareto":
             return ParetoStrategy()
-        elif strategy_name == "phased":
-            return PhasedStrategy(switch_gen=self.evo_config.phased_switch_gen)
         else:
+            # Default to lexicographic (including any legacy "phased" configs)
             return LexicographicStrategy()
 
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
@@ -306,7 +312,11 @@ class EvolutionEngine:
         if "random_state" in state:
             random.setstate(state["random_state"])
         if "torch_rng_state" in state:
-            torch.set_rng_state(state["torch_rng_state"])
+            rng_state = state["torch_rng_state"]
+            # Fix: Ensure RNG state is CPU tensor with uint8 dtype
+            if isinstance(rng_state, torch.Tensor):
+                rng_state = rng_state.cpu().to(torch.uint8)
+            torch.set_rng_state(rng_state)
 
         # Restore tracker history
         if "tracker_history" in state:

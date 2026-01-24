@@ -1,9 +1,8 @@
 import math
 from typing import List
 from swarm_rag.evolution.execution.fitness_strategies import (
-    LexicographicStrategy, 
-    ParetoStrategy, 
-    PhasedStrategy
+    LexicographicStrategy,
+    ParetoStrategy,
 )
 from swarm_rag.evolution.types.genome import Genome
 from swarm_rag.evolution.types.fitness_results import FitnessResult
@@ -82,40 +81,7 @@ def test_pareto_strategy():
     
     print("  ✓ Pareto non-dominated sorting confirmed")
 
-def test_phased_strategy():
-    print("\n--- Testing Phased Strategy ---")
-    strategy = PhasedStrategy(switch_gen=5)
-    
-    # Use the A/B/C scenario
-    g_a = make_genome("A", 0.9, 1.0, 100.0)
-    g_b = make_genome("B", 0.5, 1.0, 10.0)
-    
-    pop = [g_a, g_b]
-    
-    # Phase 1: Pareto (Gen 0)
-    # A and B are both Rank 0. Crowding distance might prefer B (boundary) or A.
-    # But crucially, they are comparable.
-    strategy.assign_fitness(pop, generation=0)
-    # Check that sort_key is a Pareto-style tuple (-Rank, Crowding, 0)
-    # Since only 2 items, rank is 0 for both.
-    
-    # Phase 2: Lexicographic (Gen 10)
-    strategy.assign_fitness(pop, generation=10)
-    pop.sort(key=lambda g: g.fitness, reverse=True)
-    
-    # In Lexicographic, A (0.9) strictly beats B (0.5)
-    print(f"  Gen 10 Sorted: {[g.id for g in pop]}")
-    assert pop[0].id == "A", "Phased strategy failed to switch to Lexicographic"
-    
-    # Check sort key format (Lexicographic sets (qual, stab, -cost))
-    assert len(pop[0].fitness.sort_key) == 3
-    # Check that it matches quality
-    assert math.isclose(pop[0].fitness.sort_key[0], 0.9)
-    
-    print("  ✓ Phased switching confirmed")
-
 if __name__ == "__main__":
     test_lexicographic_strategy()
     test_pareto_strategy()
-    test_phased_strategy()
     print("\nALL FITNESS STRATEGY TESTS PASSED")
