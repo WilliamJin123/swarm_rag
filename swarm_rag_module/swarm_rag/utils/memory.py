@@ -10,23 +10,19 @@ Provides tools to:
 
 import time
 import gc
+import math
 import contextlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Any, Generator
 from functools import wraps
 import logging
+import torch
 
 from .device import get_device
 
 logger = logging.getLogger(__name__)
 
 # Optional imports
-try:
-    import torch
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
-
 try:
     import psutil
     _PSUTIL_AVAILABLE = True
@@ -179,7 +175,7 @@ class MemoryProfiler:
             track_gpu: Whether to track GPU memory
         """
         self.track_cpu = track_cpu and _PSUTIL_AVAILABLE
-        self.track_gpu = track_gpu and _TORCH_AVAILABLE and get_device() == "cuda"
+        self.track_gpu = track_gpu and get_device() == "cuda"
 
         self.snapshots: List[MemorySnapshot] = []
         self.deltas: List[MemoryDelta] = []
@@ -347,7 +343,7 @@ def get_gpu_memory_info() -> Dict[str, float]:
     Returns:
         Dictionary with memory stats in MB
     """
-    if not _TORCH_AVAILABLE or get_device() != "cuda":
+    if get_device() != "cuda":
         return {}
 
     try:
@@ -364,7 +360,7 @@ def get_gpu_memory_info() -> Dict[str, float]:
 
 def clear_gpu_cache():
     """Clear GPU memory cache."""
-    if _TORCH_AVAILABLE and get_device() == "cuda":
+    if get_device() == "cuda":
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -403,7 +399,7 @@ def memory_guard(max_gpu_mb: float = None, cleanup: bool = True) -> Generator[Me
             clear_gpu_cache()
 
 
-def estimate_tensor_memory(shape: tuple, dtype=None) -> float:
+def estimate_tensor_memory(shape: tuple, dtype: torch.dtype = None) -> float:
     """
     Estimate memory required for a tensor.
 
@@ -414,13 +410,25 @@ def estimate_tensor_memory(shape: tuple, dtype=None) -> float:
     Returns:
         Memory in MB
     """
-    import numpy as np
-
     if dtype is None:
-        dtype = np.float32
+        dtype = torch.float32
 
-    size = np.prod(shape)
-    bytes_per_element = np.dtype(dtype).itemsize
+    size = math.prod(shape)
+
+    # Map torch dtype to bytes per element
+    dtype_to_bytes = {
+        torch.float32: 4,
+        torch.float64: 8,
+        torch.float16: 2,
+        torch.bfloat16: 2,
+        torch.int32: 4,
+        torch.int64: 8,
+        torch.int16: 2,
+        torch.int8: 1,
+        torch.uint8: 1,
+        torch.bool: 1,
+    }
+    bytes_per_element = dtype_to_bytes.get(dtype, 4)
     total_bytes = size * bytes_per_element
 
     return total_bytes / (1024 * 1024)
