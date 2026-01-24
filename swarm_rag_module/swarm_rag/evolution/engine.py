@@ -6,8 +6,7 @@ with optional LLM-guided mutations.
 """
 import os
 import random
-import pickle
-import numpy as np
+import torch
 from typing import List, Any, Optional
 import logging
 
@@ -22,7 +21,9 @@ from .types.config import (
     EvolutionConfig,
     EvolutionContext,
     DEFAULT_CONFIG,
+    StorageConfig,
 )
+from .storage import RunManager
 
 from .execution.evaluator import PopulationEvaluator
 from .execution.fitness import FitnessCalculator
@@ -82,6 +83,7 @@ class EvolutionEngine:
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
         config: Optional[EvolutionConfig] = None,
+        run_manager: Optional[RunManager] = None,
         genome_factory: "GenomeFactory" = None,
         overwrite_logs: bool = True,
     ):
@@ -97,10 +99,16 @@ class EvolutionEngine:
             val_query_ids: Validation query IDs
             val_ground_truth: Validation ground truth
             config: Evolution configuration (EvolutionConfig dataclass)
+            run_manager: RunManager for storage (created if None)
             genome_factory: Optional pre-configured genome factory
             overwrite_logs: Whether to overwrite existing log files
         """
         self.evo_config = config if config is not None else DEFAULT_CONFIG
+
+        # Initialize RunManager if not provided
+        if run_manager is None:
+            run_manager = RunManager(self.evo_config.storage)
+        self.run_manager = run_manager
 
         self.train_query_ids = train_query_ids
         self.train_gt = train_ground_truth
@@ -128,6 +136,10 @@ class EvolutionEngine:
         mutation_strategy = self.evo_config.genetic.mutation_strategy
         llm_enabled = mutation_strategy == GeneticKey.LLM_MUTATION or self.evo_config.llm.enabled
 
+        # Get device from storage config
+        from ..utils.device import get_device_from_mode
+        device = get_device_from_mode(self.evo_config.storage.use_gpu)
+
         # Initialize population evaluator with decision tracking if LLM enabled
         self.population_evaluator = PopulationEvaluator(
             retriever=retriever,
@@ -139,6 +151,7 @@ class EvolutionEngine:
             max_workers_per_retrieval=self.evo_config.resources.max_workers_per_retrieval,
             track_decisions=llm_enabled,  # Auto-enable when LLM is used
             decision_sample_rate=1.0,  # 100% sampling for full LLM context
+            device=device,  # Pass device for GPU-accelerated evaluation
         )
 
         # Initialize LLM Provider if using LLM Mutation
@@ -147,9 +160,9 @@ class EvolutionEngine:
 
         # Initialize progress tracker
         self.tracker = ProgressTracker(
-            log_path=self.evo_config.checkpoint.log_path,
-            plot_path=self.evo_config.checkpoint.plot_path,
-            plot_title=self.evo_config.checkpoint.plot_title,
+            log_path=self.run_manager.config.log_path,
+            plot_path=self.run_manager.config.plot_path,
+            plot_title=self.evo_config.storage.plot_title,
             overwrite=overwrite_logs,
         )
 
@@ -176,6 +189,7 @@ class EvolutionEngine:
             evaluator=self.population_evaluator,
             fitness_strategy=self.fitness_strategy,
             tracker=self.tracker,
+            run_manager=self.run_manager,
             val_query_ids=self.val_query_ids,
             val_ground_truth=self.val_gt,
             archive=self.map_elites_archive,
@@ -227,13 +241,18 @@ class EvolutionEngine:
         return self._orchestrator.optimize(initial_population)
 
     def save_checkpoint(self, population: List[Genome], best_genome: Genome, generation: int):
-        """Saves evolution state to disk."""
+        """Saves evolution state to disk via RunManager."""
         self._orchestrator.save_checkpoint(population, best_genome, generation)
+
+    def initialize_run(self):
+        """Initialize run directories and save config snapshot."""
+        self.run_manager.initialize_run(self.evo_config)
 
     @classmethod
     def load_checkpoint(
         cls,
-        checkpoint_path: str,
+        run_manager: RunManager,
+        checkpoint_path: Optional[str],
         retriever: Any,
         fitness_calculator: Any,
         evaluator: Any,
@@ -247,7 +266,8 @@ class EvolutionEngine:
         Factory method: Creates a NEW engine instance and restores state from disk.
 
         Args:
-            checkpoint_path: Path to checkpoint file
+            run_manager: RunManager for storage
+            checkpoint_path: Path to checkpoint file (uses latest if None)
             retriever: SwarmRetriever instance
             fitness_calculator: FitnessCalculator instance
             evaluator: Evaluator instance
@@ -260,14 +280,11 @@ class EvolutionEngine:
         Returns:
             Initialized EvolutionEngine with restored state
         """
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
+        # Load checkpoint via RunManager (handles device mapping)
+        state = run_manager.load_checkpoint(checkpoint_path)
+        print(f"--> Loaded checkpoint (generation {state['generation']})")
 
-        print(f"--> Loading checkpoint from: {checkpoint_path}")
-        with open(checkpoint_path, "rb") as f:
-            state = pickle.load(f)
-
-        # Create fresh engine
+        # Create fresh engine with existing RunManager
         engine = cls(
             retriever=retriever,
             fitness_calculator=fitness_calculator,
@@ -277,6 +294,7 @@ class EvolutionEngine:
             val_query_ids=val_query_ids,
             val_ground_truth=val_ground_truth,
             config=config,
+            run_manager=run_manager,
             overwrite_logs=False,
         )
 
@@ -287,8 +305,8 @@ class EvolutionEngine:
         # Restore RNG states for reproducibility
         if "random_state" in state:
             random.setstate(state["random_state"])
-        if "np_random_state" in state:
-            np.random.set_state(state["np_random_state"])
+        if "torch_rng_state" in state:
+            torch.set_rng_state(state["torch_rng_state"])
 
         # Restore tracker history
         if "tracker_history" in state:

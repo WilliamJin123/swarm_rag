@@ -13,6 +13,7 @@ from tqdm.auto import tqdm
 from .base import BaseOrchestrator
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
+from ..storage import RunManager
 from ..map_elites.archive import MapElitesArchive
 from ..map_elites.loop import MapElitesLoop
 from ..execution.factory import GenomeFactory
@@ -44,6 +45,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         evaluator: PopulationEvaluator,
         fitness_strategy: FitnessStrategy,
         tracker: ProgressTracker,
+        run_manager: RunManager,
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
         archive: MapElitesArchive,
@@ -59,6 +61,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             evaluator: Population evaluator
             fitness_strategy: Fitness assignment strategy
             tracker: Progress tracker
+            run_manager: RunManager for checkpoint/log/result storage
             val_query_ids: Validation queries
             val_ground_truth: Validation ground truth
             archive: MAP-Elites archive for storing elites
@@ -71,6 +74,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             evaluator=evaluator,
             fitness_strategy=fitness_strategy,
             tracker=tracker,
+            run_manager=run_manager,
             val_query_ids=val_query_ids,
             val_ground_truth=val_ground_truth,
         )
@@ -210,7 +214,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             self.tracker.log(gen, log_stats, val_stats)
 
             # CHECKPOINTING
-            ckpt_freq = self.evo_config.checkpoint.checkpoint_frequency
+            ckpt_freq = self.evo_config.storage.checkpoint_frequency
             if gen % ckpt_freq == 0:
                 self.save_checkpoint(
                     population=self.archive.as_population(),
@@ -229,9 +233,13 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             extra_state=self._serialize_archive_state(),
         )
         self.tracker.plot(
-            save_path=self.evo_config.checkpoint.plot_path,
-            title=self.evo_config.checkpoint.plot_title,
+            save_path=self.run_manager.config.plot_path,
+            title=self.evo_config.storage.plot_title,
         )
+
+        # Save best genome as JSON
+        if best_genome:
+            self.run_manager.save_best_genome(best_genome)
 
         return best_genome
 

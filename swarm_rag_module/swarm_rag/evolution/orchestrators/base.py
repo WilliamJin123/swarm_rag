@@ -3,16 +3,16 @@ Base orchestrator class with shared logic for evolution algorithms.
 """
 import os
 import random
-import pickle
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional, Any
 
-import numpy as np
+import torch
 
 from ..types.genome import Genome
 from ..types.config import EvolutionConfig, EvolutionContext
+from ..storage import RunManager
 from ..execution.evaluator import PopulationEvaluator
 from ..execution.tracker import ProgressTracker
 from ..execution.fitness_strategies import FitnessStrategy
@@ -25,7 +25,7 @@ class BaseOrchestrator(ABC):
 
     Handles common concerns:
     - Logging setup/cleanup
-    - Checkpointing (save/load)
+    - Checkpointing via RunManager
     - Validation runner
 
     Subclasses implement the specific optimization loop.
@@ -37,6 +37,7 @@ class BaseOrchestrator(ABC):
         evaluator: PopulationEvaluator,
         fitness_strategy: FitnessStrategy,
         tracker: ProgressTracker,
+        run_manager: RunManager,
         val_query_ids: List[Any],
         val_ground_truth: List[List[Any]],
     ):
@@ -48,6 +49,7 @@ class BaseOrchestrator(ABC):
             evaluator: Population evaluator for fitness calculation
             fitness_strategy: Strategy for assigning fitness sort keys
             tracker: Progress tracker for logging
+            run_manager: RunManager for checkpoint/log/result storage
             val_query_ids: Validation query IDs
             val_ground_truth: Validation ground truth
         """
@@ -56,6 +58,7 @@ class BaseOrchestrator(ABC):
         self.evaluator = evaluator
         self.fitness_strategy = fitness_strategy
         self.tracker = tracker
+        self.run_manager = run_manager
         self.val_query_ids = val_query_ids
         self.val_gt = val_ground_truth
 
@@ -77,14 +80,11 @@ class BaseOrchestrator(ABC):
             root_logger.handlers.clear()
 
         # File handler for detailed logs
-        log_path = self.evo_config.checkpoint.log_path
-        # Fix replacement order and add timestamp for unique log files per run
-        base_log = log_path.replace(".jsonl", "").replace(".json", "")
+        log_dir = self.run_manager.config.log_dir
+        os.makedirs(log_dir, exist_ok=True)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file_path = f"{base_log}_{timestamp}.log"
-        log_dir = os.path.dirname(log_file_path)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
+        log_file_path = os.path.join(log_dir, f"evolution_{timestamp}.log")
 
         fh = logging.FileHandler(log_file_path)
         fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
@@ -117,7 +117,7 @@ class BaseOrchestrator(ABC):
             Validation stats dict if validation was run, else None
         """
         n_gen = self.evo_config.n_generations
-        val_freq = self.evo_config.checkpoint.validation_frequency
+        val_freq = self.evo_config.storage.validation_frequency
 
         if (generation % val_freq == 0) or (generation == n_gen - 1):
             # Create a copy to not mess up training metrics
@@ -144,7 +144,7 @@ class BaseOrchestrator(ABC):
         extra_state: dict = None,
     ):
         """
-        Saves evolution state to disk.
+        Saves evolution state to disk via RunManager.
 
         Args:
             population: Current population
@@ -152,42 +152,15 @@ class BaseOrchestrator(ABC):
             generation: Current generation
             extra_state: Additional state to save (e.g., archive data)
         """
-        state = {
-            "generation": generation,
-            "population": population,
-            "best_genome": best_genome,
-            "random_state": random.getstate(),
-            "np_random_state": np.random.get_state(),
-            "tracker_history": self.tracker.history,
-            "orchestrator_type": self.__class__.__name__,
-        }
-
-        # Merge extra state if provided
-        if extra_state:
-            state.update(extra_state)
-
-        ckpt_path = self.evo_config.checkpoint.checkpoint_path
-        ckpt_dir = os.path.dirname(ckpt_path)
-        if ckpt_dir:
-            os.makedirs(ckpt_dir, exist_ok=True)
-
-        base, ext = os.path.splitext(ckpt_path)
-        numbered_path = f"{base}_gen_{generation}{ext}"
-
-        # Save numbered checkpoint
-        with open(numbered_path, "wb") as f:
-            pickle.dump(state, f)
-
-        # Atomic update of "latest" checkpoint
-        temp_latest = ckpt_path + ".tmp"
-        with open(temp_latest, "wb") as f:
-            pickle.dump(state, f)
-
-        if os.path.exists(ckpt_path):
-            os.remove(ckpt_path)
-        os.rename(temp_latest, ckpt_path)
-
-        print(f"--> Checkpoint saved: {numbered_path}")
+        self.run_manager.save_checkpoint(
+            population=population,
+            best_genome=best_genome,
+            generation=generation,
+            extra_state=extra_state,
+            random_state=random.getstate(),
+            torch_rng_state=torch.get_rng_state(),
+            tracker_history=self.tracker.history,
+        )
 
     def _find_best_in_population(self, population: List[Genome]) -> Optional[Genome]:
         """

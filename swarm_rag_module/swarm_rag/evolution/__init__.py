@@ -10,10 +10,11 @@ from .types.config import (
     GeneticConfig,
     LLMConfig,
     ResourceConfig,
-    CheckpointConfig,
+    StorageConfig,
     EvolutionContext,
     DEFAULT_CONFIG,
 )
+from .storage import RunManager
 
 __all__ = [
     "EvolutionEngine",
@@ -22,7 +23,8 @@ __all__ = [
     "GeneticConfig",
     "LLMConfig",
     "ResourceConfig",
-    "CheckpointConfig",
+    "StorageConfig",
     "EvolutionContext",
     "DEFAULT_CONFIG",
+    "RunManager",
 ]
