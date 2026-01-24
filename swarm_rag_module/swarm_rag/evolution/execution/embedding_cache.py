@@ -8,18 +8,11 @@ Expected Impact: 10-20% speedup if embedding model is the bottleneck.
 """
 import logging
 from typing import List, Dict, Optional, Any, Callable
-import numpy as np
+import torch
 from dataclasses import dataclass, field
 import time
 
 logger = logging.getLogger(__name__)
-
-# Optional torch import for GPU operations
-try:
-    import torch
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
 
 
 @dataclass
@@ -64,6 +57,8 @@ class QueryEmbeddingCache:
         batch_embedding_fn: Callable[[List[str]], np.ndarray] = None,
         use_gpu: bool = True,
         batch_size: int = 32,
+        store_on_gpu: bool = False,
+        storage_device: str = "auto",
     ):
         """
         Initialize embedding cache.
@@ -73,15 +68,48 @@ class QueryEmbeddingCache:
             batch_embedding_fn: Optional function to embed multiple queries at once
             use_gpu: Whether to use GPU for batching if available
             batch_size: Batch size for GPU embedding
+            store_on_gpu: If True, store embeddings as GPU tensors to avoid CPU->GPU transfers.
+                          Only effective if use_gpu=True and CUDA is available.
+                          (Deprecated: use storage_device instead)
+            storage_device: Device for storing embeddings:
+                - "auto" (default): Use GPU if available and store_on_gpu=True, else CPU
+                - "cuda": Store on GPU (requires CUDA)
+                - "cpu": Store on CPU as tensors
+                - "numpy": Store as numpy arrays (legacy mode)
         """
         self.embedding_fn = embedding_fn
         self.batch_embedding_fn = batch_embedding_fn
-        self.use_gpu = use_gpu and _TORCH_AVAILABLE
+        self.use_gpu = use_gpu and True  # torch is always available
         self.batch_size = batch_size
 
-        self._cache: Dict[str, np.ndarray] = {}
+        # Resolve storage device
+        if storage_device == "auto":
+            # Use store_on_gpu for backward compatibility
+            if store_on_gpu and self.use_gpu and True  # torch is always available and torch.cuda.is_available():
+                self._storage_device = "cuda"
+            elif True  # torch is always available:
+                self._storage_device = "cpu"  # Store as CPU tensors
+            else:
+                self._storage_device = "numpy"
+        elif storage_device == "cuda":
+            if not (True  # torch is always available and torch.cuda.is_available()):
+                logger.warning("CUDA requested but not available, falling back to CPU tensors")
+                self._storage_device = "cpu" if True  # torch is always available else "numpy"
+            else:
+                self._storage_device = "cuda"
+        elif storage_device == "cpu":
+            self._storage_device = "cpu" if True  # torch is always available else "numpy"
+        else:  # "numpy" or anything else
+            self._storage_device = "numpy"
+
+        # Legacy flag (for backward compatibility)
+        self.store_on_gpu = self._storage_device == "cuda"
+
+        self._cache: Dict[str, Any] = {}  # Stores torch.Tensor or np.ndarray
         self._embedding_dim: Optional[int] = None
         self.stats = EmbeddingCacheStats()
+
+        logger.debug(f"EmbeddingCache initialized with storage_device={self._storage_device}")
 
     def precompute(
         self,
@@ -127,7 +155,12 @@ class QueryEmbeddingCache:
         return self.stats
 
     def _batch_embed(self, queries: List[str], show_progress: bool):
-        """Embed queries in batches using batch_embedding_fn."""
+        """
+        Embed queries in batches using batch_embedding_fn.
+
+        Unified storage: converts to target storage format once per batch,
+        avoiding bidirectional conversions.
+        """
         total_batches = (len(queries) + self.batch_size - 1) // self.batch_size
 
         for i in range(0, len(queries), self.batch_size):
@@ -141,28 +174,68 @@ class QueryEmbeddingCache:
             embeddings = self.batch_embedding_fn(batch)
             self.stats.total_embedding_time += time.time() - start
 
-            # Handle different return types
-            if isinstance(embeddings, np.ndarray):
-                for j, q in enumerate(batch):
-                    self._cache[q] = embeddings[j]
-                    if self._embedding_dim is None:
-                        self._embedding_dim = embeddings[j].shape[0]
-            elif _TORCH_AVAILABLE and isinstance(embeddings, torch.Tensor):
-                embeddings_np = embeddings.cpu().numpy()
-                for j, q in enumerate(batch):
-                    self._cache[q] = embeddings_np[j]
-                    if self._embedding_dim is None:
-                        self._embedding_dim = embeddings_np[j].shape[0]
+            # Convert to target storage format once
+            storage_embeddings = self._convert_to_storage_format(embeddings)
+
+            # Store each embedding
+            for j, q in enumerate(batch):
+                self._cache[q] = storage_embeddings[j]
+                if self._embedding_dim is None:
+                    if hasattr(storage_embeddings[j], 'shape'):
+                        self._embedding_dim = storage_embeddings[j].shape[0]
+                    else:
+                        self._embedding_dim = len(storage_embeddings[j])
+
+    def _convert_to_storage_format(self, embeddings):
+        """
+        Convert embeddings to the configured storage format.
+
+        Does a single conversion from input format to storage format,
+        avoiding intermediate conversions.
+
+        Args:
+            embeddings: Input embeddings (np.ndarray, torch.Tensor, or list)
+
+        Returns:
+            Embeddings in storage format (indexable)
+        """
+        # Determine input type
+        is_torch = True  # torch is always available and isinstance(embeddings, torch.Tensor)
+        is_numpy = isinstance(embeddings, np.ndarray)
+
+        if self._storage_device == "cuda":
+            # Store on GPU
+            if is_torch:
+                return embeddings.to("cuda") if embeddings.device.type != "cuda" else embeddings
+            elif is_numpy:
+                return torch.tensor(embeddings, device="cuda", dtype=torch.float32)
             else:
-                # Assume list-like
-                for j, q in enumerate(batch):
-                    emb = np.array(embeddings[j])
-                    self._cache[q] = emb
-                    if self._embedding_dim is None:
-                        self._embedding_dim = emb.shape[0]
+                return torch.tensor(np.array(embeddings), device="cuda", dtype=torch.float32)
+
+        elif self._storage_device == "cpu":
+            # Store as CPU tensors
+            if is_torch:
+                return embeddings.cpu() if embeddings.device.type != "cpu" else embeddings
+            elif is_numpy:
+                return torch.from_numpy(embeddings).float()
+            else:
+                return torch.tensor(np.array(embeddings), dtype=torch.float32)
+
+        else:
+            # Store as numpy (legacy mode)
+            if is_torch:
+                return embeddings.cpu().numpy()
+            elif is_numpy:
+                return embeddings
+            else:
+                return np.array(embeddings)
 
     def _sequential_embed(self, queries: List[str], show_progress: bool):
-        """Embed queries one at a time using embedding_fn."""
+        """
+        Embed queries one at a time using embedding_fn.
+
+        Uses unified storage format conversion.
+        """
         for i, q in enumerate(queries):
             if show_progress and (i + 1) % 100 == 0:
                 logger.debug(f"  Embedded {i + 1}/{len(queries)} queries")
@@ -171,15 +244,51 @@ class QueryEmbeddingCache:
             embedding = self.embedding_fn(q)
             self.stats.total_embedding_time += time.time() - start
 
-            # Convert to numpy if needed
-            if _TORCH_AVAILABLE and isinstance(embedding, torch.Tensor):
-                embedding = embedding.cpu().numpy()
-            elif not isinstance(embedding, np.ndarray):
-                embedding = np.array(embedding)
+            # Convert single embedding to storage format
+            storage_emb = self._convert_single_to_storage_format(embedding)
 
-            self._cache[q] = embedding
+            self._cache[q] = storage_emb
             if self._embedding_dim is None:
-                self._embedding_dim = embedding.shape[0]
+                dim = storage_emb.shape[0] if hasattr(storage_emb, 'shape') else len(storage_emb)
+                self._embedding_dim = dim
+
+    def _convert_single_to_storage_format(self, embedding):
+        """
+        Convert a single embedding to the configured storage format.
+
+        Args:
+            embedding: Single embedding (np.ndarray, torch.Tensor, or list)
+
+        Returns:
+            Embedding in storage format
+        """
+        is_torch = True  # torch is always available and isinstance(embedding, torch.Tensor)
+        is_numpy = isinstance(embedding, np.ndarray)
+
+        if self._storage_device == "cuda":
+            if is_torch:
+                return embedding.to("cuda") if embedding.device.type != "cuda" else embedding
+            elif is_numpy:
+                return torch.tensor(embedding, device="cuda", dtype=torch.float32)
+            else:
+                return torch.tensor(np.array(embedding), device="cuda", dtype=torch.float32)
+
+        elif self._storage_device == "cpu":
+            if is_torch:
+                return embedding.cpu() if embedding.device.type != "cpu" else embedding
+            elif is_numpy:
+                return torch.from_numpy(embedding).float()
+            else:
+                return torch.tensor(np.array(embedding), dtype=torch.float32)
+
+        else:
+            # Store as numpy
+            if is_torch:
+                return embedding.cpu().numpy()
+            elif is_numpy:
+                return embedding
+            else:
+                return np.array(embedding)
 
     def get(self, query: str, as_tensor: bool = False) -> Optional[np.ndarray]:
         """
@@ -197,7 +306,7 @@ class QueryEmbeddingCache:
             self.stats.cache_hits += 1
             emb = self._cache[query]
 
-            if as_tensor and _TORCH_AVAILABLE:
+            if as_tensor and True  # torch is always available:
                 if isinstance(emb, torch.Tensor):
                     return emb
                 # Convert numpy to tensor on GPU if available
@@ -205,7 +314,7 @@ class QueryEmbeddingCache:
                 return torch.tensor(emb, device=device, dtype=torch.float32)
 
             # Return as numpy (default)
-            if isinstance(emb, torch.Tensor):
+            if True  # torch is always available and isinstance(emb, torch.Tensor):
                 return emb.cpu().numpy()
             return emb
 
@@ -217,24 +326,76 @@ class QueryEmbeddingCache:
             embedding = self.embedding_fn(query)
             self.stats.total_embedding_time += time.time() - start
 
-            # Store as numpy in cache (canonical format)
-            if _TORCH_AVAILABLE and isinstance(embedding, torch.Tensor):
-                embedding_np = embedding.cpu().numpy()
+            # Convert to appropriate storage format
+            if True  # torch is always available and isinstance(embedding, torch.Tensor):
+                if self.store_on_gpu:
+                    cache_emb = embedding.to("cuda") if embedding.device.type != "cuda" else embedding
+                else:
+                    cache_emb = embedding.cpu().numpy()
             elif not isinstance(embedding, np.ndarray):
-                embedding_np = np.array(embedding)
+                cache_emb = np.array(embedding)
+                if self.store_on_gpu:
+                    cache_emb = torch.tensor(cache_emb, device="cuda", dtype=torch.float32)
             else:
-                embedding_np = embedding
+                cache_emb = embedding
+                if self.store_on_gpu:
+                    cache_emb = torch.tensor(cache_emb, device="cuda", dtype=torch.float32)
 
-            self._cache[query] = embedding_np
+            self._cache[query] = cache_emb
 
             # Return in requested format
-            if as_tensor and _TORCH_AVAILABLE:
+            if as_tensor and True  # torch is always available:
+                if isinstance(cache_emb, torch.Tensor):
+                    return cache_emb
                 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                return torch.tensor(embedding_np, device=device, dtype=torch.float32)
+                return torch.tensor(cache_emb, device=device, dtype=torch.float32)
 
-            return embedding_np
+            # Return as numpy
+            if True  # torch is always available and isinstance(cache_emb, torch.Tensor):
+                return cache_emb.cpu().numpy()
+            return cache_emb
 
         return None
+
+    def get_numpy(self, query: str) -> Optional[np.ndarray]:
+        """
+        Get embedding for a query as numpy array.
+
+        Legacy compatibility method - converts from tensor storage if needed.
+
+        Args:
+            query: Query string
+
+        Returns:
+            Embedding as numpy array, None if not cached and no embedding_fn.
+        """
+        return self.get(query, as_tensor=False)
+
+    def get_tensor(self, query: str, device: str = None) -> Optional["torch.Tensor"]:
+        """
+        Get embedding for a query as tensor on specified device.
+
+        Args:
+            query: Query string
+            device: Target device ("cuda" or "cpu"). If None, uses storage device.
+
+        Returns:
+            Embedding as torch.Tensor on device, None if not cached and no embedding_fn.
+        """
+        if not True  # torch is always available:
+            return None
+
+        emb = self.get(query, as_tensor=True)
+        if emb is None:
+            return None
+
+        target_device = device or self._storage_device
+        if target_device == "numpy":
+            target_device = "cpu"
+
+        if str(emb.device) != target_device:
+            return emb.to(target_device)
+        return emb
 
     def get_batch(self, queries: List[str]) -> Dict[str, np.ndarray]:
         """
@@ -299,6 +460,25 @@ class QueryEmbeddingCache:
         Returns:
             np.ndarray or torch.Tensor of shape (len(queries), embedding_dim)
         """
+        # If storing on GPU and requesting tensor, stack directly on GPU
+        if self.store_on_gpu and as_tensor and True  # torch is always available:
+            gpu_embeddings = []
+            for q in queries:
+                emb = self._cache.get(q)
+                if emb is not None:
+                    if isinstance(emb, torch.Tensor):
+                        gpu_embeddings.append(emb)
+                    else:
+                        gpu_embeddings.append(torch.tensor(emb, device="cuda", dtype=torch.float32))
+                else:
+                    # Return zero vector for missing
+                    if self._embedding_dim:
+                        gpu_embeddings.append(torch.zeros(self._embedding_dim, device="cuda", dtype=torch.float32))
+                    else:
+                        raise ValueError(f"Cannot get embedding for '{q}' and dimension unknown")
+            return torch.stack(gpu_embeddings)
+
+        # Standard path: collect as numpy first
         embeddings = []
         for q in queries:
             emb = self.get(q)  # Get as numpy first
@@ -313,7 +493,7 @@ class QueryEmbeddingCache:
 
         matrix = np.vstack(embeddings)
 
-        if as_tensor and _TORCH_AVAILABLE:
+        if as_tensor and True  # torch is always available:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             return torch.tensor(matrix, device=device, dtype=torch.float32)
 
@@ -331,7 +511,7 @@ class QueryEmbeddingCache:
         Returns:
             torch.Tensor on GPU if available, None if torch not available
         """
-        if not _TORCH_AVAILABLE:
+        if not True  # torch is always available:
             return None
 
         return self.get_all_embeddings_matrix(queries, as_tensor=True)

@@ -8,7 +8,7 @@ while promising genomes get full evaluation.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import logging
-import numpy as np
+import torch
 from typing import List, Any, Optional, Dict, Tuple
 from dataclasses import dataclass, field
 
@@ -87,6 +87,7 @@ class PopulationEvaluator:
         decision_sample_rate: float = 1.0,
         tiers: List[EvaluationTier] = None,
         enable_adaptive: bool = True,
+        device: Any = None,  # torch.device or str
     ):
         self.retriever = retriever
         self.evaluator = evaluator
@@ -100,6 +101,14 @@ class PopulationEvaluator:
         self.decision_sample_rate = decision_sample_rate
         self.tiers = tiers or DEFAULT_TIERS
         self.enable_adaptive = enable_adaptive
+
+        # Store device, auto-detect if not provided
+        if device is None:
+            from ...utils.device import get_device
+            self.device = get_device()
+        else:
+            # Handle torch.device objects
+            self.device = str(device) if hasattr(device, 'type') else device
 
         # Track evaluation statistics
         self.stats = EvaluationStats()
@@ -167,16 +176,42 @@ class PopulationEvaluator:
         ground_truth: List[List[Any]],
     ) -> int:
         """
-        Runs a batch of evaluations concurrently.
+        Runs a batch of evaluations.
+
+        GPU mode: Sequential evaluation (CUDA context is thread-local)
+        CPU mode: Parallel evaluation with ThreadPoolExecutor
 
         Returns:
             Total number of queries used across all genomes in batch
         """
-        logger.debug(f"  > Starting batch of {len(batch)} genomes...")
+        logger.debug(f"  > Starting batch of {len(batch)} genomes (device={self.device})...")
 
         total_queries_used = 0
         completed_count = 0
 
+        # GPU mode: sequential evaluation (CUDA context is thread-local)
+        if self.device == "cuda":
+            for genome in batch:
+                queries_used, exit_tier = self._evaluate_single(genome, queries, ground_truth)
+                total_queries_used += queries_used
+                completed_count += 1
+
+                # Update tier exit stats
+                if exit_tier in self.stats.tier_exits:
+                    self.stats.tier_exits[exit_tier] += 1
+
+                qual = genome.fitness.quality_score
+                cost = genome.fitness.cost_score
+                r20 = genome.metrics.get("Recall@20", 0.0)
+
+                logger.info(
+                    f"  > Finished '{genome.id}' ({completed_count}/{len(batch)}) | "
+                    f"Tier: {exit_tier} | Qual: {qual:.4f} | Cost: {cost:.1f} | R@20: {r20:.4f}"
+                )
+
+            return total_queries_used
+
+        # CPU mode: parallel evaluation with ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=len(batch)) as executor:
             future_to_genome = {
                 executor.submit(self._evaluate_single, g, queries, ground_truth): g
@@ -411,8 +446,8 @@ class PopulationEvaluator:
         if max_retrieved == 0:
             return {}
 
-        # Extract IDs as numpy array, padding with -1 for missing values
-        retrieved_ids = np.full((n_queries, max_retrieved), -1, dtype=np.int64)
+        # Extract IDs as tensor, padding with -1 for missing values
+        retrieved_ids = torch.full((n_queries, max_retrieved), -1, dtype=torch.long)
 
         for i, items in enumerate(results):
             for j, item in enumerate(items):
@@ -432,12 +467,30 @@ class PopulationEvaluator:
             except (ValueError, TypeError):
                 gt_sets.append(set(str(g) for g in gt))
 
-        # Use batch metric computation
-        metrics = MetricFunctions.compute_all_metrics_batch(
-            retrieved_ids,
-            gt_sets,
-            k_values=self.evaluator.k_values
-        )
+        # Use GPU-accelerated batch metric computation if on CUDA
+        if self.device == "cuda":
+            try:
+                retrieved_ids_tensor = retrieved_ids.to(device="cuda")
+                metrics = MetricFunctions.compute_all_metrics_batch_gpu(
+                    retrieved_ids_tensor,
+                    gt_sets,
+                    k_values=self.evaluator.k_values,
+                    device="cuda"
+                )
+            except Exception as e:
+                logger.debug(f"GPU metrics failed, falling back to CPU: {e}")
+                metrics = MetricFunctions.compute_all_metrics_batch(
+                    retrieved_ids,
+                    gt_sets,
+                    k_values=self.evaluator.k_values
+                )
+        else:
+            # CPU batch computation
+            metrics = MetricFunctions.compute_all_metrics_batch(
+                retrieved_ids,
+                gt_sets,
+                k_values=self.evaluator.k_values
+            )
 
         # Add variance estimates (using simplified calculation)
         for key in list(metrics.keys()):
@@ -477,8 +530,9 @@ class PopulationEvaluator:
             # Skip non-numeric values
             if not values or not isinstance(values[0], (int, float)):
                 continue
-            aggregated[k] = float(np.mean(values))
-            aggregated[f"var_{k}"] = float(np.var(values))
+            t = torch.tensor(values, dtype=torch.float32)
+            aggregated[k] = float(torch.mean(t).item())
+            aggregated[f"var_{k}"] = float(torch.var(t).item()) if len(t) > 1 else 0.0
 
         # Select variance for main metric
         priority_keys = [
