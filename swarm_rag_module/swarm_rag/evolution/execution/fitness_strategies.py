@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
-import numpy as np
+import torch
 
 from ..types.genome import Genome
 
@@ -32,25 +32,25 @@ class ParetoStrategy(FitnessStrategy):
         # 1. Extract objectives (Negate minimization objectives for maximization logic)
         # Objectives: Quality (max), Stability (max), Cost (min)
         # We convert all to MAXIMIZATION problems for sorting
-        
+
         pop_size = len(population)
         if pop_size == 0: return
 
         # Shape: (N, 3) -> [Quality, Stability, -Cost]
-        objectives = np.zeros((pop_size, 3))
+        objectives = torch.zeros((pop_size, 3))
         for i, g in enumerate(population):
-            objectives[i] = [
-                g.fitness.quality_score, 
-                g.fitness.stability_score, 
+            objectives[i] = torch.tensor([
+                g.fitness.quality_score,
+                g.fitness.stability_score,
                 -g.fitness.cost_score
-            ]
-            
+            ])
+
         # 2. Non-Dominated Sort
         fronts = self._fast_non_dominated_sort(objectives)
-        
+
         # 3. Crowding Distance (per front)
-        crowding_distances = np.zeros(pop_size)
-        
+        crowding_distances = torch.zeros(pop_size)
+
         for front in fronts:
             self._calculate_crowding_distance(objectives, front, crowding_distances)
             
@@ -79,29 +79,29 @@ class ParetoStrategy(FitnessStrategy):
             # Secondary: Higher Crowding Distance is better (more diversity)
             g.fitness.sort_key = (-rank, cd, 0.0) 
 
-    def _fast_non_dominated_sort(self, objectives: np.ndarray) -> List[List[int]]:
+    def _fast_non_dominated_sort(self, objectives: torch.Tensor) -> List[List[int]]:
         """
         Returns a list of fronts, where fronts[0] is the Pareto front.
-        objectives: (N, M) array, all maximization.
+        objectives: (N, M) tensor, all maximization.
         """
         n = objectives.shape[0]
-        domination_count = np.zeros(n, dtype=int)
+        domination_count = torch.zeros(n, dtype=torch.long)
         dominated_solutions = [[] for _ in range(n)]
-        ranks = np.zeros(n, dtype=int)
-        
+        ranks = torch.zeros(n, dtype=torch.long)
+
         fronts = [[]]
-        
+
         for p in range(n):
             for q in range(n):
                 if self._dominates(objectives[p], objectives[q]):
                     dominated_solutions[p].append(q)
                 elif self._dominates(objectives[q], objectives[p]):
                     domination_count[p] += 1
-            
+
             if domination_count[p] == 0:
                 ranks[p] = 0
                 fronts[0].append(p)
-                
+
         i = 0
         while i < len(fronts) and fronts[i]:
             next_front = []
@@ -114,41 +114,41 @@ class ParetoStrategy(FitnessStrategy):
             i += 1
             if next_front:
                 fronts.append(next_front)
-                
+
         return fronts
 
-    def _dominates(self, ind1: np.ndarray, ind2: np.ndarray) -> bool:
+    def _dominates(self, ind1: torch.Tensor, ind2: torch.Tensor) -> bool:
         """Returns True if ind1 dominates ind2 (Maximization)."""
         # Dominate: At least one objective better, none worse
         better_or_equal = ind1 >= ind2
         strictly_better = ind1 > ind2
-        return np.all(better_or_equal) and np.any(strictly_better)
+        return bool(torch.all(better_or_equal)) and bool(torch.any(strictly_better))
 
-    def _calculate_crowding_distance(self, objectives: np.ndarray, front: List[int], distances: np.ndarray):
-        """Updates distances array in-place for indices in front."""
+    def _calculate_crowding_distance(self, objectives: torch.Tensor, front: List[int], distances: torch.Tensor):
+        """Updates distances tensor in-place for indices in front."""
         if not front: return
-        
+
         l = len(front)
         # Infinite distance to boundaries
         for i in front:
             distances[i] = 0
-            
+
         m = objectives.shape[1] # number of objectives
-        
+
         for m_idx in range(m):
             # Sort front by objective m
-            sorted_front = sorted(front, key=lambda x: objectives[x, m_idx])
-            
-            distances[sorted_front[0]] = np.inf
-            distances[sorted_front[-1]] = np.inf
-            
+            sorted_front = sorted(front, key=lambda x: objectives[x, m_idx].item())
+
+            distances[sorted_front[0]] = float('inf')
+            distances[sorted_front[-1]] = float('inf')
+
             obj_min = objectives[sorted_front[0], m_idx]
             obj_max = objectives[sorted_front[-1], m_idx]
-            
+
             if obj_max == obj_min: continue
-            
+
             norm = obj_max - obj_min
-            
+
             for i in range(1, l - 1):
                 prev_obj = objectives[sorted_front[i-1], m_idx]
                 next_obj = objectives[sorted_front[i+1], m_idx]

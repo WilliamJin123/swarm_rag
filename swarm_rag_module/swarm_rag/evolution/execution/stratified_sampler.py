@@ -12,7 +12,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from collections import defaultdict
-import numpy as np
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +312,7 @@ def categorize_by_difficulty(query: str, ground_truth: List[Any]) -> str:
 def categorize_by_embedding_variance(
     query: str,
     ground_truth: List[Any],
-    query_embeddings: Optional[np.ndarray] = None,
+    query_embeddings: Optional[torch.Tensor] = None,
     query_idx: Optional[int] = None
 ) -> str:
     """

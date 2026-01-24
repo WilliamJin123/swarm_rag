@@ -1,7 +1,7 @@
 
 from typing import Callable, ClassVar, Dict, List, Union
 import random
-import numpy as np
+import torch
 
 from ..types.config import EvolutionContext
 from ..types.expressions import ExpressionEvolution, ExpressionNode
@@ -201,12 +201,12 @@ class GeneticStrategies:
         pop_size = len(ctx.population)
         winners = []
         for _ in range(k):
-            indices = np.random.randint(0, pop_size, size=tourn_size)
-            contestants = [ctx.population[i] for i in indices]
+            indices = torch.randint(0, pop_size, (tourn_size,))
+            contestants = [ctx.population[i] for i in indices.tolist()]
             # Select winner by FITNESS, not index
             winner = max(contestants, key=lambda g: g.fitness)
             winners.append(winner)
-            
+
         return winners
 
     @staticmethod
@@ -216,10 +216,10 @@ class GeneticStrategies:
         Vectorized Roulette Selection (O(N) setup + O(k) sampling).
         Much faster than calling single roulette k times.
         """
-        scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
-        total = np.sum(scores)
-        probs = scores / total
-        return list(np.random.choice(ctx.population, size=k, p=probs))
+        scores = torch.tensor([max(0.001, g.fitness.quality_score) for g in ctx.population])
+        probs = scores / scores.sum()
+        indices = torch.multinomial(probs, num_samples=k, replacement=True)
+        return [ctx.population[i] for i in indices.tolist()]
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.BOLTZMANN)
@@ -239,7 +239,7 @@ class GeneticStrategies:
 
         # Prepare Scores
         # Use quality_score which is the aggregated fitness
-        scores = np.array([g.fitness.quality_score for g in ctx.population])
+        scores = torch.tensor([g.fitness.quality_score for g in ctx.population])
 
         # Numerical Stability: subtract max to avoid overflow in exp
         # T controls the "pressure".
@@ -249,18 +249,18 @@ class GeneticStrategies:
         T = max(1e-4, T)
 
         # Exp scaled by T
-        exp_values = np.exp((scores - np.max(scores)) / T)
-        probs = exp_values / np.sum(exp_values)
+        exp_values = torch.exp((scores - torch.max(scores)) / T)
+        probs = exp_values / torch.sum(exp_values)
 
         # Select
-        selection_indices = np.random.choice(len(ctx.population), size=k, p=probs, replace=True)
-        selected = [ctx.population[i] for i in selection_indices]
+        selection_indices = torch.multinomial(probs, num_samples=k, replacement=True)
+        selected = [ctx.population[i] for i in selection_indices.tolist()]
 
         # Update Temperature (Adaptive)
         if boltzmann_cfg.adaptive:
-            mean_score = np.mean(scores)
+            mean_score = torch.mean(scores).item()
             if len(scores) > 1 and mean_score > 1e-6:
-                diversity_cv = np.std(scores) / mean_score
+                diversity_cv = torch.std(scores).item() / mean_score
             else:
                 diversity_cv = 0.0
             cooling_factor = boltzmann_cfg.alpha
@@ -278,7 +278,7 @@ class GeneticStrategies:
                 ctx.current_temperature = ctx.current_temperature * cooling_factor
 
             # Clamp temperature within bounds
-            ctx.current_temperature = np.clip(ctx.current_temperature, min_T, max_T)
+            ctx.current_temperature = float(torch.clamp(torch.tensor(ctx.current_temperature), min_T, max_T).item())
 
         return selected
 
@@ -289,21 +289,21 @@ class GeneticStrategies:
         Vectorized SUS (Stochastic Universal Sampling).
         Uses searchsorted for O(log N) lookup instead of O(N) linear scan.
         """
-        scores = np.array([max(0.001, g.fitness.quality_score) for g in ctx.population])
+        scores = torch.tensor([max(0.001, g.fitness.quality_score) for g in ctx.population])
 
-        cum_scores = np.cumsum(scores)
-        total_fit = cum_scores[-1]
-        
+        cum_scores = torch.cumsum(scores, dim=0)
+        total_fit = cum_scores[-1].item()
+
         if total_fit <= 0:
             return random.choices(ctx.population, k=k)
-        
+
         step = total_fit / k
         start = random.uniform(0, step)
-        points = start + np.arange(k) * step
-        
-        indices = np.searchsorted(cum_scores, points)
-        indices = np.clip(indices, 0, len(ctx.population) - 1)
-        return [ctx.population[i] for i in indices]
+        points = torch.tensor([start + i * step for i in range(k)])
+
+        indices = torch.searchsorted(cum_scores, points)
+        indices = torch.clamp(indices, 0, len(ctx.population) - 1)
+        return [ctx.population[i] for i in indices.tolist()]
 
     @staticmethod
     @GeneticRegistry.register_selection(GeneticKey.TRUNCATION)
@@ -852,7 +852,7 @@ class GeneticStrategies:
     @GeneticRegistry.register_mutation(GeneticKey.EXPRESSION_TREE_MUTATION)
     def expression_tree_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
         tau = 0.2
-        genome.mutation_rate = genome.mutation_rate * np.exp(tau * np.random.normal(0, 1))
+        genome.mutation_rate = genome.mutation_rate * torch.exp(torch.tensor(tau * torch.randn(1).item())).item()
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
@@ -971,7 +971,7 @@ class GeneticStrategies:
         - pheromone_repulsion
         """
         tau = 0.2
-        genome.mutation_rate = genome.mutation_rate * np.exp(tau * np.random.normal(0, 1))
+        genome.mutation_rate = genome.mutation_rate * torch.exp(torch.tensor(tau * torch.randn(1).item())).item()
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
