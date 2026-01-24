@@ -8,7 +8,7 @@ import pytest
 from typing import List, Any, Dict
 
 from swarm_rag.evolution.engine import EvolutionEngine
-from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionConfig
 from swarm_rag.evolution.execution.evaluator import PopulationEvaluator
 from swarm_rag.evolution.execution.fitness import FitnessCalculator
 from swarm_rag.eval.metrics import Evaluator as BaseEvaluator
@@ -81,26 +81,22 @@ PLOT_TITLE = "Full E2E Evolution Test"
 
 def get_test_config():
     """Returns a consistent config for both tests to avoid default file leakage."""
-    config = DEFAULT_EVO_CONFIG.copy()
-    config.update({
-        # Standard Params
-        "population_size": 10,
-        "selection_k": 3,
-        "validation_frequency": 1,
-        
-        # KEY FIX: Always enforce these paths!
-        "checkpoint_path": CKPT_FILE,
-        "log_path": LOG_FILE,
-        "plot_path": PLOT_FILE,
-        "plot_title": PLOT_TITLE,
-        
-        # Toy Problem Search Space
-        "swarmrag_param_ranges": {
-            "n_agents": (1, 5),
-            "alpha": (0.1, 0.99),
-            "decay": (0.1, 0.99)
-        }
-    })
+    config = EvolutionConfig()
+    # Standard Params
+    config.map_elites.batch_size = 10
+    config.genetic.selection_k = 3
+    config.checkpoint.validation_frequency = 1
+
+    # KEY FIX: Always enforce these paths!
+    config.checkpoint.checkpoint_path = CKPT_FILE
+    config.checkpoint.log_path = LOG_FILE
+    config.checkpoint.plot_path = PLOT_FILE
+    config.checkpoint.plot_title = PLOT_TITLE
+
+    # Toy Problem Search Space
+    config.genetic.param_ranges.n_agents = (1, 5)
+    config.genetic.param_ranges.decay = (0.1, 0.99)
+
     return config
 
 def setup_module():
@@ -125,25 +121,10 @@ def teardown_module():
         
 def test_evolution_solves_toy_problem():
     print("\n\n=== STARTING FULL SYSTEM SIMULATION ===")
-    
+
     # 1. Configuration
     config = get_test_config()
-    config.update({
-        "n_generations": 3,           # Short run
-        "population_size": 10,        # Enough diversity
-        "selection_k": 3,             # Tournament size
-        "checkpoint_path": CKPT_FILE,
-        "log_file": LOG_FILE,
-        "plot_file": PLOT_FILE,
-        "validation_frequency": 1,
-        
-        # Define the Search Space for our Toy Problem
-        "swarmrag_param_ranges": {
-            "n_agents": (1, 5),       # Try 1 to 5 agents
-            "alpha": (0.1, 0.99),     # Step probability (we want high)
-            "decay": (0.1, 0.99)      # Max steps (we need enough to reach target)
-        }
-    })
+    config.n_generations = 3
 
     # 2. Data Setup
     # Targets are at distance 10, 15, 20. 
@@ -220,8 +201,7 @@ def test_resume_simulation():
     # 1. Config for RESUME
     # Extend generations from 3 to 5
     config = get_test_config()
-    config["n_generations"] = 5
-    config["log_file"] = LOG_FILE # Append to same log
+    config.n_generations = 5
     
     # 2. Load
     retriever = ToyStochasticRetriever()

@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 
 from swarm_rag.evolution.engine import EvolutionEngine
 from swarm_rag.evolution.types.genome import Genome, DEFAULT_PARAMS
-from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionConfig
 from swarm_rag.eval.metrics import Evaluator
 from swarm_rag.evolution.execution.fitness import FitnessCalculator
 
@@ -46,16 +46,14 @@ def test_full_evolution_loop():
     print("="*60)
 
     # 1. Setup Config
-    config = DEFAULT_EVO_CONFIG.copy()
-    config.update({
-        "n_generations": 3,
-        "population_size": 6,
-        "validation_frequency": 1,
-        "n_agent_groups": 2,      # Explicitly set groups
-        "checkpoint_path": "test_ckpt.pkl",
-        "log_path": "test_log.jsonl", # Matches config definition
-        "plot_path": "test_plot.png"  # Matches config definition
-    })
+    config = EvolutionConfig()
+    config.n_generations = 3
+    config.map_elites.batch_size = 6
+    config.checkpoint.validation_frequency = 1
+    config.genetic.n_agent_groups = 2
+    config.checkpoint.checkpoint_path = "test_ckpt.pkl"
+    config.checkpoint.log_path = "test_log.jsonl"
+    config.checkpoint.plot_path = "test_plot.png"
     
     # 2. Setup Data
     train_q = ["q1", "q2"]
@@ -97,9 +95,9 @@ def test_full_evolution_loop():
     print(f"  ✓ Best Fitness: {best_genome.fitness.quality_score}")
     
     # Check B: Files created
-    assert os.path.exists(config['log_path']), "Log file missing"
-    assert os.path.exists(config['checkpoint_path']), "Checkpoint missing"
-    assert os.path.exists(config['plot_path']), "Plot missing"
+    assert os.path.exists(config.checkpoint.log_path), "Log file missing"
+    assert os.path.exists(config.checkpoint.checkpoint_path), "Checkpoint missing"
+    assert os.path.exists(config.checkpoint.plot_path), "Plot missing"
     print("  ✓ Artifacts created (log, checkpoint, plot)")
 
     # Check C: Did it actually evolve?
@@ -110,11 +108,11 @@ def test_full_evolution_loop():
     # Cleanup
     print("\nCleaning up...")
     files_to_clean = [
-        config.get('log_path'), 
-        config.get('checkpoint_path'), 
-        config.get('plot_path')
+        config.checkpoint.log_path,
+        config.checkpoint.checkpoint_path,
+        config.checkpoint.plot_path
     ]
-    
+
     for f in files_to_clean:
         if f and os.path.exists(f):
             try:

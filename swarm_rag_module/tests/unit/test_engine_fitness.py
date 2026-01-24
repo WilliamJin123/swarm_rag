@@ -8,14 +8,14 @@ from swarm_rag.evolution.execution.fitness_strategies import (
     ParetoStrategy,
     PhasedStrategy
 )
-from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionConfig
 
 class TestEngineFitnessStrategy(unittest.TestCase):
     def setUp(self):
         # Create temp dir for logs
         self.test_dir = "test_evo_run"
         os.makedirs(self.test_dir, exist_ok=True)
-        
+
         # Mock dependencies
         self.mock_retriever = MagicMock()
         self.mock_fitness_calc = MagicMock()
@@ -29,19 +29,21 @@ class TestEngineFitnessStrategy(unittest.TestCase):
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
 
-    def _get_config(self):
-        config = DEFAULT_EVO_CONFIG.copy()
-        config["log_path"] = os.path.join(self.test_dir, "test.jsonl")
-        config["plot_path"] = os.path.join(self.test_dir, "test.png")
-        config["checkpoint_path"] = os.path.join(self.test_dir, "ckpt.pkl")
+    def _get_config(self, **overrides):
+        from dataclasses import replace
+        config = EvolutionConfig()
+        config.checkpoint.log_path = os.path.join(self.test_dir, "test.jsonl")
+        config.checkpoint.plot_path = os.path.join(self.test_dir, "test.png")
+        config.checkpoint.checkpoint_path = os.path.join(self.test_dir, "ckpt.pkl")
+        if 'fitness_strategy' in overrides:
+            config.fitness_strategy = overrides['fitness_strategy']
+        if 'phased_switch_gen' in overrides:
+            config.phased_switch_gen = overrides['phased_switch_gen']
         return config
 
     def test_default_strategy(self):
         """Test that default config loads LexicographicStrategy"""
-        config = self._get_config()
-        # Ensure key is missing or set to default
-        if "fitness_strategy" in config:
-            config["fitness_strategy"] = "lexicographic"
+        config = self._get_config(fitness_strategy="lexicographic")
             
         engine = EvolutionEngine(
             retriever=self.mock_retriever,
@@ -60,8 +62,7 @@ class TestEngineFitnessStrategy(unittest.TestCase):
 
     def test_pareto_strategy_config(self):
         """Test that 'pareto' config loads ParetoStrategy"""
-        config = self._get_config()
-        config["fitness_strategy"] = "pareto"
+        config = self._get_config(fitness_strategy="pareto")
         
         engine = EvolutionEngine(
             retriever=self.mock_retriever,
@@ -80,9 +81,7 @@ class TestEngineFitnessStrategy(unittest.TestCase):
 
     def test_phased_strategy_config(self):
         """Test that 'phased' config loads PhasedStrategy with correct switch gen"""
-        config = self._get_config()
-        config["fitness_strategy"] = "phased"
-        config["phased_switch_gen"] = 42
+        config = self._get_config(fitness_strategy="phased", phased_switch_gen=42)
         
         engine = EvolutionEngine(
             retriever=self.mock_retriever,

@@ -8,7 +8,7 @@ import pytest
 from typing import List, Any, Dict
 
 from swarm_rag.evolution.engine import EvolutionEngine
-from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionConfig
 from swarm_rag.evolution.execution.evaluator import PopulationEvaluator
 from swarm_rag.evolution.execution.fitness import FitnessCalculator
 from swarm_rag.eval.metrics import Evaluator as BaseEvaluator
@@ -67,30 +67,23 @@ def setup_module():
 
 def test_map_elites_flow():
     print("\n\n=== STARTING MAP-ELITES SIMULATION ===")
-    
-    # 1. Configuration
-    config = DEFAULT_EVO_CONFIG.copy()
-    config.update({
-        "n_generations": 5,
-        "population_size": 10, # Batch size for breeding
-        
-        "map_elites_enabled": True,
-        "map_elites_dims": ["complexity", "n_agents"],
-        "map_elites_bins": [5, 5], # Small grid for testing
-        "map_elites_ranges": [(0, 50), (1, 10)], # Complexity 0-50, Agents 1-10
-        "map_elites_initial_fill": 20,
 
-        "checkpoint_path": CKPT_FILE,
-        "log_path": LOG_FILE,
-        "plot_path": PLOT_FILE,
-        "plot_title": "MAP-Elites Test",
-        
-        "swarmrag_param_ranges": {
-            "n_agents": (1, 10),
-            "alpha": (0.1, 0.99),
-            "decay": (0.1, 0.99)
-        }
-    })
+    # 1. Configuration
+    config = EvolutionConfig()
+    config.n_generations = 5
+    config.map_elites.batch_size = 10
+    config.map_elites.dimensions = ["complexity", "n_agents"]
+    config.map_elites.bins = [5, 5]
+    config.map_elites.ranges = [(0, 50), (1, 10)]
+    config.map_elites.initial_fill = 20
+
+    config.checkpoint.checkpoint_path = CKPT_FILE
+    config.checkpoint.log_path = LOG_FILE
+    config.checkpoint.plot_path = PLOT_FILE
+    config.checkpoint.plot_title = "MAP-Elites Test"
+
+    config.genetic.param_ranges.n_agents = (1, 10)
+    config.genetic.param_ranges.decay = (0.1, 0.99)
 
     train_queries = ["10", "15"]
     train_gt = [[10], [15]]

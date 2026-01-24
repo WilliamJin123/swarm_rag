@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 
 from swarm_rag.evolution.engine import EvolutionEngine
 from swarm_rag.evolution.types.genome import Genome
-from swarm_rag.evolution.types.config import DEFAULT_EVO_CONFIG
+from swarm_rag.evolution.types.config import EvolutionConfig
 from swarm_rag.evolution.execution.evaluator import PopulationEvaluator
 from swarm_rag.eval.metrics import Evaluator as BaseEvaluator
 from swarm_rag.evolution.execution.fitness import FitnessCalculator
@@ -92,15 +92,15 @@ def test_variance_calculation_flow():
 
 def test_checkpoint_resume():
     print("\n--- Testing Checkpoint Save & Resume ---")
-    
+
     # 1. Config for Short Run
-    config = DEFAULT_EVO_CONFIG.copy()
-    config['n_generations'] = 4
-    config['checkpoint_path'] = CKPT_FILE
-    config['log_path'] = LOG_FILE
-    config['population_size'] = 4
-    config['plot_path'] = os.path.join(RESULTS_DIR, "evo_plot_complex.png")
-    
+    config = EvolutionConfig()
+    config.n_generations = 4
+    config.checkpoint.checkpoint_path = CKPT_FILE
+    config.checkpoint.log_path = LOG_FILE
+    config.map_elites.batch_size = 4
+    config.checkpoint.plot_path = os.path.join(RESULTS_DIR, "evo_plot_complex.png")
+
     # 2. Run Initial Engine (Gens 0-1)
     print("  Running initial batch (Gen 0-1)...")
     engine = EvolutionEngine(
@@ -111,16 +111,21 @@ def test_checkpoint_resume():
         val_query_ids=["v1"], val_ground_truth=[[0]],
         config=config
     )
-    
-    config['n_generations'] = 2
+
+    config.n_generations = 2
     engine.optimize()
-    
+
     assert os.path.exists(CKPT_FILE), "Checkpoint not created"
-    
+
     # 3. Load Checkpoint
     print("  Loading checkpoint...")
-    new_config = config.copy()
-    new_config['n_generations'] = 4 # Extend to 4 gens
+    from dataclasses import replace
+    new_config = EvolutionConfig()
+    new_config.n_generations = 4  # Extend to 4 gens
+    new_config.checkpoint.checkpoint_path = CKPT_FILE
+    new_config.checkpoint.log_path = LOG_FILE
+    new_config.map_elites.batch_size = 4
+    new_config.checkpoint.plot_path = os.path.join(RESULTS_DIR, "evo_plot_complex.png")
     
     loaded_engine = EvolutionEngine.load_checkpoint(
         checkpoint_path=CKPT_FILE,
