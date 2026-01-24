@@ -1,11 +1,11 @@
 from typing import Dict, Callable, Any, List, Set, TypedDict
 from dataclasses import dataclass, field
+import torch
 
 try:
     from typing import NotRequired
 except ImportError:
     from typing_extensions import NotRequired
-import numpy as np
 
 from .fitness_results import FitnessResult
 
@@ -356,7 +356,9 @@ class GenomeCompiler:
         def strategy_wrapper(ctx: HeuristicContext) -> float:
             args = [getter(ctx) for getter in getters]
             raw_scores = compiled_lambda(*args)
-            return np.nan_to_num(raw_scores, nan=0.0, posinf=10.0, neginf=-10.0)
+            if isinstance(raw_scores, torch.Tensor):
+                return torch.nan_to_num(raw_scores, nan=0.0, posinf=10.0, neginf=-10.0)
+            return raw_scores if raw_scores == raw_scores else 0.0  # Simple NaN check for scalars
         
         return strategy_wrapper
 

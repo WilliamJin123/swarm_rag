@@ -1,8 +1,8 @@
 from typing import Any, Callable, Union, List, Dict, Tuple
 from dataclasses import dataclass, field
 import math
-import numpy as np
 import random
+import torch
 
 @dataclass
 class ExpressionNode:
@@ -14,41 +14,42 @@ class ExpressionNode:
     value: Union[str, float]  # operator name, function name, feature name, or constant
     children: List['ExpressionNode'] = field(default_factory=list)
 
-    def evaluate(self, features: Dict[str, np.ndarray]) -> Union[float, np.ndarray]:
+    def evaluate(self, features: Dict[str, torch.Tensor]) -> Union[float, torch.Tensor]:
         """Recursively evaluate the expression tree."""
         if self.type == 'const':
             return float(self.value)
-        
+
         elif self.type == 'feature':
-            # Returns an Array (N,) or scalar depending on input
+            # Returns a Tensor (N,) or scalar depending on input
             val = features.get(self.value, 0.0)
             return val
-        
+
         elif self.type == 'func':
             if not self.children:
                 return 0.0
             arg = self.children[0].evaluate(features)
-            
+            arg_tensor = torch.as_tensor(arg) if not isinstance(arg, torch.Tensor) else arg
+
             if self.value == 'square':
-                return np.square(arg)
+                return torch.square(arg_tensor)
             elif self.value == 'sqrt':
-                return np.sqrt(np.abs(arg))
+                return torch.sqrt(torch.abs(arg_tensor))
             elif self.value == 'exp':
-                return np.exp(np.minimum(arg, 10))  # Prevent overflow
+                return torch.exp(torch.minimum(arg_tensor, torch.tensor(10.0)))  # Prevent overflow
             elif self.value == 'log':
-                return np.log(np.abs(arg) + 1e-8)
+                return torch.log(torch.abs(arg_tensor) + 1e-8)
             elif self.value == 'abs':
-                return np.abs(arg)
+                return torch.abs(arg_tensor)
             elif self.value == 'sin':
-                return np.sin(arg)
+                return torch.sin(arg_tensor)
             elif self.value == 'tanh':
-                return np.tanh(arg)
+                return torch.tanh(arg_tensor)
             elif self.value == 'sigmoid':
                 # Stable sigmoid
-                return 1.0 / (1.0 + np.exp(-np.clip(arg, -10, 10)))
-            
+                return 1.0 / (1.0 + torch.exp(-torch.clamp(arg_tensor, -10, 10)))
+
             return 0.0
-        
+
         elif self.type == 'op':
             if not self.children:
                 return 0.0
@@ -57,9 +58,9 @@ class ExpressionNode:
                 if self.value == '-':
                     return -left
                 return left
-            
+
             right = self.children[1].evaluate(features)
-            
+
             if self.value == '+':
                 return left + right
             elif self.value == '-':
@@ -67,13 +68,18 @@ class ExpressionNode:
             elif self.value == '*':
                 return left * right
             elif self.value == '/':
-                denom = np.where(right == 0, 1e-8, right) if isinstance(right, np.ndarray) else (right if right != 0 else 1e-8)
+                right_tensor = torch.as_tensor(right) if not isinstance(right, torch.Tensor) else right
+                denom = torch.where(right_tensor == 0, torch.tensor(1e-8), right_tensor) if isinstance(right_tensor, torch.Tensor) else (right if right != 0 else 1e-8)
                 return left / denom
             elif self.value == 'max':
-                return np.maximum(left, right)
+                left_tensor = torch.as_tensor(left) if not isinstance(left, torch.Tensor) else left
+                right_tensor = torch.as_tensor(right) if not isinstance(right, torch.Tensor) else right
+                return torch.maximum(left_tensor, right_tensor)
             elif self.value == 'min':
-                return np.minimum(left, right)
-        
+                left_tensor = torch.as_tensor(left) if not isinstance(left, torch.Tensor) else left
+                right_tensor = torch.as_tensor(right) if not isinstance(right, torch.Tensor) else right
+                return torch.minimum(left_tensor, right_tensor)
+
         return 0.0
     
     def depth(self) -> int:
@@ -182,45 +188,45 @@ class ExpressionNode:
         """
         if self.type == 'const':
             return str(self.value)
-        
+
         elif self.type == 'feature':
             # e.g., "node.degree" -> "node_degree"
             val = self.value.value if hasattr(self.value, 'value') else str(self.value)
             return val.replace(".", "_").replace(" ", "_").replace("-", "_")
-        
+
         elif self.type == 'func':
             if not self.children:
                 return "0.0"
             child_code = self.children[0].to_code_string()
-            
+
             if self.value == 'square':
-                return f"(np.square{child_code})"
+                return f"(torch.square({child_code}))"
             elif self.value == 'sqrt':
-                return f"np.sqrt(np.abs({child_code}))"
+                return f"torch.sqrt(torch.abs({child_code}))"
             elif self.value == 'exp':
-                return f"np.exp(np.minimum({child_code}, 10))"
+                return f"torch.exp(torch.minimum({child_code}, torch.tensor(10.0)))"
             elif self.value == 'log':
-                return f"np.log(np.abs({child_code}) + 1e-8)"
+                return f"torch.log(torch.abs({child_code}) + 1e-8)"
             elif self.value == 'abs':
-                return f"np.abs({child_code})"
+                return f"torch.abs({child_code})"
             elif self.value == 'sin':
-                return f"np.sin({child_code})"
+                return f"torch.sin({child_code})"
             elif self.value == 'tanh':
-                return f"np.tanh({child_code})"
+                return f"torch.tanh({child_code})"
             elif self.value == 'sigmoid':
-                return f"(1.0 / (1.0 + np.exp(-np.clip({child_code}, -10, 10))))"
+                return f"(1.0 / (1.0 + torch.exp(-torch.clamp({child_code}, -10, 10))))"
             else:
                 return child_code
-        
+
         elif self.type == 'op':
             if len(self.children) < 2:
                 if len(self.children) == 1 and self.value == '-':
                     return f"(-{self.children[0].to_code_string()})"
                 return "0.0"
-            
+
             left_code = self.children[0].to_code_string()
             right_code = self.children[1].to_code_string()
-            
+
             if self.value == '+':
                 return f"({left_code} + {right_code})"
             elif self.value == '-':
@@ -230,28 +236,28 @@ class ExpressionNode:
             elif self.value == '/':
                 return f"({left_code} / ({right_code} + 1e-8))"
             elif self.value == 'max':
-                return f"np.maximum({left_code}, {right_code})"
+                return f"torch.maximum({left_code}, {right_code})"
             elif self.value == 'min':
-                return f"np.minimum({left_code}, {right_code})"
+                return f"torch.minimum({left_code}, {right_code})"
             else:
                 return left_code
-        
+
         return "0.0"
     
     def compile(self, arg_names: List[str]) -> Callable:
         """
         Compiles the tree into a function that accepts specific positional arguments.
         Args:
-            arg_names: A list of strings defining the function signature. 
+            arg_names: A list of strings defining the function signature.
                        e.g., ['degree', 'pheromone']
         """
         code_string = self.to_code_string()
         args_str = ", ".join(arg_names)
         lambda_string = f"lambda {args_str}: {code_string}"
-        
+
         try:
-            # Inject np
-            return eval(lambda_string, {"np": np}, {})
+            # Inject torch
+            return eval(lambda_string, {"torch": torch}, {})
         except Exception as e:
             print(f"Compilation Failed: {lambda_string}")
             raise e
