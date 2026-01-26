@@ -20,6 +20,53 @@ class AgentGroupConfig(TypedDict):
 
 logger = logging.getLogger(__name__)
 
+
+def should_continue_stepping(
+    positions: torch.Tensor,
+    prev_positions: torch.Tensor,
+    step_idx: int,
+    min_steps: int = 2,
+    convergence_threshold: float = 0.8,
+) -> bool:
+    """
+    Check if agents have converged and further steps are unlikely to help.
+
+    Implements early stopping for the swarm traversal loop to save computation
+    when agents are no longer exploring new nodes.
+
+    Args:
+        positions: Current agent positions tensor
+        prev_positions: Previous step agent positions tensor
+        step_idx: Current step index (0-based)
+        min_steps: Minimum steps to always complete before checking convergence
+        convergence_threshold: Fraction of stuck agents (0-1) that triggers early stop
+
+    Returns:
+        True if stepping should continue, False if converged and should stop early
+    """
+    # Always continue for first min_steps
+    if step_idx < min_steps:
+        return True
+
+    # Count agents that haven't moved
+    n_agents = len(positions)
+    if n_agents == 0:
+        return False
+
+    stuck = (positions == prev_positions).sum().item()
+    stuck_fraction = stuck / n_agents
+
+    # Stop if too many agents are stuck
+    if stuck_fraction >= convergence_threshold:
+        logger.debug(
+            f"Early convergence at step {step_idx}: {stuck}/{n_agents} agents stuck "
+            f"({stuck_fraction:.1%} >= {convergence_threshold:.0%})"
+        )
+        return False
+
+    return True
+
+
 class SwarmRetriever:
     _DEFAULT_PARAMS = dict(
         # Global Defaults
@@ -723,7 +770,7 @@ class SwarmRetriever:
             # Fallback to sequential processing if batch not supported
             return self._step_agents_sequential_fallback(
                 agent_locations, query_vec, query_pheromones,
-                resolved_agents, step, max_pheromone, np_rng
+                resolved_agents, step, max_pheromone, torch_gen
             )
 
         max_degree = all_neighbors.shape[1]

@@ -112,6 +112,9 @@ class GeneticConfig:
     # Parameter ranges
     param_ranges: SwarmParamRanges = field(default_factory=SwarmParamRanges)
 
+    # Parallel mutation settings
+    parallel_mutation_workers: int = 4  # Number of workers for parallel offspring generation
+
 
 @dataclass
 class LLMConfig:

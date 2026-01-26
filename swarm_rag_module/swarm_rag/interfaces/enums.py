@@ -41,6 +41,7 @@ class GeneticKey(Enum):
     AGGRESSIVE_MUTATION = "aggressive_mutation"
     GUIDED_MUTATION = "guided_mutation"
     LLM_MUTATION = "llm_mutation"
+    FOCUSED_MUTATION = "focused_mutation"
 
     # --- CREATION ---
     STANDARD_INITIALIZATION = "standard_initialization"

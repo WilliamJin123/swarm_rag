@@ -40,13 +40,14 @@ class EvaluationTier:
     name: str = ""
 
 
-# Default evaluation tiers - progressively filter out bad genomes
-# Final tier uses a large number to ensure all available queries are used
+# Aggressive evaluation tiers - filter bad genomes faster to reduce wasted computation
+# More aggressive thresholds and fewer queries per tier for faster convergence
+# Expected: ~20% of genomes reach full evaluation
 DEFAULT_TIERS: List[EvaluationTier] = [
-    EvaluationTier(queries=5, threshold=0.10, name="quick_filter"),
-    EvaluationTier(queries=15, threshold=0.25, name="promising"),
-    EvaluationTier(queries=40, threshold=0.50, name="competitive"),
-    EvaluationTier(queries=100_000, threshold=None, name="full"),  # Use all available
+    EvaluationTier(queries=3, threshold=0.15, name="quick_filter"),     # Filter completely broken
+    EvaluationTier(queries=8, threshold=0.30, name="poor_filter"),      # Filter poor performers
+    EvaluationTier(queries=20, threshold=0.45, name="mediocre_filter"), # Filter mediocre
+    EvaluationTier(queries=100_000, threshold=None, name="full"),       # Full eval for promising genomes
 ]
 
 

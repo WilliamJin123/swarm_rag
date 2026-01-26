@@ -7,7 +7,9 @@ from ..types.config import EvolutionContext
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry, _CreationRegistry
 from ...interfaces.enums import GeneticKey
-from ..types.genome import Genome, DEFAULT_PARAMS, SwarmParams
+from ..types.genome import Genome, DEFAULT_PARAMS, SwarmParams, FIXED_PARAMS, EVOLVABLE_PARAM_RANGES
+from ..seed_genomes import get_all_seed_genomes
+from ..focused_mutation import apply_focused_mutation
 
 class GeneticRegistry:
     selection = _SelectionRegistry
@@ -104,31 +106,58 @@ class GeneticStrategies:
 
     @staticmethod
     def _mutate_params_standard(genome: Genome, ctx: EvolutionContext, rate: float):
-        """Standard parameter mutation (Smart Jitter)."""
+        """Standard parameter mutation (Smart Jitter).
+
+        Skips fixed parameters (FIXED_PARAMS) and uses tightened ranges
+        (EVOLVABLE_PARAM_RANGES) for evolvable parameters.
+        """
         for key, val in genome.params.items():
+            # Skip fixed parameters - they should never be mutated
+            if key in FIXED_PARAMS:
+                # Ensure fixed params have correct values
+                genome.params[key] = FIXED_PARAMS[key]
+                continue
+
             if random.random() < rate:
                 # 80% chance: Fine-tuning (Small Gaussian jitter)
                 if random.random() < 0.8:
                     if isinstance(val, int):
-                        delta = int(round(random.gauss(0, 1.5))) # +/- 1 or 2 usually
+                        delta = int(round(random.gauss(0, 1.5)))  # +/- 1 or 2 usually
                         new_val = max(1, val + delta)
+                        # Clamp to evolvable range if defined
+                        if key in EVOLVABLE_PARAM_RANGES:
+                            min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                            new_val = max(min_v, min(max_v, new_val))
                         genome.params[key] = new_val
                     elif isinstance(val, float):
                         # +/- 10% relative change
                         factor = random.gauss(1.0, 0.1)
                         new_val = val * factor
-                        # Clamp to 0.001 - 1.0 (typical for most floats here)
-                        genome.params[key] = max(0.001, min(0.999, new_val))
-                
-                # 20% chance: Exploration (Re-sample or Large Jump)
+                        # Clamp to evolvable range if defined
+                        if key in EVOLVABLE_PARAM_RANGES:
+                            min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                            new_val = max(min_v, min(max_v, new_val))
+                        else:
+                            new_val = max(0.001, min(0.999, new_val))
+                        genome.params[key] = new_val
+
+                # 20% chance: Exploration (Re-sample from range)
                 else:
-                     ranges = ctx.config.genetic.param_ranges
-                     if hasattr(ranges, key):
-                         min_v, max_v = getattr(ranges, key)
-                         if isinstance(min_v, int):
-                             genome.params[key] = random.randint(min_v, max_v)
-                         else:
-                             genome.params[key] = random.uniform(min_v, max_v)
+                    # Prefer EVOLVABLE_PARAM_RANGES, fallback to config ranges
+                    if key in EVOLVABLE_PARAM_RANGES:
+                        min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                        if isinstance(min_v, int):
+                            genome.params[key] = random.randint(min_v, max_v)
+                        else:
+                            genome.params[key] = random.uniform(min_v, max_v)
+                    else:
+                        ranges = ctx.config.genetic.param_ranges
+                        if hasattr(ranges, key):
+                            min_v, max_v = getattr(ranges, key)
+                            if isinstance(min_v, int):
+                                genome.params[key] = random.randint(min_v, max_v)
+                            else:
+                                genome.params[key] = random.uniform(min_v, max_v)
 
     @staticmethod
     def _mutate_ratios_standard(genome: Genome, rate: float):
@@ -140,16 +169,36 @@ class GeneticStrategies:
 
     @staticmethod
     def _randomize_all_params(ctx: EvolutionContext) -> SwarmParams:
-        """Helper to fully randomize parameters within configured ranges."""
+        """Helper to fully randomize evolvable parameters within tightened ranges.
+
+        Uses FIXED_PARAMS for fixed parameters and EVOLVABLE_PARAM_RANGES
+        for evolvable parameters. Falls back to ctx.config.genetic.param_ranges
+        for parameters not defined in either.
+        """
+        # Start with default params
         params = DEFAULT_PARAMS.copy()
+
+        # Apply fixed parameters (never randomized)
+        params.update(FIXED_PARAMS)
+
+        # Randomize evolvable parameters from tightened ranges
+        for key, (min_v, max_v) in EVOLVABLE_PARAM_RANGES.items():
+            if isinstance(min_v, int):
+                params[key] = random.randint(min_v, max_v)
+            else:
+                params[key] = random.uniform(min_v, max_v)
+
+        # Fallback for any params not in EVOLVABLE_PARAM_RANGES or FIXED_PARAMS
         ranges = ctx.config.genetic.param_ranges
         for key in params.keys():
-            if hasattr(ranges, key):
-                min_v, max_v = getattr(ranges, key)
-                if isinstance(min_v, int):
-                    params[key] = random.randint(min_v, max_v)
-                else:
-                    params[key] = random.uniform(min_v, max_v)
+            if key not in FIXED_PARAMS and key not in EVOLVABLE_PARAM_RANGES:
+                if hasattr(ranges, key):
+                    min_v, max_v = getattr(ranges, key)
+                    if isinstance(min_v, int):
+                        params[key] = random.randint(int(min_v), int(max_v))
+                    else:
+                        params[key] = random.uniform(min_v, max_v)
+
         return params
 
     @staticmethod
@@ -518,66 +567,31 @@ class GeneticStrategies:
     @GeneticRegistry.register_creation(GeneticKey.SEEDED_INITIALIZATION)
     def seeded_initialization(ctx: EvolutionContext, count: int) -> List[Genome]:
         """
-        Injects known effective strategies (Vector, Pheromone, Hybrid) 
-        and fills the rest with random genomes.
+        Warm-start initialization using known good genome configurations.
+
+        Uses pre-defined seed genomes from seed_genomes.py which provide
+        a strong baseline and reduce wasted generations discovering
+        basic effective strategies.
+
+        Process:
+        1. Include all seed genomes (up to available count)
+        2. Fill remainder with random genomes
+
+        This approach is more effective than the old manual seed creation
+        because the seeds are based on empirically validated configurations.
         """
         population = []
-        n_groups = ctx.config.genetic.n_agent_groups
-        
-        # --- Helper to create a seed genome ---
-        def create_seed(name: str, mov_expr: str, dep_expr: str, rank_expr: str, params: dict = None):
-            strategies = {}
-            # Parse simple string expressions into ExpressionNodes (Manual Construction)
-            # NOTE: For complex expressions, a parser would be better, but we construct simple ones manually here.
-            
-            def make_node(val):
-                if val in ["*", "+", "-", "/"]: return ExpressionNode("op", val)
-                if val in ["semantic_similarity", "pheromone_repulsion", "flat", "semantic", "semantic_rank", "percentage_visited"]:
-                     return ExpressionNode("feature", val)
-                return ExpressionNode("const", float(val))
 
-            # Helper to build simple tree from strict format: "A * B" or just "A"
-            def build_simple(expr_str):
-                parts = expr_str.split()
-                if len(parts) == 3: # A * B
-                    return ExpressionNode("op", parts[1], [make_node(parts[0]), make_node(parts[2])])
-                return make_node(parts[0])
+        # Get all pre-defined seed genomes
+        seed_genomes = get_all_seed_genomes()
 
-            strategies["ranking"] = build_simple(rank_expr)
-            
-            group_ratios = {}
-            for g in range(n_groups):
-                group_ratios[f"g{g}"] = 1.0 / n_groups
-                strategies[f"g{g}_movement"] = build_simple(mov_expr)
-                strategies[f"g{g}_deposit"] = build_simple(dep_expr)
-
-            p = DEFAULT_PARAMS.copy()
-            if params: p.update(params)
-            
-            return Genome(id=name, params=p, group_ratios=group_ratios, strategies=strategies, mutation_rate=0.1)
-
-        # 1. Pure Vector
-        population.append(create_seed(
-            "gen0_seed_vector", 
-            "semantic_similarity", "semantic", "semantic_rank",
-            {"steps": 4}
-        ))
-        
-        # 2. Hybrid (Vector * Pheromone)
-        if count > 1:
-            population.append(create_seed(
-                "gen0_seed_hybrid", 
-                "semantic_similarity * pheromone_repulsion", "semantic", "semantic_rank",
-                {"steps": 5}
-            ))
-
-        # 3. Pure Pheromone (Exploration)
-        if count > 2:
-            population.append(create_seed(
-                "gen0_seed_ant", 
-                "pheromone_repulsion", "flat", "percentage_visited",
-                {"steps": 8, "decay": 0.95}
-            ))
+        # Include seed genomes up to count
+        for i, seed in enumerate(seed_genomes):
+            if i >= count:
+                break
+            # Update ID to indicate generation 0
+            seed.id = f"gen0_{seed.id}"
+            population.append(seed)
 
         # Fill remainder with standard random initialization
         remaining = count - len(population)
@@ -1033,4 +1047,42 @@ class GeneticStrategies:
 
         genome.clear_cache()
         return genome
-    
+
+    @staticmethod
+    @GeneticRegistry.register_mutation(GeneticKey.FOCUSED_MUTATION)
+    def focused_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
+        """
+        Metric-aware mutation that targets the weakest metric.
+
+        Analyzes the genome's fitness profile to identify which metric
+        (recall, MRR, precision) is weakest, then focuses mutations on
+        parameters most likely to improve that metric.
+
+        This provides more directed evolution than random parameter
+        mutation, potentially accelerating convergence.
+        """
+        # Get fitness if available
+        fitness = genome.fitness if hasattr(genome, 'fitness') and genome.fitness else None
+
+        # Apply focused mutation using the dedicated module
+        genome = apply_focused_mutation(
+            genome=genome,
+            ctx=ctx,
+            fitness=fitness,
+            mutation_rate=genome.mutation_rate * ctx.global_mutation_multiplier,
+        )
+
+        # Also apply some tree mutation for exploration
+        rate = genome.mutation_rate * ctx.global_mutation_multiplier * 0.5  # Reduced rate
+
+        for key, tree in genome.strategies.items():
+            if random.random() < rate:
+                feature_list = GeneticStrategies._resolve_feature_list(key, ctx)
+                mutated_tree = ExpressionEvolution.mutate_tree(
+                    tree, features=feature_list, mutation_rate=rate, inplace=True
+                )
+                genome.strategies[key] = mutated_tree
+
+        genome.clear_cache()
+        return genome
+

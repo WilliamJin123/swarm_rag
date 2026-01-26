@@ -1,6 +1,7 @@
-from typing import Dict, Callable, Any, List, Set, TypedDict
+from typing import Dict, Callable, Any, List, Set, TypedDict, Tuple
 from dataclasses import dataclass, field
 import torch
+import random
 
 try:
     from typing import NotRequired
@@ -13,6 +14,28 @@ from .expressions import ExpressionNode
 
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
 from ...interfaces.shared_types import AgentGroupConfig
+
+
+# =============================================================================
+# Fixed and Evolvable Parameter Definitions
+# =============================================================================
+
+# Fixed parameters - removed from evolution to reduce search space
+# These rarely impact results significantly and are best left at sensible defaults
+FIXED_PARAMS: Dict[str, Any] = {
+    "drop_zone_inc": 0.05,  # Rarely impacts results significantly
+    "start_subset": 10,     # 10 starting nodes is usually sufficient
+}
+
+# Tightened ranges for evolvable parameters
+# Based on empirical analysis of effective configurations
+EVOLVABLE_PARAM_RANGES: Dict[str, Tuple[float, float]] = {
+    "n_agents": (15, 50),        # Fewer agents = faster, too many = redundant
+    "steps": (3, 7),             # Most signal captured in 3-6 steps
+    "decay": (0.3, 0.8),         # Keep dynamic, tighten range
+    "initial_pool_size": (20, 60),  # Tight range around optimal
+}
+
 
 class CompiledStrategies(TypedDict, total=False):
     """
@@ -369,3 +392,45 @@ class GenomeCompiler:
         for child in node.children:
             features.update(self._extract_features(child))
         return features
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def create_random_genome(genome_id: str = None) -> Genome:
+    """
+    Create a new genome with random evolvable params and fixed params.
+
+    Uses FIXED_PARAMS for parameters that are removed from evolution,
+    and samples evolvable parameters from EVOLVABLE_PARAM_RANGES.
+
+    Args:
+        genome_id: Optional ID for the genome (auto-generated if None)
+
+    Returns:
+        Newly created Genome with randomized evolvable params
+    """
+    import uuid
+
+    # Start with fixed values
+    params = dict(FIXED_PARAMS)
+
+    # Add evolvable params sampled from tightened ranges
+    for name, (low, high) in EVOLVABLE_PARAM_RANGES.items():
+        if isinstance(low, int) and isinstance(high, int):
+            params[name] = random.randint(low, high)
+        else:
+            params[name] = random.uniform(low, high)
+
+    # Generate genome ID if not provided
+    if genome_id is None:
+        genome_id = f"random_{uuid.uuid4().hex[:8]}"
+
+    return Genome(
+        id=genome_id,
+        params=params,
+        group_ratios={},
+        strategies={},
+        evaluated=False,
+    )
