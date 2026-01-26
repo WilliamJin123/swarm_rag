@@ -1,4 +1,4 @@
-from typing import Dict, Callable, Any, List, Set, TypedDict, Tuple
+from typing import Dict, Callable, Any, List, Set, TypedDict, Tuple, Optional, Literal
 from dataclasses import dataclass, field
 import torch
 import random
@@ -9,6 +9,7 @@ except ImportError:
     from typing_extensions import NotRequired
 
 from .fitness_results import FitnessResult
+from .config import WeightTensors, MutationSigmas
 
 from .expressions import ExpressionNode
 
@@ -68,19 +69,36 @@ DEFAULT_PARAMS: SwarmParams = {
     "start_subset": 10,
 }
 
-@dataclass 
+@dataclass
 class Genome:
     """
     A complete retrieval strategy with BOTH hyperparameters
     and expression trees in one genome.
+
+    Supports dual-mode evolution:
+    - "expression_tree": Nonlinear symbolic expressions (expressive, default)
+    - "weighted_sum": Linear heuristic combinations (fast, GPU-optimized)
     """
     id: str
     mutation_rate: float = 0.1
 
+    # === Mode Selection ===
+    mode: Literal["weighted_sum", "expression_tree"] = "expression_tree"
+
+    # === Shared Fields ===
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
     group_ratios: Dict[str, float] = field(default_factory=dict)
+
+    # === Expression Tree Mode ===
     strategies: Dict[str, ExpressionNode] = field(default_factory=dict)
 
+    # === Weighted Sum Mode ===
+    weight_tensors: Optional[WeightTensors] = None
+
+    # === Self-Adaptive Mutation (ES-style) ===
+    mutation_sigmas: MutationSigmas = field(default_factory=MutationSigmas)
+
+    # === Evaluation Results ===
     fitness: FitnessResult = field(default_factory=lambda: FitnessResult())
 
     # Recall@20, Hit@1, Hit@5, MRR, etc.
@@ -118,15 +136,32 @@ class Genome:
     def __setstate__(self, state):
         """
         Restores state and re-initializes the empty cache.
+        Handles backward compatibility for older checkpoints.
         """
         self.__dict__.update(state)
         # Ensure cache exists
         if '_compiled_cache' not in self.__dict__:
             self._compiled_cache = {}
+
+        # Backward compatibility: set defaults for new fields
+        if 'mode' not in self.__dict__:
+            self.mode = "expression_tree"
+        if 'weight_tensors' not in self.__dict__:
+            self.weight_tensors = None
+        if 'mutation_sigmas' not in self.__dict__:
+            self.mutation_sigmas = MutationSigmas()
+
         self.normalize_ratios()
 
     def complexity(self) -> int:
-        """Sum of the size of all expression trees."""
+        """
+        Compute genome complexity.
+
+        For expression_tree mode: Sum of the size of all expression trees.
+        For weighted_sum mode: Total number of weight parameters.
+        """
+        if self.mode == "weighted_sum" and self.weight_tensors is not None:
+            return self.weight_tensors.total_params
         return sum(tree.size() for tree in self.strategies.values())
     
     def normalize_ratios(self):
@@ -172,26 +207,29 @@ class Genome:
             stability_score=self.fitness.stability_score,
             cost_score=self.fitness.cost_score
         )
-        
+
         target_id = new_id if new_id is not None else f"{self.id}_copy"
 
         return Genome(
             id=target_id,
             mutation_rate=self.mutation_rate,
+            mode=self.mode,
             params=self.params.copy(),
             group_ratios=self.group_ratios.copy(),
             strategies={k: v.copy() for k, v in self.strategies.items()},
-            fitness=new_fitness, 
+            weight_tensors=self.weight_tensors.copy() if self.weight_tensors else None,
+            mutation_sigmas=self.mutation_sigmas.copy(),
+            fitness=new_fitness,
             metrics=self.metrics.copy(),
             latency=self.latency,
             evaluated=self.evaluated,
-            _compiled_cache={} 
+            _compiled_cache={}
         )
 
     def to_dict(self) -> Dict[str, Any]:
         """
         Serializes the Genome into a plain Python dictionary.
-        
+
         This is essential for saving genomes to JSON, logging, or other
         forms of data interchange. It intelligently handles nested objects
         and excludes non-serializable components like the compiled cache.
@@ -206,26 +244,35 @@ class Genome:
         # Serialize nested, complex objects.
         if 'strategies' in d and d['strategies']:
             d['strategies'] = {key: node.to_dict() for key, node in d['strategies'].items()}
-        
+
         if 'fitness' in d and hasattr(d['fitness'], 'to_dict'):
             d['fitness'] = d['fitness'].to_dict()
-        
+
+        # Serialize weight_tensors (weighted_sum mode)
+        if 'weight_tensors' in d and d['weight_tensors'] is not None:
+            d['weight_tensors'] = d['weight_tensors'].to_dict()
+
+        # Serialize mutation_sigmas
+        if 'mutation_sigmas' in d and hasattr(d['mutation_sigmas'], 'to_dict'):
+            d['mutation_sigmas'] = d['mutation_sigmas'].to_dict()
+
         return d
     
     def pretty_print(self, printer: Callable[[str], Any] = print):
         """
         Prints a human-readable summary of the genome using the provided printer.
-        
+
         Args:
             printer: Function to handle output (e.g., print, logger.info). Defaults to print.
         """
         border = "=" * 60
         separator = "-" * 60
-        
+
         printer(border)
         printer(f"GENOME REPORT: {self.id}")
+        printer(f"Mode: {self.mode}")
         printer(border)
-        
+
         # 1. Fitness & Metrics
         printer(f"Fitness Score: {self.fitness}")
         if self.metrics:
@@ -240,24 +287,52 @@ class Genome:
         max_len = max(len(k) for k in self.params.keys()) if self.params else 0
         for k, v in sorted(self.params.items()):
             printer(f"  • {k:<{max_len}} : {v}")
-        
+
         # 3. Group Ratios
         if self.group_ratios:
             printer(separator)
             printer("Agent Group Ratios:")
             for k, v in sorted(self.group_ratios.items()):
                 printer(f"  • {k:<5} : {v:.2%} ({v:.4f})")
-        
-        # 4. Strategies (Expressions)
-        if self.strategies:
+
+        # 4a. Strategies (Expression Tree Mode)
+        if self.mode == "expression_tree" and self.strategies:
             printer(separator)
-            printer("Evolved Strategies:")
+            printer("Evolved Strategies (Expression Trees):")
             for name, tree in sorted(self.strategies.items()):
                 # Clean up the name for display
                 display_name = name.replace("evolved_", "").replace("_", " ").title()
                 printer(f"  [ {display_name} ]")
                 printer(f"    {tree.to_string()}")
-                printer("") # Empty line between strategies for readability
+                printer("")  # Empty line between strategies for readability
+
+        # 4b. Weight Tensors (Weighted Sum Mode)
+        if self.mode == "weighted_sum" and self.weight_tensors is not None:
+            printer(separator)
+            printer("Weight Tensors (Weighted Sum):")
+            wt = self.weight_tensors
+            printer(f"  Movement weights shape: {tuple(wt.movement_weights.shape)}")
+            printer(f"  Deposit weights shape:  {tuple(wt.deposit_weights.shape)}")
+            printer(f"  Ranking weights shape:  {tuple(wt.ranking_weights.shape)}")
+            printer(f"  Total parameters:       {wt.total_params}")
+
+            # Show actual weights for small tensors
+            if wt.n_groups <= 3:
+                printer("")
+                for g in range(wt.n_groups):
+                    printer(f"  Group {g} movement: {wt.movement_weights[g].tolist()}")
+                    printer(f"  Group {g} deposit:  {wt.deposit_weights[g].tolist()}")
+                printer(f"  Ranking weights: {wt.ranking_weights.tolist()}")
+                printer(f"  Ranking bias: {wt.ranking_bias:.4f}")
+
+        # 5. Mutation Sigmas (if self-adaptive)
+        if self.mutation_sigmas:
+            printer(separator)
+            printer("Mutation Sigmas (Self-Adaptive):")
+            printer(f"  • weight_sigma:    {self.mutation_sigmas.weight_sigma:.4f}")
+            printer(f"  • bias_sigma:      {self.mutation_sigmas.bias_sigma:.4f}")
+            printer(f"  • ratio_sigma:     {self.mutation_sigmas.ratio_sigma:.4f}")
+            printer(f"  • hyperparam_sigma:{self.mutation_sigmas.hyperparam_sigma:.4f}")
 
         printer(border)
 

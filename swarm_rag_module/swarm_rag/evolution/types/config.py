@@ -3,10 +3,13 @@ Evolution Configuration System
 
 Organized nested dataclasses replacing the flat 50+ field TypedDict.
 MAP-Elites is the default and only evolution paradigm.
+Supports dual-mode evolution: weighted_sum (linear) and expression_tree (symbolic).
 """
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING
+from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING, Literal
 import os
+import math
+import torch
 
 if TYPE_CHECKING:
     from .genome import Genome
@@ -24,6 +27,252 @@ def _get_optimal_concurrency() -> int:
         return min(cpu_count // 2, 16)
     except Exception:
         return 4
+
+
+# =============================================================================
+# Dual-Mode Evolution Data Structures
+# =============================================================================
+
+@dataclass
+class WeightTensors:
+    """
+    GPU-friendly weight storage for heterogeneous agent groups.
+
+    All weights stored as contiguous tensors for GPU batch operations.
+    Used in weighted_sum genome mode for fast linear heuristic combinations.
+    """
+    # Movement: (n_groups, n_movement_features)
+    movement_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 4))
+    movement_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1))
+
+    # Deposit: (n_groups, n_deposit_features)
+    deposit_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 3))
+    deposit_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1))
+
+    # Ranking: shared across groups (n_ranking_features,)
+    ranking_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(2))
+    ranking_bias: float = 0.0
+
+    def to_device(self, device: str) -> "WeightTensors":
+        """Move all tensors to specified device."""
+        return WeightTensors(
+            movement_weights=self.movement_weights.to(device),
+            movement_biases=self.movement_biases.to(device),
+            deposit_weights=self.deposit_weights.to(device),
+            deposit_biases=self.deposit_biases.to(device),
+            ranking_weights=self.ranking_weights.to(device),
+            ranking_bias=self.ranking_bias,
+        )
+
+    def copy(self) -> "WeightTensors":
+        """Create a deep copy of all tensors."""
+        return WeightTensors(
+            movement_weights=self.movement_weights.clone(),
+            movement_biases=self.movement_biases.clone(),
+            deposit_weights=self.deposit_weights.clone(),
+            deposit_biases=self.deposit_biases.clone(),
+            ranking_weights=self.ranking_weights.clone(),
+            ranking_bias=self.ranking_bias,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for checkpointing."""
+        return {
+            "movement_weights": self.movement_weights.cpu().tolist(),
+            "movement_biases": self.movement_biases.cpu().tolist(),
+            "deposit_weights": self.deposit_weights.cpu().tolist(),
+            "deposit_biases": self.deposit_biases.cpu().tolist(),
+            "ranking_weights": self.ranking_weights.cpu().tolist(),
+            "ranking_bias": self.ranking_bias,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "WeightTensors":
+        """Deserialize from dictionary."""
+        return cls(
+            movement_weights=torch.tensor(d["movement_weights"], dtype=torch.float32),
+            movement_biases=torch.tensor(d["movement_biases"], dtype=torch.float32),
+            deposit_weights=torch.tensor(d["deposit_weights"], dtype=torch.float32),
+            deposit_biases=torch.tensor(d["deposit_biases"], dtype=torch.float32),
+            ranking_weights=torch.tensor(d["ranking_weights"], dtype=torch.float32),
+            ranking_bias=d["ranking_bias"],
+        )
+
+    @property
+    def n_groups(self) -> int:
+        """Number of agent groups."""
+        return self.movement_weights.shape[0]
+
+    @property
+    def total_params(self) -> int:
+        """Total number of parameters."""
+        return (
+            self.movement_weights.numel() +
+            self.movement_biases.numel() +
+            self.deposit_weights.numel() +
+            self.deposit_biases.numel() +
+            self.ranking_weights.numel() +
+            1  # ranking_bias
+        )
+
+
+@dataclass
+class MutationSigmas:
+    """
+    Self-adaptive mutation parameters - these also evolve (ES-style).
+
+    Each genome carries its own mutation strengths, allowing evolution
+    to discover optimal mutation rates for different regions of the search space.
+    """
+    weight_sigma: float = 0.10       # Weight perturbation strength
+    bias_sigma: float = 0.05         # Bias perturbation strength
+    ratio_sigma: float = 0.10        # Group ratio shift strength
+    hyperparam_sigma: float = 0.15   # Hyperparameter mutation strength
+
+    # Meta-parameter for sigma evolution
+    tau: float = 0.1  # Learning rate for sigma adaptation
+
+    # Bounds to prevent collapse or explosion
+    min_sigma: float = 0.01
+    max_sigma: float = 0.50
+
+    def adapt(self) -> "MutationSigmas":
+        """
+        ES-style sigma adaptation: sigma' = sigma * exp(tau * N(0,1))
+
+        Returns a new MutationSigmas with adapted values.
+        """
+        import random
+
+        def _adapt_single(sigma: float) -> float:
+            new_sigma = sigma * math.exp(self.tau * random.gauss(0, 1))
+            return max(self.min_sigma, min(self.max_sigma, new_sigma))
+
+        return MutationSigmas(
+            weight_sigma=_adapt_single(self.weight_sigma),
+            bias_sigma=_adapt_single(self.bias_sigma),
+            ratio_sigma=_adapt_single(self.ratio_sigma),
+            hyperparam_sigma=_adapt_single(self.hyperparam_sigma),
+            tau=self.tau,
+            min_sigma=self.min_sigma,
+            max_sigma=self.max_sigma,
+        )
+
+    def copy(self) -> "MutationSigmas":
+        """Create a copy of the sigmas."""
+        return MutationSigmas(
+            weight_sigma=self.weight_sigma,
+            bias_sigma=self.bias_sigma,
+            ratio_sigma=self.ratio_sigma,
+            hyperparam_sigma=self.hyperparam_sigma,
+            tau=self.tau,
+            min_sigma=self.min_sigma,
+            max_sigma=self.max_sigma,
+        )
+
+    def to_dict(self) -> Dict[str, float]:
+        """Serialize to dictionary."""
+        return {
+            "weight_sigma": self.weight_sigma,
+            "bias_sigma": self.bias_sigma,
+            "ratio_sigma": self.ratio_sigma,
+            "hyperparam_sigma": self.hyperparam_sigma,
+            "tau": self.tau,
+            "min_sigma": self.min_sigma,
+            "max_sigma": self.max_sigma,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, float]) -> "MutationSigmas":
+        """Deserialize from dictionary."""
+        return cls(**d)
+
+
+@dataclass
+class HeuristicFeatureConfig:
+    """
+    Configurable feature sets for evolution runs.
+
+    Specifies which heuristic features are available for each strategy type.
+    This allows dataset-specific customization of the feature space.
+    """
+    movement: List[str] = field(default_factory=lambda: [
+        "semantic_similarity_unnormalized",
+        "node_centrality",
+        "pheromone_repulsion",
+    ])
+
+    deposit: List[str] = field(default_factory=lambda: [
+        "flat",
+        "semantic_unnormalized",
+        "exploration_bonus",
+    ])
+
+    ranking: List[str] = field(default_factory=lambda: [
+        "semantic_rank",
+        "percentage_visited",
+    ])
+
+    def to_dict(self) -> Dict[str, List[str]]:
+        """Serialize to dictionary."""
+        return {
+            "movement": self.movement.copy(),
+            "deposit": self.deposit.copy(),
+            "ranking": self.ranking.copy(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, List[str]]) -> "HeuristicFeatureConfig":
+        """Deserialize from dictionary."""
+        return cls(
+            movement=d.get("movement", cls().movement),
+            deposit=d.get("deposit", cls().deposit),
+            ranking=d.get("ranking", cls().ranking),
+        )
+
+
+# =============================================================================
+# Predefined Feature Configurations
+# =============================================================================
+
+# STaRK-specific config (includes stark_centrality)
+STARK_FEATURES = HeuristicFeatureConfig(
+    movement=[
+        "semantic_similarity_unnormalized",
+        "stark_centrality",
+        "node_centrality",
+        "pheromone_repulsion",
+    ],
+    deposit=[
+        "flat",
+        "semantic_unnormalized",
+        "exploration_bonus",
+    ],
+    ranking=[
+        "semantic_rank",
+        "percentage_visited",
+    ],
+)
+
+# General graph features (no dataset-specific heuristics)
+GENERAL_FEATURES = HeuristicFeatureConfig(
+    movement=[
+        "semantic_similarity_unnormalized",
+        "node_centrality",
+        "pheromone_repulsion",
+        "random_jitter",
+    ],
+    deposit=[
+        "flat",
+        "semantic_unnormalized",
+        "exploration_bonus",
+        "hub",
+    ],
+    ranking=[
+        "semantic_rank",
+        "percentage_visited",
+    ],
+)
 
 
 # =============================================================================
@@ -114,6 +363,17 @@ class GeneticConfig:
 
     # Parallel mutation settings
     parallel_mutation_workers: int = 4  # Number of workers for parallel offspring generation
+
+    # === Weighted Sum Mode Specific ===
+    n_agent_groups_range: Tuple[int, int] = (1, 5)  # Min/max groups for evolution
+    self_adaptive_mutation: bool = True  # Enable ES-style sigma evolution
+
+    # Initial sigma values for weighted sum mode
+    initial_weight_sigma: float = 0.10
+    initial_bias_sigma: float = 0.05
+    initial_ratio_sigma: float = 0.10
+    initial_hyperparam_sigma: float = 0.15
+    sigma_tau: float = 0.1  # Sigma learning rate
 
 
 @dataclass
@@ -252,13 +512,32 @@ class EvolutionConfig:
     Replaces the flat 50+ field EvolutionConfigDict with organized nested configs.
     MAP-Elites is the default and only evolution paradigm.
 
+    Supports dual-mode evolution:
+    - "expression_tree": Nonlinear symbolic expressions (current system, expressive)
+    - "weighted_sum": Linear heuristic combinations (fast, interpretable)
+
     Example:
+        # Weighted sum mode for fast evolution
         config = EvolutionConfig(
+            genome_mode="weighted_sum",
+            heuristic_features=STARK_FEATURES,
+            n_generations=1000,
+        )
+
+        # Expression tree mode (default, existing behavior)
+        config = EvolutionConfig(
+            genome_mode="expression_tree",
             n_generations=100,
-            map_elites=MapElitesConfig(bins=[20, 15]),
-            llm=LLMConfig(enabled=True)
         )
     """
+    # === Mode Selection ===
+    genome_mode: Literal["weighted_sum", "expression_tree"] = "expression_tree"
+
+    # === Feature Configuration (weighted_sum mode) ===
+    heuristic_features: HeuristicFeatureConfig = field(
+        default_factory=HeuristicFeatureConfig
+    )
+
     # Core loop settings
     n_generations: int = 50
     fitness_strategy: str = "lexicographic"  # lexicographic, pareto

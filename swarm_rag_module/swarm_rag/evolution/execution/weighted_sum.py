@@ -1,0 +1,797 @@
+"""
+Weighted Sum Mode Components for Dual-Mode Evolution
+
+This module provides GPU-optimized components for weighted sum genome mode:
+- WeightedSumCompiler: Compiles weight tensors into executable strategies
+- WeightedSumMutator: Self-adaptive ES-style mutation operators
+- WeightedSumSeeder: Seed population generation with baseline variants
+
+All operations use PyTorch tensors for GPU acceleration.
+"""
+
+from typing import Dict, Any, List, Callable, Tuple, Optional
+from dataclasses import dataclass
+import random
+import math
+import uuid
+import torch
+
+from ..types.genome import Genome, FIXED_PARAMS, EVOLVABLE_PARAM_RANGES
+from ..types.config import (
+    WeightTensors,
+    MutationSigmas,
+    HeuristicFeatureConfig,
+    EvolutionContext,
+)
+from ..types.fitness_results import FitnessResult
+from ...core.heuristics import HeuristicContext, HeuristicRegistry
+from ...interfaces.shared_types import AgentGroupConfig
+
+
+# =============================================================================
+# WeightedSumCompiler
+# =============================================================================
+
+class WeightedSumCompiler:
+    """
+    Compiles weighted sum genomes into executable strategies.
+
+    Converts weight tensors into callable strategy functions that can be
+    used by SwarmRetriever. All computation is GPU-optimized using PyTorch.
+    """
+
+    def __init__(self, feature_config: HeuristicFeatureConfig):
+        """
+        Initialize compiler with feature configuration.
+
+        Args:
+            feature_config: Configuration specifying which features to use
+        """
+        self.feature_config = feature_config
+        self._feature_getters: Dict[str, Callable] = {}
+        self._build_feature_getters()
+
+    def _build_feature_getters(self):
+        """Build mapping from feature names to getter functions."""
+        for feature_list in [
+            self.feature_config.movement,
+            self.feature_config.deposit,
+            self.feature_config.ranking,
+        ]:
+            for name in feature_list:
+                if name in self._feature_getters:
+                    continue
+
+                # Handle context attributes (fast path)
+                if name == 'degree':
+                    self._feature_getters[name] = lambda ctx: ctx.node_degrees
+                elif name == 'pheromone':
+                    self._feature_getters[name] = lambda ctx: ctx.pheromone_values
+                elif name == 'max_pheromone':
+                    self._feature_getters[name] = lambda ctx: ctx.max_pheromone
+                elif name == 'avg_degree':
+                    self._feature_getters[name] = lambda ctx: ctx.avg_degree
+                elif name == 'votes':
+                    self._feature_getters[name] = lambda ctx: ctx.votes
+                else:
+                    # Get from registry
+                    try:
+                        func = HeuristicRegistry.get(name)
+                        self._feature_getters[name] = func
+                    except KeyError:
+                        # Fallback to constant zero
+                        self._feature_getters[name] = lambda ctx, n=name: torch.zeros(1)
+
+    def compile(self, genome: Genome) -> Dict[str, Any]:
+        """
+        Compile a weighted sum genome into SwarmRetriever kwargs.
+
+        Args:
+            genome: Genome with mode="weighted_sum" and weight_tensors set
+
+        Returns:
+            Dictionary of kwargs for SwarmRetriever.retrieve()
+        """
+        if genome.mode != "weighted_sum":
+            raise ValueError(f"Cannot compile non-weighted_sum genome: {genome.mode}")
+
+        if genome.weight_tensors is None:
+            raise ValueError(f"Genome {genome.id} has no weight_tensors")
+
+        wt = genome.weight_tensors
+
+        # Build agent groups
+        agent_groups = []
+        total_agents = genome.params['n_agents']
+        sorted_groups = sorted(genome.group_ratios.keys())
+
+        if sorted_groups:
+            ratios = [genome.group_ratios[g] for g in sorted_groups]
+            total_ratio = sum(ratios)
+            if total_ratio <= 1e-9:
+                total_ratio = 1.0
+
+            counts = [int(round(total_agents * (r / total_ratio))) for r in ratios]
+
+            # Fix rounding remainder
+            if counts:
+                current_sum = sum(counts)
+                if current_sum < total_agents:
+                    counts[0] += (total_agents - current_sum)
+                elif current_sum > total_agents:
+                    counts[0] -= (current_sum - total_agents)
+
+            for i, group_key in enumerate(sorted_groups):
+                if counts[i] <= 0:
+                    continue
+
+                group_idx = int(group_key[1:])  # Extract index from "g0", "g1", etc.
+
+                # Create movement strategy for this group
+                mov_strategy = self._create_movement_strategy(wt, group_idx)
+                dep_strategy = self._create_deposit_strategy(wt, group_idx)
+
+                group_config: AgentGroupConfig = {
+                    "count": counts[i],
+                    "movement_strategies": {f"ws_mov_{group_idx}": (mov_strategy, 1.0)},
+                    "deposit_strategies": {f"ws_dep_{group_idx}": (dep_strategy, 1.0)},
+                }
+                agent_groups.append(group_config)
+
+        # Create ranking strategy (shared across groups)
+        ranking_strategy = self._create_ranking_strategy(wt)
+        ranking_strategies = {"ws_ranking": (ranking_strategy, 1.0)}
+
+        return {
+            **genome.params,
+            "agent_groups": agent_groups,
+            "ranking_strategies": ranking_strategies,
+        }
+
+    def _create_movement_strategy(
+        self, wt: WeightTensors, group_idx: int
+    ) -> Callable[[HeuristicContext], torch.Tensor]:
+        """Create movement strategy function for a specific group."""
+        # Get weights for this group (clamp to valid index)
+        idx = min(group_idx, wt.n_groups - 1)
+        weights = wt.movement_weights[idx]  # (n_features,)
+        bias = wt.movement_biases[idx].item()
+
+        feature_names = self.feature_config.movement
+        getters = [self._feature_getters[name] for name in feature_names]
+
+        def movement_strategy(ctx: HeuristicContext) -> torch.Tensor:
+            # Stack features: (n_candidates, n_features)
+            features = torch.stack([getter(ctx) for getter in getters], dim=-1)
+            # Weighted sum: (n_candidates,)
+            scores = features @ weights + bias
+            return torch.nan_to_num(scores, nan=0.0, posinf=10.0, neginf=-10.0)
+
+        return movement_strategy
+
+    def _create_deposit_strategy(
+        self, wt: WeightTensors, group_idx: int
+    ) -> Callable[[HeuristicContext], torch.Tensor]:
+        """Create deposit strategy function for a specific group."""
+        idx = min(group_idx, wt.n_groups - 1)
+        weights = wt.deposit_weights[idx]
+        bias = wt.deposit_biases[idx].item()
+
+        feature_names = self.feature_config.deposit
+        getters = [self._feature_getters[name] for name in feature_names]
+
+        def deposit_strategy(ctx: HeuristicContext) -> torch.Tensor:
+            features = torch.stack([getter(ctx) for getter in getters], dim=-1)
+            scores = features @ weights + bias
+            return torch.nan_to_num(scores, nan=0.0, posinf=10.0, neginf=-10.0)
+
+        return deposit_strategy
+
+    def _create_ranking_strategy(
+        self, wt: WeightTensors
+    ) -> Callable[[HeuristicContext], torch.Tensor]:
+        """Create ranking strategy function (shared across groups)."""
+        weights = wt.ranking_weights
+        bias = wt.ranking_bias
+
+        feature_names = self.feature_config.ranking
+        getters = [self._feature_getters[name] for name in feature_names]
+
+        def ranking_strategy(ctx: HeuristicContext) -> torch.Tensor:
+            features = torch.stack([getter(ctx) for getter in getters], dim=-1)
+            scores = features @ weights + bias
+            return torch.nan_to_num(scores, nan=0.0, posinf=10.0, neginf=-10.0)
+
+        return ranking_strategy
+
+
+# =============================================================================
+# Batch Score Computation (GPU-Optimized)
+# =============================================================================
+
+def compute_movement_scores_batched(
+    features: torch.Tensor,      # (N_candidates, F_movement)
+    weights: torch.Tensor,       # (G_groups, F_movement)
+    biases: torch.Tensor,        # (G_groups,)
+) -> torch.Tensor:
+    """
+    Compute movement scores for all candidates across all groups.
+
+    Single cuBLAS matmul - extremely fast on GPU.
+
+    Returns: (N_candidates, G_groups)
+    """
+    scores = features @ weights.T + biases  # (N, G)
+    return scores
+
+
+def assign_scores_to_agents(
+    scores_all_groups: torch.Tensor,  # (N_candidates, G_groups)
+    agent_group_ids: torch.Tensor,    # (A_agents,) values 0..G-1
+) -> torch.Tensor:
+    """
+    Select appropriate group scores for each agent.
+
+    Returns: (N_candidates, A_agents)
+    """
+    return scores_all_groups[:, agent_group_ids]
+
+
+# =============================================================================
+# WeightedSumMutator
+# =============================================================================
+
+class WeightedSumMutator:
+    """
+    Self-adaptive ES-style mutation for weighted sum genomes.
+
+    Mutation operators:
+    - Weight perturbation (60%): w += N(0, sigma)
+    - Bias perturbation (15%): b += N(0, sigma)
+    - Group ratio shift (10%): Rebalance proportions
+    - Hyperparam mutation (10%): Mutate n_agents, steps, decay, pool_size
+    - Group add/remove (5%): Change n_groups by +/-1
+    """
+
+    # Mutation probabilities
+    PROB_WEIGHT = 0.60
+    PROB_BIAS = 0.15
+    PROB_RATIO = 0.10
+    PROB_HYPERPARAM = 0.10
+    PROB_GROUP_CHANGE = 0.05
+
+    def __init__(self, feature_config: HeuristicFeatureConfig):
+        """
+        Initialize mutator with feature configuration.
+
+        Args:
+            feature_config: Configuration specifying feature dimensions
+        """
+        self.feature_config = feature_config
+        self.n_movement_features = len(feature_config.movement)
+        self.n_deposit_features = len(feature_config.deposit)
+        self.n_ranking_features = len(feature_config.ranking)
+
+    def mutate(self, genome: Genome, ctx: EvolutionContext) -> Genome:
+        """
+        Apply self-adaptive mutation to a weighted sum genome.
+
+        First adapts the mutation sigmas, then applies mutations.
+
+        Args:
+            genome: Genome to mutate (will be modified in place)
+            ctx: Evolution context
+
+        Returns:
+            Mutated genome (same object, modified)
+        """
+        if genome.mode != "weighted_sum":
+            raise ValueError(f"Cannot mutate non-weighted_sum genome: {genome.mode}")
+
+        # Step 1: Adapt sigmas (ES-style)
+        if ctx.config.genetic.self_adaptive_mutation:
+            genome.mutation_sigmas = genome.mutation_sigmas.adapt()
+
+        sigmas = genome.mutation_sigmas
+
+        # Step 2: Apply mutations based on probabilities
+        roll = random.random()
+
+        if roll < self.PROB_WEIGHT:
+            self._mutate_weights(genome, sigmas)
+        elif roll < self.PROB_WEIGHT + self.PROB_BIAS:
+            self._mutate_biases(genome, sigmas)
+        elif roll < self.PROB_WEIGHT + self.PROB_BIAS + self.PROB_RATIO:
+            self._mutate_ratios(genome, sigmas)
+        elif roll < self.PROB_WEIGHT + self.PROB_BIAS + self.PROB_RATIO + self.PROB_HYPERPARAM:
+            self._mutate_hyperparams(genome, sigmas, ctx)
+        else:
+            self._mutate_group_count(genome, ctx)
+
+        genome.evaluated = False
+        genome.clear_cache()
+        return genome
+
+    def _mutate_weights(self, genome: Genome, sigmas: MutationSigmas):
+        """Perturb weight values with Gaussian noise."""
+        wt = genome.weight_tensors
+        sigma = sigmas.weight_sigma
+
+        # Movement weights
+        noise = torch.randn_like(wt.movement_weights) * sigma
+        wt.movement_weights = wt.movement_weights + noise
+
+        # Deposit weights
+        noise = torch.randn_like(wt.deposit_weights) * sigma
+        wt.deposit_weights = wt.deposit_weights + noise
+
+        # Ranking weights
+        noise = torch.randn_like(wt.ranking_weights) * sigma
+        wt.ranking_weights = wt.ranking_weights + noise
+
+    def _mutate_biases(self, genome: Genome, sigmas: MutationSigmas):
+        """Perturb bias values with Gaussian noise."""
+        wt = genome.weight_tensors
+        sigma = sigmas.bias_sigma
+
+        # Movement biases
+        noise = torch.randn_like(wt.movement_biases) * sigma
+        wt.movement_biases = wt.movement_biases + noise
+
+        # Deposit biases
+        noise = torch.randn_like(wt.deposit_biases) * sigma
+        wt.deposit_biases = wt.deposit_biases + noise
+
+        # Ranking bias
+        wt.ranking_bias += random.gauss(0, sigma)
+
+    def _mutate_ratios(self, genome: Genome, sigmas: MutationSigmas):
+        """Shift group ratios."""
+        if len(genome.group_ratios) <= 1:
+            return
+
+        sigma = sigmas.ratio_sigma
+        for key in genome.group_ratios:
+            genome.group_ratios[key] += random.gauss(0, sigma)
+            genome.group_ratios[key] = max(0.05, genome.group_ratios[key])
+
+        genome.normalize_ratios()
+
+    def _mutate_hyperparams(self, genome: Genome, sigmas: MutationSigmas, ctx: EvolutionContext):
+        """Mutate swarm hyperparameters."""
+        sigma = sigmas.hyperparam_sigma
+
+        for key, val in genome.params.items():
+            # Skip fixed parameters
+            if key in FIXED_PARAMS:
+                genome.params[key] = FIXED_PARAMS[key]
+                continue
+
+            if random.random() < 0.5:  # 50% chance to mutate each param
+                if isinstance(val, int):
+                    delta = int(round(random.gauss(0, sigma * 5)))
+                    new_val = max(1, val + delta)
+                    if key in EVOLVABLE_PARAM_RANGES:
+                        min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                        new_val = max(int(min_v), min(int(max_v), new_val))
+                    genome.params[key] = new_val
+                elif isinstance(val, float):
+                    factor = 1.0 + random.gauss(0, sigma)
+                    new_val = val * factor
+                    if key in EVOLVABLE_PARAM_RANGES:
+                        min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                        new_val = max(min_v, min(max_v, new_val))
+                    else:
+                        new_val = max(0.001, min(0.999, new_val))
+                    genome.params[key] = new_val
+
+    def _mutate_group_count(self, genome: Genome, ctx: EvolutionContext):
+        """Add or remove an agent group."""
+        min_groups, max_groups = ctx.config.genetic.n_agent_groups_range
+        current_groups = genome.weight_tensors.n_groups
+
+        if random.random() < 0.5 and current_groups < max_groups:
+            # Add a group
+            self._add_group(genome)
+        elif current_groups > min_groups:
+            # Remove a group
+            self._remove_group(genome)
+
+    def _add_group(self, genome: Genome):
+        """Add a new agent group by duplicating and perturbing existing."""
+        wt = genome.weight_tensors
+        n_groups = wt.n_groups
+
+        # Duplicate last group with small perturbation
+        new_mov = wt.movement_weights[-1:] + torch.randn(1, wt.movement_weights.shape[1]) * 0.1
+        new_mov_bias = wt.movement_biases[-1:] + torch.randn(1) * 0.05
+        new_dep = wt.deposit_weights[-1:] + torch.randn(1, wt.deposit_weights.shape[1]) * 0.1
+        new_dep_bias = wt.deposit_biases[-1:] + torch.randn(1) * 0.05
+
+        wt.movement_weights = torch.cat([wt.movement_weights, new_mov], dim=0)
+        wt.movement_biases = torch.cat([wt.movement_biases, new_mov_bias], dim=0)
+        wt.deposit_weights = torch.cat([wt.deposit_weights, new_dep], dim=0)
+        wt.deposit_biases = torch.cat([wt.deposit_biases, new_dep_bias], dim=0)
+
+        # Add new group ratio
+        new_key = f"g{n_groups}"
+        genome.group_ratios[new_key] = 0.2  # Start with small allocation
+        genome.normalize_ratios()
+
+    def _remove_group(self, genome: Genome):
+        """Remove the last agent group."""
+        wt = genome.weight_tensors
+        n_groups = wt.n_groups
+
+        if n_groups <= 1:
+            return
+
+        # Remove last group's weights
+        wt.movement_weights = wt.movement_weights[:-1]
+        wt.movement_biases = wt.movement_biases[:-1]
+        wt.deposit_weights = wt.deposit_weights[:-1]
+        wt.deposit_biases = wt.deposit_biases[:-1]
+
+        # Remove last group ratio
+        last_key = f"g{n_groups - 1}"
+        if last_key in genome.group_ratios:
+            del genome.group_ratios[last_key]
+
+        genome.normalize_ratios()
+
+
+# =============================================================================
+# WeightedSumSeeder
+# =============================================================================
+
+# Baseline configuration from test_n_q.py
+BASELINE_CONFIG = {
+    "n_agents": 25,
+    "steps": 5,
+    "decay": 0.5,
+    "initial_pool_size": 30,
+    "movement_weights": {
+        "semantic_similarity_unnormalized": 0.50,
+        "stark_centrality": 0.20,
+        "node_centrality": 0.15,
+        "pheromone_repulsion": 0.25,
+    },
+    "deposit_weights": {
+        "flat": 1.0,
+        "semantic_unnormalized": 0.0,
+        "exploration_bonus": 0.0,
+    },
+    "ranking_weights": {
+        "semantic_rank": 0.90,
+        "percentage_visited": 0.10,
+    },
+}
+
+# Seed variants as specified in the plan
+SEED_VARIANTS = [
+    # 1. baseline_exact
+    {"name": "baseline_exact", "changes": {}},
+
+    # 2. high_semantic
+    {"name": "high_semantic", "changes": {
+        "movement_weights": {"semantic_similarity_unnormalized": 0.65, "stark_centrality": 0.15,
+                            "node_centrality": 0.10, "pheromone_repulsion": 0.15},
+    }},
+
+    # 3. high_explore
+    {"name": "high_explore", "changes": {
+        "movement_weights": {"semantic_similarity_unnormalized": 0.35, "stark_centrality": 0.20,
+                            "node_centrality": 0.10, "pheromone_repulsion": 0.40},
+    }},
+
+    # 4. hub_focused
+    {"name": "hub_focused", "changes": {
+        "movement_weights": {"semantic_similarity_unnormalized": 0.40, "stark_centrality": 0.35,
+                            "node_centrality": 0.15, "pheromone_repulsion": 0.10},
+    }},
+
+    # 5. no_jitter (remove random_jitter emphasis)
+    {"name": "no_jitter", "changes": {
+        "movement_weights": {"semantic_similarity_unnormalized": 0.55, "stark_centrality": 0.20,
+                            "node_centrality": 0.15, "pheromone_repulsion": 0.25},
+    }},
+
+    # 6. semantic_deposit
+    {"name": "semantic_deposit", "changes": {
+        "deposit_weights": {"flat": 0.3, "semantic_unnormalized": 0.5, "exploration_bonus": 0.2},
+    }},
+
+    # 7. consensus_rank
+    {"name": "consensus_rank", "changes": {
+        "ranking_weights": {"semantic_rank": 0.70, "percentage_visited": 0.30},
+    }},
+
+    # 8. more_agents
+    {"name": "more_agents", "changes": {
+        "n_agents": 35, "steps": 4,
+    }},
+
+    # 9. deeper_search
+    {"name": "deeper_search", "changes": {
+        "n_agents": 20, "steps": 7, "decay": 0.7,
+    }},
+
+    # 10. fast_shallow
+    {"name": "fast_shallow", "changes": {
+        "n_agents": 40, "steps": 3, "initial_pool_size": 50,
+    }},
+]
+
+
+class WeightedSumSeeder:
+    """
+    Generates seed population for weighted sum evolution.
+
+    Creates baseline + variants + perturbed + wildcard genomes.
+    """
+
+    def __init__(self, feature_config: HeuristicFeatureConfig):
+        """
+        Initialize seeder with feature configuration.
+
+        Args:
+            feature_config: Configuration specifying feature dimensions
+        """
+        self.feature_config = feature_config
+        self.n_movement_features = len(feature_config.movement)
+        self.n_deposit_features = len(feature_config.deposit)
+        self.n_ranking_features = len(feature_config.ranking)
+
+    def create_seed_population(self, count: int = 18) -> List[Genome]:
+        """
+        Create seed population with variants.
+
+        Default: 10 predefined + 5 perturbed + 3 wildcard = 18 seeds
+
+        Args:
+            count: Number of seeds to create (min 10)
+
+        Returns:
+            List of seed genomes
+        """
+        seeds = []
+
+        # 1. Create predefined variants (up to 10)
+        for i, variant in enumerate(SEED_VARIANTS[:min(10, count)]):
+            genome = self._create_variant_genome(variant, f"seed_{variant['name']}")
+            seeds.append(genome)
+
+        remaining = count - len(seeds)
+
+        # 2. Create perturbed variants (5)
+        n_perturbed = min(5, remaining)
+        for i in range(n_perturbed):
+            genome = self._create_perturbed_genome(f"seed_perturb_{i}")
+            seeds.append(genome)
+
+        remaining = count - len(seeds)
+
+        # 3. Create wildcard (random) variants
+        for i in range(remaining):
+            genome = self._create_wildcard_genome(f"seed_wildcard_{i}")
+            seeds.append(genome)
+
+        return seeds
+
+    def _create_variant_genome(self, variant: Dict, genome_id: str) -> Genome:
+        """Create genome from a variant specification."""
+        # Start with baseline
+        config = self._deep_merge(BASELINE_CONFIG.copy(), variant.get("changes", {}))
+
+        return self._config_to_genome(config, genome_id)
+
+    def _create_perturbed_genome(self, genome_id: str) -> Genome:
+        """Create genome by perturbing baseline +/- 15%."""
+        config = BASELINE_CONFIG.copy()
+
+        # Perturb weights
+        perturbed_config = {}
+        for key in ["movement_weights", "deposit_weights", "ranking_weights"]:
+            if key in config:
+                perturbed_config[key] = {}
+                for feat, val in config[key].items():
+                    perturb = random.uniform(0.85, 1.15)
+                    perturbed_config[key][feat] = val * perturb
+
+        # Perturb hyperparams
+        for key in ["n_agents", "steps", "decay", "initial_pool_size"]:
+            if key in config:
+                val = config[key]
+                if isinstance(val, int):
+                    delta = int(round(val * random.uniform(-0.15, 0.15)))
+                    perturbed_config[key] = max(1, val + delta)
+                else:
+                    perturbed_config[key] = val * random.uniform(0.85, 1.15)
+
+        merged = self._deep_merge(config, perturbed_config)
+        return self._config_to_genome(merged, genome_id)
+
+    def _create_wildcard_genome(self, genome_id: str) -> Genome:
+        """Create genome with random weights but baseline hyperparams."""
+        config = {
+            "n_agents": BASELINE_CONFIG["n_agents"],
+            "steps": BASELINE_CONFIG["steps"],
+            "decay": BASELINE_CONFIG["decay"],
+            "initial_pool_size": BASELINE_CONFIG["initial_pool_size"],
+            "movement_weights": {f: random.uniform(0.0, 1.0)
+                                for f in self.feature_config.movement},
+            "deposit_weights": {f: random.uniform(0.0, 1.0)
+                               for f in self.feature_config.deposit},
+            "ranking_weights": {f: random.uniform(0.0, 1.0)
+                               for f in self.feature_config.ranking},
+        }
+        return self._config_to_genome(config, genome_id)
+
+    def _config_to_genome(self, config: Dict, genome_id: str) -> Genome:
+        """Convert a config dictionary to a Genome object."""
+        # Build weight tensors
+        movement_weights = self._weights_dict_to_tensor(
+            config.get("movement_weights", {}),
+            self.feature_config.movement,
+        )
+        deposit_weights = self._weights_dict_to_tensor(
+            config.get("deposit_weights", {}),
+            self.feature_config.deposit,
+        )
+        ranking_weights = self._weights_dict_to_tensor(
+            config.get("ranking_weights", {}),
+            self.feature_config.ranking,
+        )
+
+        # Single group by default
+        weight_tensors = WeightTensors(
+            movement_weights=movement_weights.unsqueeze(0),  # (1, n_features)
+            movement_biases=torch.zeros(1),
+            deposit_weights=deposit_weights.unsqueeze(0),
+            deposit_biases=torch.zeros(1),
+            ranking_weights=ranking_weights,
+            ranking_bias=0.0,
+        )
+
+        # Build params
+        params = dict(FIXED_PARAMS)
+        for key in ["n_agents", "steps", "decay", "initial_pool_size"]:
+            if key in config:
+                params[key] = config[key]
+            elif key in BASELINE_CONFIG:
+                params[key] = BASELINE_CONFIG[key]
+
+        return Genome(
+            id=genome_id,
+            mode="weighted_sum",
+            params=params,
+            group_ratios={"g0": 1.0},
+            strategies={},  # Empty for weighted_sum mode
+            weight_tensors=weight_tensors,
+            mutation_sigmas=MutationSigmas(),
+            fitness=FitnessResult(),
+            evaluated=False,
+        )
+
+    def _weights_dict_to_tensor(
+        self, weights_dict: Dict[str, float], feature_names: List[str]
+    ) -> torch.Tensor:
+        """Convert weights dictionary to tensor in correct feature order."""
+        weights = []
+        for name in feature_names:
+            weights.append(weights_dict.get(name, 0.0))
+        return torch.tensor(weights, dtype=torch.float32)
+
+    def _deep_merge(self, base: Dict, override: Dict) -> Dict:
+        """Deep merge override into base dictionary."""
+        result = base.copy()
+        for key, val in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+                result[key] = self._deep_merge(result[key], val)
+            else:
+                result[key] = val
+        return result
+
+
+# =============================================================================
+# Strategy Registration
+# =============================================================================
+
+def register_weighted_sum_strategies():
+    """Register weighted sum strategies with GeneticRegistry."""
+    from .strategies import GeneticRegistry
+
+    @GeneticRegistry.register_mutation("self_adaptive_es")
+    def self_adaptive_es_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
+        """Self-adaptive ES-style mutation for weighted sum genomes."""
+        if genome.mode != "weighted_sum":
+            # Fallback to expression tree mutation
+            mutation_fn = GeneticRegistry.get_mutation("guided_mutation")
+            return mutation_fn(genome, ctx)
+
+        mutator = WeightedSumMutator(ctx.config.heuristic_features)
+        return mutator.mutate(genome, ctx)
+
+    @GeneticRegistry.register_creation("weighted_sum_seeded")
+    def weighted_sum_seeded_creation(
+        ctx: EvolutionContext, count: int
+    ) -> List[Genome]:
+        """Create seed population for weighted sum evolution."""
+        seeder = WeightedSumSeeder(ctx.config.heuristic_features)
+        seeds = seeder.create_seed_population(count)
+
+        # If count > seed population size, generate more random genomes
+        while len(seeds) < count:
+            genome_id = f"random_ws_{uuid.uuid4().hex[:8]}"
+            seeds.append(seeder._create_wildcard_genome(genome_id))
+
+        return seeds[:count]
+
+    @GeneticRegistry.register_crossover("weighted_sum_crossover")
+    def weighted_sum_crossover(
+        parent1: Genome, parent2: Genome, ctx: EvolutionContext
+    ) -> Genome:
+        """Crossover for weighted sum genomes."""
+        if parent1.mode != "weighted_sum" or parent2.mode != "weighted_sum":
+            # Fallback to uniform parameter mix
+            crossover_fn = GeneticRegistry.get_crossover("uniform_parameter_mix")
+            return crossover_fn(parent1, parent2, ctx)
+
+        child = parent1.copy(new_id=f"child_{uuid.uuid4().hex[:8]}")
+
+        # Crossover weights (uniform selection per weight)
+        wt1 = parent1.weight_tensors
+        wt2 = parent2.weight_tensors
+        child_wt = child.weight_tensors
+
+        # Handle different group counts by using min
+        n_groups = min(wt1.n_groups, wt2.n_groups)
+
+        # Movement weights crossover
+        mask = torch.rand_like(child_wt.movement_weights[:n_groups]) > 0.5
+        child_wt.movement_weights[:n_groups] = torch.where(
+            mask, wt1.movement_weights[:n_groups], wt2.movement_weights[:n_groups]
+        )
+
+        # Deposit weights crossover
+        mask = torch.rand_like(child_wt.deposit_weights[:n_groups]) > 0.5
+        child_wt.deposit_weights[:n_groups] = torch.where(
+            mask, wt1.deposit_weights[:n_groups], wt2.deposit_weights[:n_groups]
+        )
+
+        # Ranking weights crossover
+        mask = torch.rand_like(child_wt.ranking_weights) > 0.5
+        child_wt.ranking_weights = torch.where(
+            mask, wt1.ranking_weights, wt2.ranking_weights
+        )
+
+        # Crossover biases
+        if random.random() > 0.5:
+            child_wt.movement_biases[:n_groups] = wt2.movement_biases[:n_groups]
+        if random.random() > 0.5:
+            child_wt.deposit_biases[:n_groups] = wt2.deposit_biases[:n_groups]
+        if random.random() > 0.5:
+            child_wt.ranking_bias = wt2.ranking_bias
+
+        # Crossover hyperparams
+        for key in child.params:
+            if key in parent2.params and random.random() > 0.5:
+                child.params[key] = parent2.params[key]
+
+        # Crossover group ratios
+        for key in child.group_ratios:
+            if key in parent2.group_ratios and random.random() > 0.5:
+                child.group_ratios[key] = parent2.group_ratios[key]
+
+        # Crossover mutation sigmas
+        if random.random() > 0.5:
+            child.mutation_sigmas = parent2.mutation_sigmas.copy()
+
+        child.normalize_ratios()
+        child.evaluated = False
+        child.clear_cache()
+        return child
+
+
+# Auto-register on import
+register_weighted_sum_strategies()

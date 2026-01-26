@@ -3,7 +3,7 @@ from typing import Dict, List, Callable
 
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ..types.genome import DEFAULT_PARAMS, Genome, SwarmParams
-from ..types.config import EvolutionContext
+from ..types.config import EvolutionContext, WeightTensors, MutationSigmas
 from .strategies import GeneticRegistry
 
 
@@ -15,12 +15,26 @@ class GenomeFactory:
     def create_population(self, count: int) -> List[Genome]:
         """
         Creates the initial population using the configured creation strategy.
+
+        For weighted_sum mode, uses 'weighted_sum_seeded' strategy.
+        For expression_tree mode, uses the configured creation strategy.
         """
         # Resolve count if needed (usually passed from engine which takes it from config)
         if count is None:
             count = self.config.map_elites.batch_size
 
-        strategy_name = self.config.genetic.creation_strategy
+        # Select strategy based on genome mode
+        if self.config.genome_mode == "weighted_sum":
+            # Use weighted sum seeded strategy for weighted_sum mode
+            strategy_name = "weighted_sum_seeded"
+            # Ensure the weighted_sum module is imported to register strategies
+            try:
+                from . import weighted_sum  # noqa: F401
+            except ImportError:
+                pass
+        else:
+            strategy_name = self.config.genetic.creation_strategy
+
         creation_fn = GeneticRegistry.get_creation(strategy_name)
 
         return creation_fn(self.context, count)

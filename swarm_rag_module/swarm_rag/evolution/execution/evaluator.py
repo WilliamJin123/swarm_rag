@@ -21,6 +21,7 @@ from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
 from .fitness import FitnessCalculator
 from ..types.genome import GenomeCompiler, Genome
+from ..types.config import HeuristicFeatureConfig
 from .shared_precompute import (
     SharedPrecomputeContext,
     prepare_shared_context,
@@ -44,9 +45,9 @@ class EvaluationTier:
 # More aggressive thresholds and fewer queries per tier for faster convergence
 # Expected: ~20% of genomes reach full evaluation
 DEFAULT_TIERS: List[EvaluationTier] = [
-    EvaluationTier(queries=3, threshold=0.15, name="quick_filter"),     # Filter completely broken
-    EvaluationTier(queries=8, threshold=0.30, name="poor_filter"),      # Filter poor performers
-    EvaluationTier(queries=20, threshold=0.45, name="mediocre_filter"), # Filter mediocre
+    EvaluationTier(queries=10, threshold=0.15, name="quick_filter"),     # Filter completely broken
+    EvaluationTier(queries=25, threshold=0.30, name="poor_filter"),      # Filter poor performers
+    EvaluationTier(queries=50, threshold=0.45, name="mediocre_filter"), # Filter mediocre
     EvaluationTier(queries=100_000, threshold=None, name="full"),       # Full eval for promising genomes
 ]
 
@@ -103,19 +104,31 @@ class PopulationEvaluator:
         device: Any = None,  # torch.device or str
         enable_shared_precompute: bool = True,
         enable_cross_genome_metric_batch: bool = True,
+        heuristic_features: HeuristicFeatureConfig = None,
     ):
         self.retriever = retriever
         self.evaluator = evaluator
         self.fitness_calc = fitness_calc
         self.queries = queries or []
         self.ground_truth = ground_truth or []
-        self.compiler = GenomeCompiler()
         self.concurrent_evaluations = concurrent_evaluations
         self.max_workers_per_retrieval = max_workers_per_retrieval
         self.track_decisions = track_decisions
         self.decision_sample_rate = decision_sample_rate
         self.tiers = tiers or DEFAULT_TIERS
         self.enable_adaptive = enable_adaptive
+
+        # Compilers for both modes
+        self._expression_compiler = GenomeCompiler()
+        self._weighted_sum_compiler = None
+        self._heuristic_features = heuristic_features
+
+        # Lazy-load weighted sum compiler when needed
+        if heuristic_features is not None:
+            self._init_weighted_sum_compiler(heuristic_features)
+
+        # Legacy compatibility
+        self.compiler = self._expression_compiler
 
         # Optimization flags
         self.enable_shared_precompute = enable_shared_precompute
@@ -135,6 +148,32 @@ class PopulationEvaluator:
 
         # Cached shared context (reused within a generation)
         self._shared_context: Optional[SharedPrecomputeContext] = None
+
+    def _init_weighted_sum_compiler(self, heuristic_features: HeuristicFeatureConfig):
+        """Initialize the weighted sum compiler with feature configuration."""
+        try:
+            from .weighted_sum import WeightedSumCompiler
+            self._weighted_sum_compiler = WeightedSumCompiler(heuristic_features)
+        except ImportError:
+            logger.warning("WeightedSumCompiler not available, weighted_sum genomes will fail")
+
+    def _get_compiler_for_genome(self, genome: Genome):
+        """Get the appropriate compiler for a genome based on its mode."""
+        if genome.mode == "weighted_sum":
+            if self._weighted_sum_compiler is None:
+                # Try to initialize with default features
+                if self._heuristic_features is None:
+                    self._heuristic_features = HeuristicFeatureConfig()
+                self._init_weighted_sum_compiler(self._heuristic_features)
+
+            if self._weighted_sum_compiler is None:
+                raise RuntimeError(
+                    f"Cannot compile weighted_sum genome {genome.id}: "
+                    "WeightedSumCompiler not available"
+                )
+            return self._weighted_sum_compiler
+        else:
+            return self._expression_compiler
 
     def _reset_stats(self):
         """Reset evaluation statistics for a new run."""
@@ -267,7 +306,7 @@ class PopulationEvaluator:
         batched_results = BatchedRetrievalResults()
 
         for genome_idx, genome in enumerate(genomes):
-            retriever_kwargs = self.compiler.compile(genome)
+            retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
             pool_size = retriever_kwargs.get('initial_pool_size', 30)
 
             # Get pre-computed initial pools for this pool size
@@ -395,7 +434,7 @@ class PopulationEvaluator:
                 genome, queries, ground_truth, shared_context
             )
 
-        retriever_kwargs = self.compiler.compile(genome)
+        retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
         pool_size = retriever_kwargs.get('initial_pool_size', 30)
         decision_tracker = self._create_decision_tracker()
 
@@ -484,7 +523,7 @@ class PopulationEvaluator:
         shared_context: SharedPrecomputeContext
     ) -> Tuple[int, str]:
         """Full evaluation using shared pre-computed context."""
-        retriever_kwargs = self.compiler.compile(genome)
+        retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
         pool_size = retriever_kwargs.get('initial_pool_size', 30)
         decision_tracker = self._create_decision_tracker()
 
@@ -754,7 +793,7 @@ class PopulationEvaluator:
         if not self.enable_adaptive:
             return self._evaluate_single_full(genome, queries, ground_truth)
 
-        retriever_kwargs = self.compiler.compile(genome)
+        retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
         decision_tracker = self._create_decision_tracker()
 
         start_time = time.time()
@@ -849,7 +888,7 @@ class PopulationEvaluator:
         ground_truth: List[List[Any]]
     ) -> Tuple[int, str]:
         """Full evaluation without adaptive sampling (fallback)."""
-        retriever_kwargs = self.compiler.compile(genome)
+        retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
         decision_tracker = self._create_decision_tracker()
 
         start_time = time.time()

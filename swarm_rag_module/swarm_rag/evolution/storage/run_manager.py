@@ -219,6 +219,9 @@ class RunManager:
             JSON-serializable representation
         """
         if is_dataclass(obj) and not isinstance(obj, type):
+            # Check if dataclass has its own to_dict method (like WeightTensors)
+            if hasattr(obj, 'to_dict') and callable(obj.to_dict):
+                return obj.to_dict()
             result = {}
             for field_name in obj.__dataclass_fields__:
                 value = getattr(obj, field_name)
@@ -228,6 +231,8 @@ class RunManager:
             return {k: RunManager._to_dict(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
             return [RunManager._to_dict(v) for v in obj]
+        elif isinstance(obj, torch.Tensor):
+            return obj.cpu().tolist()
         elif isinstance(obj, torch.device):
             return str(obj)
         elif hasattr(obj, '__dict__'):

@@ -201,13 +201,13 @@ def _batch_initial_search(
     return pools
 
 
-def get_unique_pool_sizes(genomes: List[Any], compiler: Any) -> List[int]:
+def get_unique_pool_sizes(genomes: List[Any], compiler: Any = None) -> List[int]:
     """
     Extract unique initial_pool_size values from a list of genomes.
 
     Args:
         genomes: List of genome objects
-        compiler: GenomeCompiler to extract parameters
+        compiler: Optional compiler (not used, kept for backward compatibility)
 
     Returns:
         Sorted list of unique pool sizes
@@ -216,8 +216,8 @@ def get_unique_pool_sizes(genomes: List[Any], compiler: Any) -> List[int]:
     default_pool_size = 30  # Default from SwarmRetriever._DEFAULT_PARAMS
 
     for genome in genomes:
-        params = compiler.compile(genome)
-        pool_size = params.get('initial_pool_size', default_pool_size)
+        # Get pool size directly from genome params (works for both modes)
+        pool_size = genome.params.get('initial_pool_size', default_pool_size)
         unique_sizes.add(pool_size)
 
     return sorted(unique_sizes)
