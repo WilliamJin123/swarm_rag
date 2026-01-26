@@ -797,9 +797,13 @@ class SwarmRetriever:
             # valid_unique_ids is now a tensor
             valid_unique_ids = valid_unique_ids_tensor
         else:
-            unique_neighbors_cpu = unique_neighbors_gpu.cpu().numpy()
-            unique_embs_np, valid_unique_ids_list = self._fetch_vectors_batch(unique_neighbors_cpu)
-            unique_embs = torch.tensor(unique_embs_np, device=device, dtype=torch.float32)
+            # Fallback: use tolist() instead of numpy for CPU transfer
+            unique_neighbors_list = unique_neighbors_gpu.tolist()
+            unique_embs_result, valid_unique_ids_list = self._fetch_vectors_batch(unique_neighbors_list)
+            if not isinstance(unique_embs_result, torch.Tensor):
+                unique_embs = torch.tensor(unique_embs_result, device=device, dtype=torch.float32)
+            else:
+                unique_embs = unique_embs_result.to(device=device, dtype=torch.float32)
             valid_unique_ids = torch.tensor(valid_unique_ids_list, device=device, dtype=torch.long)
 
         if valid_unique_ids.numel() == 0:
@@ -953,22 +957,21 @@ class SwarmRetriever:
             ).squeeze(1)
             new_locations_tensor[valid_agent_mask] = valid_chosen
 
-        # Single CPU transfer at the end for the final locations
-        new_locations = new_locations_tensor.cpu().numpy()
+        # Keep as tensor - no numpy conversion
+        new_locations = new_locations_tensor
 
-        # Compute pheromone updates
+        # Compute pheromone updates using tensor operations
         pheromone_updates = {}
         deposit_amount = 1.0
 
-        # Only process agents that actually moved
-        moved_mask = valid_agent_mask.cpu().numpy()
-        new_locs_list = new_locations.tolist()
+        if deposit_amount > self.PHEROMONE_EPSILON:
+            # Get unique nodes that agents moved to and count deposits
+            moved_nodes = new_locations[valid_agent_mask]
+            unique_nodes, counts = torch.unique(moved_nodes, return_counts=True)
 
-        for agent_idx in range(n_agents):
-            if moved_mask[agent_idx]:
-                next_node = new_locs_list[agent_idx]
-                if deposit_amount > self.PHEROMONE_EPSILON:
-                    pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit_amount
+            # Build pheromone updates dict (minimal CPU transfer)
+            for node, count in zip(unique_nodes.tolist(), counts.tolist()):
+                pheromone_updates[node] = deposit_amount * count
 
         return new_locations, pheromone_updates
 

@@ -24,7 +24,7 @@ class DummyVectorStore(VectorStore):
         if not isinstance(query_vec, torch.Tensor):
             query_vec = torch.as_tensor(query_vec, dtype=torch.float32)
         # Use query vector to seed selection for determinism
-        query_hash = hash(query_vec.numpy().tobytes()) % (2**32)
+        query_hash = hash(tuple(query_vec.flatten().tolist())) % (2**32)
         rng = random.Random(query_hash)
 
         results = []
