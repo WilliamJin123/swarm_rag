@@ -84,6 +84,10 @@ class GraphStore(ABC):
         """Returns a 1D tensor of neighbor node IDs"""
         pass
 
+    def get_neighbors_batch(self, node_ids: Any):
+        """Returns Tuple of (neighbors tensor, mask tensor) if GPU is available, otherwise (list of neighbor tensors, None)"""
+        pass
+
     @abstractmethod
     def contains(self, node_id: Any) -> bool:
         """Checks if a node exists in the graph"""
