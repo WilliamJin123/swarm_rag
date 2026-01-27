@@ -33,6 +33,12 @@ def _get_optimal_concurrency() -> int:
 # Dual-Mode Evolution Data Structures
 # =============================================================================
 
+def _get_default_device() -> str:
+    """Get device for default tensor creation."""
+    from ...utils.device import get_device
+    return get_device()
+
+
 @dataclass
 class WeightTensors:
     """
@@ -42,15 +48,15 @@ class WeightTensors:
     Used in weighted_sum genome mode for fast linear heuristic combinations.
     """
     # Movement: (n_groups, n_movement_features)
-    movement_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 4))
-    movement_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1))
+    movement_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 4, device=_get_default_device()))
+    movement_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1, device=_get_default_device()))
 
     # Deposit: (n_groups, n_deposit_features)
-    deposit_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 3))
-    deposit_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1))
+    deposit_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 3, device=_get_default_device()))
+    deposit_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1, device=_get_default_device()))
 
     # Ranking: shared across groups (n_ranking_features,)
-    ranking_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(2))
+    ranking_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(2, device=_get_default_device()))
     ranking_bias: float = 0.0
 
     def to_device(self, device: str) -> "WeightTensors":
@@ -87,14 +93,14 @@ class WeightTensors:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "WeightTensors":
+    def from_dict(cls, d: Dict[str, Any], device: str = "cuda") -> "WeightTensors":
         """Deserialize from dictionary."""
         return cls(
-            movement_weights=torch.tensor(d["movement_weights"], dtype=torch.float32),
-            movement_biases=torch.tensor(d["movement_biases"], dtype=torch.float32),
-            deposit_weights=torch.tensor(d["deposit_weights"], dtype=torch.float32),
-            deposit_biases=torch.tensor(d["deposit_biases"], dtype=torch.float32),
-            ranking_weights=torch.tensor(d["ranking_weights"], dtype=torch.float32),
+            movement_weights=torch.tensor(d["movement_weights"], dtype=torch.float32, device=device),
+            movement_biases=torch.tensor(d["movement_biases"], dtype=torch.float32, device=device),
+            deposit_weights=torch.tensor(d["deposit_weights"], dtype=torch.float32, device=device),
+            deposit_biases=torch.tensor(d["deposit_biases"], dtype=torch.float32, device=device),
+            ranking_weights=torch.tensor(d["ranking_weights"], dtype=torch.float32, device=device),
             ranking_bias=d["ranking_bias"],
         )
 

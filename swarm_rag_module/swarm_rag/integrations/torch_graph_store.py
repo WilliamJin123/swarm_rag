@@ -1,8 +1,8 @@
 """
-GPU-Accelerated Graph Store for SwarmRAG
+PyTorch-Native Graph Store
 
-Stores graph adjacency in CSR (Compressed Sparse Row) format on GPU.
-Provides batch neighbor lookups to eliminate CPU bottleneck in swarm traversal.
+Stores graph adjacency in CSR (Compressed Sparse Row) format using torch tensors.
+Works on both CPU and GPU - device is configurable.
 
 Memory footprint: ~65MB for prime dataset (129K nodes, 16M edges)
 vs ~17GB for dense format (99.6% reduction)
@@ -20,11 +20,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class GPUGraphStore(GraphStore):
+class TorchGraphStore(GraphStore):
     """
-    GPU-accelerated graph store using CSR (Compressed Sparse Row) format.
-
-    Also available as `TorchGraphStore` for device-agnostic code.
+    PyTorch-native graph store using CSR (Compressed Sparse Row) format.
 
     Stores adjacency in sparse format for massive memory savings while
     maintaining fast batch neighbor lookups via vectorized operations.
@@ -33,22 +31,13 @@ class GPUGraphStore(GraphStore):
     - CSR format: O(nodes + edges) memory vs O(nodes * max_degree) for dense
     - Batch neighbor lookup via vectorized gather operations
     - Dynamic max_degree per batch (not fixed)
-    - Compatible with existing GraphStore interface
-    - Works on both CPU and GPU with same code path
+    - Works on both CPU and GPU
 
     Usage:
-        # From adjacency dict (auto-detect device)
-        store = GPUGraphStore.from_adjacency_dict(adj_dict, device="auto")
-
-        # Force CPU
-        store = GPUGraphStore.from_adjacency_dict(adj_dict, device="cpu")
-
-        # From CSR matrix
-        store = GPUGraphStore.from_csr(csr_matrix)
-
-        # Batch operations
+        store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cuda")
+        store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cpu")
+        store = TorchGraphStore.from_csr(csr_matrix)
         neighbors, mask = store.get_neighbors_batch([1, 2, 3])
-        degrees = store.get_degrees_batch([1, 2, 3])
     """
 
     def __init__(
@@ -61,11 +50,10 @@ class GPUGraphStore(GraphStore):
         device: str = None
     ):
         """
-        Initialize GPU graph store with CSR components.
+        Initialize graph store with CSR components.
 
         Args:
             crow_indices: Row pointers tensor of shape (n_nodes + 1,)
-                         crow_indices[i] is the start index in col_indices for node i
             col_indices: Neighbor IDs tensor of shape (total_edges,)
             degree_tensor: Tensor of shape (n_nodes,) containing node degrees
             n_nodes: Total number of nodes in graph
@@ -92,7 +80,6 @@ class GPUGraphStore(GraphStore):
         else:
             self._degrees = torch.tensor(degree_tensor, device=self._device, dtype=torch.int32)
 
-        # Cache max_degree (computed once)
         self._max_degree = int(self._degrees.max().item()) if n_nodes > 0 else 0
 
         # Compute memory usage
@@ -100,12 +87,10 @@ class GPUGraphStore(GraphStore):
         col_mem = self._col_indices.numel() * self._col_indices.element_size()
         deg_mem = self._degrees.numel() * self._degrees.element_size()
         total_mem = crow_mem + col_mem + deg_mem
-
-        # Estimate dense memory for comparison
-        dense_mem = n_nodes * self._max_degree * 8  # int64 = 8 bytes
+        dense_mem = n_nodes * self._max_degree * 8
 
         logger.info(
-            f"GPUGraphStore (CSR) initialized: {n_nodes} nodes, {self._col_indices.numel()} edges, "
+            f"TorchGraphStore (CSR) initialized: {n_nodes} nodes, {self._col_indices.numel()} edges, "
             f"max_degree={self._max_degree}, avg_degree={avg_degree:.1f}, device={self._device}, "
             f"memory={total_mem / 1024 / 1024:.1f}MB (vs {dense_mem / 1024 / 1024:.0f}MB dense, "
             f"{100 * (1 - total_mem / dense_mem):.1f}% savings)"
@@ -117,9 +102,9 @@ class GPUGraphStore(GraphStore):
         adj_dict: Dict[int, List[int]],
         device: str = None,
         avg_degree: float = None
-    ) -> "GPUGraphStore":
+    ) -> "TorchGraphStore":
         """
-        Create GPUGraphStore from adjacency dictionary.
+        Create TorchGraphStore from adjacency dictionary.
 
         Args:
             adj_dict: Dictionary mapping node_id -> list of neighbor IDs
@@ -127,30 +112,25 @@ class GPUGraphStore(GraphStore):
             avg_degree: Average degree (computed if None)
 
         Returns:
-            GPUGraphStore instance
+            TorchGraphStore instance
         """
         if not adj_dict:
             raise ValueError("Cannot create store from empty adjacency dict")
 
-        # Determine dimensions
         nodes = sorted(adj_dict.keys())
         n_nodes = max(nodes) + 1 if nodes else 0
 
-        # Build CSR format directly using lists (then convert to tensors)
         indptr = [0] * (n_nodes + 1)
         total_edges = 0
 
-        # First pass: compute degrees and indptr
         for node_id in range(n_nodes):
             neighbors = adj_dict.get(node_id, [])
             deg = len(neighbors)
             indptr[node_id + 1] = indptr[node_id] + deg
             total_edges += deg
 
-        # Allocate indices list
         indices = [0] * total_edges
 
-        # Second pass: fill indices
         for node_id in range(n_nodes):
             neighbors = adj_dict.get(node_id, [])
             if neighbors:
@@ -158,7 +138,6 @@ class GPUGraphStore(GraphStore):
                 for i, neighbor in enumerate(neighbors):
                     indices[start + i] = neighbor
 
-        # Compute degrees
         degrees = [indptr[i + 1] - indptr[i] for i in range(n_nodes)]
 
         if avg_degree is None:
@@ -180,9 +159,9 @@ class GPUGraphStore(GraphStore):
         csr_matrix: sp.csr_matrix,
         device: str = None,
         avg_degree: float = None
-    ) -> "GPUGraphStore":
+    ) -> "TorchGraphStore":
         """
-        Create GPUGraphStore from scipy CSR sparse matrix.
+        Create TorchGraphStore from scipy CSR sparse matrix.
 
         Args:
             csr_matrix: Scipy CSR sparse adjacency matrix
@@ -190,15 +169,12 @@ class GPUGraphStore(GraphStore):
             avg_degree: Average degree (computed if None)
 
         Returns:
-            GPUGraphStore instance
+            TorchGraphStore instance
         """
         n_nodes = csr_matrix.shape[0]
 
-        # Convert CSR components directly to torch tensors
         indptr = torch.tensor(csr_matrix.indptr, dtype=torch.long)
         indices = torch.tensor(csr_matrix.indices, dtype=torch.long)
-
-        # Compute degrees from CSR structure
         degrees = indptr[1:] - indptr[:-1]
 
         if avg_degree is None:
@@ -215,25 +191,17 @@ class GPUGraphStore(GraphStore):
         )
 
     def get_neighbors(self, node_id: int) -> torch.Tensor:
-        """
-        Get neighbors for a single node (GraphStore interface).
-
-        Args:
-            node_id: Node ID to get neighbors for
-
-        Returns:
-            Tensor of neighbor node IDs
-        """
+        """Get neighbors for a single node. Returns tensor on device."""
         if node_id < 0 or node_id >= self._n_nodes:
-            return torch.tensor([], dtype=torch.long)
+            return torch.tensor([], dtype=torch.long, device=self._device)
 
         start = self._crow_indices[node_id].item()
         end = self._crow_indices[node_id + 1].item()
 
         if start == end:
-            return torch.tensor([], dtype=torch.long)
+            return torch.tensor([], dtype=torch.long, device=self._device)
 
-        return self._col_indices[start:end].cpu()
+        return self._col_indices[start:end]
 
     def get_neighbors_batch(
         self,
@@ -242,20 +210,16 @@ class GPUGraphStore(GraphStore):
         """
         Batch neighbor lookup for multiple nodes.
 
-        This is the key method for GPU acceleration - fetches all neighbors
-        for multiple nodes using vectorized CSR extraction.
-
         Args:
             node_ids: Tensor/list of node IDs
 
         Returns:
             Tuple of:
-                - neighbors: Tensor of shape (batch_size, batch_max_degree) with neighbor IDs
+                - neighbors: Tensor of shape (batch_size, batch_max_degree)
                   Padded with -1 for missing neighbors
                 - mask: Boolean tensor of shape (batch_size, batch_max_degree)
                   True where valid neighbors exist
         """
-        # Convert to tensor on device
         if isinstance(node_ids, torch.Tensor):
             ids = node_ids.to(device=self._device, dtype=torch.long)
         else:
@@ -269,29 +233,22 @@ class GPUGraphStore(GraphStore):
                 torch.empty((0, 0), device=self._device, dtype=torch.bool)
             )
 
-        # Handle out-of-bounds indices
         valid_mask = (ids >= 0) & (ids < self._n_nodes)
         clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
 
-        # Get row boundaries from CSR
         starts = self._crow_indices[clamped_ids]
         ends = self._crow_indices[clamped_ids + 1]
         lengths = ends - starts
-
-        # Zero out lengths for invalid nodes
         lengths = torch.where(valid_mask, lengths, torch.zeros_like(lengths))
 
-        # Compute batch_max_degree dynamically for this batch only
         batch_max_degree = int(lengths.max().item()) if batch_size > 0 else 0
 
         if batch_max_degree == 0:
-            # All nodes have zero degree or are out of bounds
             return (
                 torch.full((batch_size, 1), -1, device=self._device, dtype=torch.long),
                 torch.zeros((batch_size, 1), device=self._device, dtype=torch.bool)
             )
 
-        # Initialize output tensors
         neighbors = torch.full(
             (batch_size, batch_max_degree), -1,
             device=self._device, dtype=torch.long
@@ -301,30 +258,19 @@ class GPUGraphStore(GraphStore):
             device=self._device, dtype=torch.bool
         )
 
-        # Build indices for parallel extraction
-        # row_indices: which row each neighbor belongs to
-        # col_positions: position within that row
         total_neighbors = lengths.sum().item()
 
         if total_neighbors > 0:
-            # Fix: Convert lengths to int32 for repeat_interleave compatibility
-            # torch.repeat_interleave requires int32/int64, but int64 can cause issues on some platforms
             lengths_int = lengths.int()
 
-            # Create row indices via repeat_interleave
             row_indices = torch.repeat_interleave(
                 torch.arange(batch_size, device=self._device),
                 lengths_int
             )
 
-            # Create column positions for each row
-            # This creates [0,1,2,...,deg[0]-1, 0,1,2,...,deg[1]-1, ...]
             offsets = torch.zeros(total_neighbors, device=self._device, dtype=torch.long)
             cumsum = torch.cumsum(lengths, dim=0)
-            # Mark start of each new row - guard against out-of-bounds indexing
-            # This happens when trailing rows have zero length (invalid nodes)
             if batch_size > 1:
-                # Only set offsets where cumsum index is within bounds
                 valid_offset_mask = cumsum[:-1] < total_neighbors
                 if valid_offset_mask.any():
                     valid_cumsum_indices = cumsum[:-1][valid_offset_mask]
@@ -332,21 +278,16 @@ class GPUGraphStore(GraphStore):
                     offsets[valid_cumsum_indices] = valid_lengths
             col_positions = torch.arange(total_neighbors, device=self._device) - torch.cumsum(offsets, dim=0)
 
-            # Gather all neighbor indices at once
-            # Build flat indices into col_indices
             flat_starts = torch.repeat_interleave(starts, lengths_int)
             flat_indices = flat_starts + col_positions
 
-            # Bounds check: ensure flat_indices don't exceed col_indices size
             max_col_idx = self._col_indices.shape[0] - 1
             flat_indices = torch.clamp(flat_indices, 0, max_col_idx)
 
             flat_neighbors = self._col_indices[flat_indices]
 
-            # Bounds check: ensure row/col positions are valid for output tensor
             col_positions = torch.clamp(col_positions, 0, batch_max_degree - 1)
 
-            # Scatter into output
             neighbors[row_indices, col_positions] = flat_neighbors
             mask[row_indices, col_positions] = True
 
@@ -356,42 +297,22 @@ class GPUGraphStore(GraphStore):
         self,
         node_ids: Union[List[int], torch.Tensor]
     ) -> torch.Tensor:
-        """
-        Batch degree lookup for multiple nodes.
-
-        Args:
-            node_ids: Tensor/list of node IDs
-
-        Returns:
-            Tensor of degrees for each node
-        """
-        # Convert to tensor on device
+        """Batch degree lookup for multiple nodes."""
         if isinstance(node_ids, torch.Tensor):
             ids = node_ids.to(device=self._device, dtype=torch.long)
         else:
             ids = torch.tensor(node_ids, device=self._device, dtype=torch.long)
 
-        # Handle out-of-bounds
         valid_mask = (ids >= 0) & (ids < self._n_nodes)
         clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
 
         degrees = self._degrees[clamped_ids]
-
-        # Set out-of-bounds to 0
         degrees = torch.where(valid_mask, degrees, torch.zeros_like(degrees))
 
         return degrees
 
     def get_degree(self, node_id: int) -> int:
-        """
-        Get degree for a single node.
-
-        Args:
-            node_id: Node ID
-
-        Returns:
-            Node degree (0 if out of bounds)
-        """
+        """Get degree for a single node."""
         if node_id < 0 or node_id >= self._n_nodes:
             return 0
         return int(self._degrees[node_id].item())
@@ -403,65 +324,6 @@ class GPUGraphStore(GraphStore):
     def get_avg_degree(self) -> float:
         """Return average graph degree."""
         return self._avg_degree
-
-    # ===== Tensor-native interface methods (GPU-optimized) =====
-
-    def get_neighbors_tensor(
-        self,
-        node_id: int,
-        device: str = None
-    ) -> torch.Tensor:
-        """
-        Get neighbors as tensor on device.
-
-        GPU-optimized: keeps data on GPU when possible.
-
-        Args:
-            node_id: Node to get neighbors for
-            device: Target device (None uses store's device)
-
-        Returns:
-            1D tensor of neighbor IDs on device
-        """
-        target_device = device or self._device
-
-        if node_id < 0 or node_id >= self._n_nodes:
-            return torch.tensor([], device=target_device, dtype=torch.long)
-
-        start = self._crow_indices[node_id].item()
-        end = self._crow_indices[node_id + 1].item()
-
-        if start == end:
-            return torch.tensor([], device=target_device, dtype=torch.long)
-
-        return self._col_indices[start:end].to(target_device)
-
-    def get_neighbors_batch_tensor(
-        self,
-        node_ids: Union[Sequence[int], torch.Tensor],
-        device: str = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Batch neighbor lookup returning tensors.
-
-        Delegates to the optimized get_neighbors_batch method.
-
-        Args:
-            node_ids: Sequence or tensor of node IDs
-            device: Target device (None uses store's device)
-
-        Returns:
-            Tuple of (neighbors tensor, valid mask tensor)
-        """
-        target_device = device or self._device
-        neighbors, mask = self.get_neighbors_batch(node_ids)
-        if device and device != self._device:
-            return neighbors.to(target_device), mask.to(target_device)
-        return neighbors, mask
-
-    def supports_tensor_ops(self) -> bool:
-        """Check if this store has optimized tensor operations."""
-        return True
 
     @property
     def n_nodes(self) -> int:
@@ -483,16 +345,8 @@ class GPUGraphStore(GraphStore):
         """Check if using GPU."""
         return self._device == "cuda"
 
-    def to(self, device: str) -> "GPUGraphStore":
-        """
-        Move store to different device.
-
-        Args:
-            device: Target device
-
-        Returns:
-            Self for chaining
-        """
+    def to(self, device: str) -> "TorchGraphStore":
+        """Move store to different device."""
         self._crow_indices = self._crow_indices.to(device)
         self._col_indices = self._col_indices.to(device)
         self._degrees = self._degrees.to(device)
@@ -500,12 +354,7 @@ class GPUGraphStore(GraphStore):
         return self
 
     def close(self):
-        """
-        Release GPU memory held by this store.
-
-        Deletes CSR tensors (crow_indices, col_indices, degrees) and clears CUDA cache.
-        Safe to call multiple times.
-        """
+        """Release memory held by this store."""
         if hasattr(self, '_crow_indices') and self._crow_indices is not None:
             del self._crow_indices
             self._crow_indices = None
@@ -521,18 +370,14 @@ class GPUGraphStore(GraphStore):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        logger.debug("GPUGraphStore resources released")
+        logger.debug("TorchGraphStore resources released")
 
     def __del__(self):
-        """Destructor to ensure GPU memory is released."""
+        """Destructor to ensure memory is released."""
         try:
             self.close()
         except Exception:
-            # Ignore errors during interpreter shutdown
             pass
 
 
-# Device-agnostic alias (GPUGraphStore works on both CPU and GPU)
-TorchGraphStore = GPUGraphStore
-
-__all__ = ['GPUGraphStore', 'TorchGraphStore']
+__all__ = ['TorchGraphStore']

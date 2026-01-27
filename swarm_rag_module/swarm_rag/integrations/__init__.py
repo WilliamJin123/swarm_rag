@@ -1,5 +1,5 @@
-# GPU acceleration imports (lazy-loaded for backward compatibility)
-from .gpu_vector_store import GPUVectorStore
-from .gpu_graph_store import GPUGraphStore
+# PyTorch-based stores
+from .torch_vector_store import TorchVectorStore
+from .torch_graph_store import TorchGraphStore
 
-__all__ = ['GPUVectorStore', 'GPUGraphStore']
+__all__ = ['TorchVectorStore', 'TorchGraphStore']

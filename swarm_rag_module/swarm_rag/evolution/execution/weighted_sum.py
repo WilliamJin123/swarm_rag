@@ -154,7 +154,7 @@ class WeightedSumCompiler:
         """Create movement strategy function for a specific group."""
         # Get weights for this group (clamp to valid index)
         idx = min(group_idx, wt.n_groups - 1)
-        weights = wt.movement_weights[idx]  # (n_features,)
+        weights = wt.movement_weights[idx]  # (n_features,) - already on correct device
         bias = wt.movement_biases[idx].item()
 
         feature_names = self.feature_config.movement
@@ -174,7 +174,7 @@ class WeightedSumCompiler:
     ) -> Callable[[HeuristicContext], torch.Tensor]:
         """Create deposit strategy function for a specific group."""
         idx = min(group_idx, wt.n_groups - 1)
-        weights = wt.deposit_weights[idx]
+        weights = wt.deposit_weights[idx]  # Already on correct device
         bias = wt.deposit_biases[idx].item()
 
         feature_names = self.feature_config.deposit
@@ -541,14 +541,16 @@ class WeightedSumSeeder:
     Creates baseline + variants + perturbed + wildcard genomes.
     """
 
-    def __init__(self, feature_config: HeuristicFeatureConfig):
+    def __init__(self, feature_config: HeuristicFeatureConfig, device: str = "cuda"):
         """
         Initialize seeder with feature configuration.
 
         Args:
             feature_config: Configuration specifying feature dimensions
+            device: Target device for tensors ("cuda" or "cpu")
         """
         self.feature_config = feature_config
+        self.device = device
         self.n_movement_features = len(feature_config.movement)
         self.n_deposit_features = len(feature_config.deposit)
         self.n_ranking_features = len(feature_config.ranking)
@@ -594,7 +596,7 @@ class WeightedSumSeeder:
         # Start with baseline
         config = self._deep_merge(BASELINE_CONFIG.copy(), variant.get("changes", {}))
 
-        return self._config_to_genome(config, genome_id)
+        return self._config_to_genome(config, genome_id, device=self.device)
 
     def _create_perturbed_genome(self, genome_id: str) -> Genome:
         """Create genome by perturbing baseline +/- 15%."""
@@ -620,7 +622,7 @@ class WeightedSumSeeder:
                     perturbed_config[key] = val * random.uniform(0.85, 1.15)
 
         merged = self._deep_merge(config, perturbed_config)
-        return self._config_to_genome(merged, genome_id)
+        return self._config_to_genome(merged, genome_id, device=self.device)
 
     def _create_wildcard_genome(self, genome_id: str) -> Genome:
         """Create genome with random weights but baseline hyperparams."""
@@ -636,9 +638,9 @@ class WeightedSumSeeder:
             "ranking_weights": {f: random.uniform(0.0, 1.0)
                                for f in self.feature_config.ranking},
         }
-        return self._config_to_genome(config, genome_id)
+        return self._config_to_genome(config, genome_id, device=self.device)
 
-    def _config_to_genome(self, config: Dict, genome_id: str, device: str = "cpu") -> Genome:
+    def _config_to_genome(self, config: Dict, genome_id: str, device: str = "cuda") -> Genome:
         """Convert a config dictionary to a Genome object.
 
         Args:
@@ -746,7 +748,8 @@ def register_weighted_sum_strategies():
         ctx: EvolutionContext, count: int
     ) -> List[Genome]:
         """Create seed population for weighted sum evolution."""
-        seeder = WeightedSumSeeder(ctx.config.heuristic_features)
+        device = ctx.device  # Get device from context (cuda or cpu)
+        seeder = WeightedSumSeeder(ctx.config.heuristic_features, device=device)
         seeds = seeder.create_seed_population(count)
 
         # If count > seed population size, generate more random genomes

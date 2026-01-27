@@ -408,9 +408,11 @@ class SwarmRetriever:
         # Pre-compose ranking strategy
         ranking_func = self._compose_strategy(ranking_strategies, "ranking")
 
-        # Initial search with caching
-        search_res = self.vector_store.search(query_vec, limit=initial_pool_size)
-        valid_pool = [r['id'] for r in search_res if self.graph_store.contains(r['id'])]
+        # Initial search with caching - now returns tensors
+        search_ids, search_scores = self.vector_store.search(query_vec, limit=initial_pool_size)
+        # Filter to nodes that exist in graph
+        search_ids_list = search_ids.tolist() if isinstance(search_ids, torch.Tensor) else list(search_ids)
+        valid_pool = [nid for nid in search_ids_list if self.graph_store.contains(nid)]
         if not valid_pool: return []
 
         drop_zone = valid_pool[:start_subset]
@@ -423,7 +425,7 @@ class SwarmRetriever:
 
         # Spawn Agents (Weigh "better" nodes higher)
         weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
-        agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long)
+        agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long, device=self._device)
         agent_trajectories = [[loc.item()] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
 
@@ -647,8 +649,22 @@ class SwarmRetriever:
         if len(valid_ids) == 0:
             return None
 
-        # Prefetch Vectorization Metadata
-        p_vals = torch.tensor([query_pheromones.get(nid, 0.0) for nid in valid_ids], dtype=torch.float32)
+        # Prefetch Vectorization Metadata using tensor indexing for pheromones
+        # Build pheromone lookup tensor if we have pheromones
+        if query_pheromones:
+            max_pheromone_id = max(query_pheromones.keys()) + 1
+            # Ensure we can index all valid_ids
+            valid_ids_tensor = torch.tensor(valid_ids, device=candidate_matrix.device, dtype=torch.long)
+            max_needed = int(valid_ids_tensor.max().item()) + 1 if valid_ids_tensor.numel() > 0 else 0
+            lookup_size = max(max_pheromone_id, max_needed)
+            pheromone_lookup = torch.zeros(lookup_size, dtype=torch.float32, device=candidate_matrix.device)
+            for nid, val in query_pheromones.items():
+                if nid < lookup_size:
+                    pheromone_lookup[nid] = val
+            # Pure tensor indexing
+            p_vals = pheromone_lookup[valid_ids_tensor]
+        else:
+            p_vals = torch.zeros(len(valid_ids), dtype=torch.float32, device=candidate_matrix.device)
 
         # Safe degree fetching using Two-Phase Fetch for degrees
         degrees = self._fetch_degrees_batch(valid_ids)
@@ -674,10 +690,10 @@ class SwarmRetriever:
         if decision_tracker is not None and decision_tracker.enabled:
             heuristic_scores = self._capture_heuristic_scores(ctx)
 
-        # Ensure tensor
+        # Ensure tensor on correct device
         if not isinstance(total_scores, torch.Tensor):
-            total_scores = torch.tensor(total_scores, dtype=torch.float32)
-        total_scores = torch.atleast_1d(torch.maximum(total_scores, torch.tensor(0.001)))
+            total_scores = torch.tensor(total_scores, dtype=torch.float32, device=candidate_matrix.device)
+        total_scores = torch.atleast_1d(torch.clamp(total_scores, min=0.001))
 
         # Ensure total_scores matches valid_ids length (broadcast scalar if needed)
         if len(total_scores) == 1 and len(valid_ids) > 1:
@@ -791,15 +807,14 @@ class SwarmRetriever:
         # Batch fetch embeddings for all unique neighbors
         # Pass GPU tensor directly - no CPU transfer needed
         if hasattr(self.vector_store, 'fetch_batch_gpu') and self._use_gpu:
-            unique_embs, valid_unique_ids_tensor = self.vector_store.fetch_batch_gpu(unique_neighbors_gpu)
+            unique_embs, valid_unique_ids = self.vector_store.fetch_batch_gpu(unique_neighbors_gpu)
             if not isinstance(unique_embs, torch.Tensor):
                 unique_embs = torch.tensor(unique_embs, device=device, dtype=torch.float32)
-            # valid_unique_ids is now a tensor
-            valid_unique_ids = valid_unique_ids_tensor
+            if not isinstance(valid_unique_ids, torch.Tensor):
+                valid_unique_ids = torch.tensor(valid_unique_ids, device=device, dtype=torch.long)
         else:
-            # Fallback: use tolist() instead of numpy for CPU transfer
-            unique_neighbors_list = unique_neighbors_gpu.tolist()
-            unique_embs_result, valid_unique_ids_list = self._fetch_vectors_batch(unique_neighbors_list)
+            # Pass tensor directly to _fetch_vectors_batch (it handles conversion internally)
+            unique_embs_result, valid_unique_ids_list = self._fetch_vectors_batch(unique_neighbors_gpu)
             if not isinstance(unique_embs_result, torch.Tensor):
                 unique_embs = torch.tensor(unique_embs_result, device=device, dtype=torch.float32)
             else:
@@ -969,9 +984,12 @@ class SwarmRetriever:
             moved_nodes = new_locations[valid_agent_mask]
             unique_nodes, counts = torch.unique(moved_nodes, return_counts=True)
 
-            # Build pheromone updates dict (minimal CPU transfer)
-            for node, count in zip(unique_nodes.tolist(), counts.tolist()):
-                pheromone_updates[node] = deposit_amount * count
+            # Build pheromone updates dict - single CPU transfer at boundary
+            # Multiply on GPU before transfer to minimize operations
+            deposits = (deposit_amount * counts.float()).tolist()
+            unique_nodes_cpu = unique_nodes.tolist()
+            for node, dep in zip(unique_nodes_cpu, deposits):
+                pheromone_updates[node] = dep
 
         return new_locations, pheromone_updates
 
@@ -1056,6 +1074,10 @@ class SwarmRetriever:
         vectors_matrix, valid_ids = self._fetch_vectors_batch(unique_visited)
         results = []
 
+        # Ensure query_vec is on the same device as the vectors
+        if vectors_matrix.numel() > 0:
+            query_vec = query_vec.to(device=vectors_matrix.device)
+
         # Iterate over valid vectors
         for i, node_id in enumerate(valid_ids):
             vec = vectors_matrix[i]
@@ -1116,34 +1138,43 @@ class SwarmRetriever:
             self.degree_cache.set(node_id, len(neighbors))
         return neighbors
     
-    def _fetch_vectors_batch(self, node_ids: Sequence[int]) -> Tuple[torch.Tensor, List[int]]:
+    def _fetch_vectors_batch(self, node_ids: Union[Sequence[int], torch.Tensor]) -> Tuple[torch.Tensor, List[int]]:
         """
         Fetches vectors efficiently using Two-Phase Fetch (Read Locked -> Fetch Unlocked -> Write Locked).
+
+        Args:
+            node_ids: Sequence or tensor of node IDs
+
+        Returns:
+            Tuple of (vectors tensor, valid_ids list)
         """
-        # Convert node_ids to list if it's a tensor
+        # Convert to list for cache lookups (dict keys must be hashable)
         if isinstance(node_ids, torch.Tensor):
-            node_ids = node_ids.tolist()
+            node_ids_list = node_ids.tolist()
+        else:
+            node_ids_list = list(node_ids)
 
         if not self.cache_vectors:
+            # Pass tensor directly to fetch_batch if it was a tensor
             matrix = self.vector_store.fetch_batch(node_ids)
             if not isinstance(matrix, torch.Tensor):
                 matrix = torch.as_tensor(matrix, dtype=torch.float32)
             valid_mask = ~torch.isnan(matrix).any(dim=1)
 
             if torch.all(valid_mask):
-                return matrix, list(node_ids)
+                return matrix, node_ids_list
 
             filtered_matrix = matrix[valid_mask]
-            filtered_ids = [nid for i, nid in enumerate(node_ids) if valid_mask[i]]
+            filtered_ids = [nid for i, nid in enumerate(node_ids_list) if valid_mask[i]]
             return filtered_matrix, filtered_ids
 
-        raw_vecs = [None] * len(node_ids)
+        raw_vecs = [None] * len(node_ids_list)
         missing_indices = []
         missing_ids = []
 
         # Phase 1: Read (Locked)
         with self._doc_lock:
-            for i, node_id in enumerate(node_ids):
+            for i, node_id in enumerate(node_ids_list):
                 cached_vec = self.doc_cache.get(node_id)
                 if cached_vec is not None:
                     raw_vecs[i] = cached_vec
@@ -1165,10 +1196,10 @@ class SwarmRetriever:
                         original_idx = missing_indices[i]
                         vec = fetched_matrix[i]
 
-                        self.doc_cache.set(node_ids[original_idx], vec)
+                        self.doc_cache.set(node_ids_list[original_idx], vec)
                         raw_vecs[original_idx] = vec
 
-        valid_data = [(nid, v) for nid, v in zip(node_ids, raw_vecs) if v is not None]
+        valid_data = [(nid, v) for nid, v in zip(node_ids_list, raw_vecs) if v is not None]
 
         if not valid_data:
             return torch.tensor([]), []
@@ -1407,6 +1438,9 @@ class SwarmRetriever:
         if len(valid_ids) == 0:
             return []
 
+        # Ensure query_vec is on the same device as the vectors
+        query_vec = query_vec.to(device=vectors_matrix.device)
+
         # Compute base semantic scores vectorized
         query_norm = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
         base_scores = torch.matmul(vectors_matrix, query_norm)
@@ -1454,19 +1488,23 @@ class SwarmRetriever:
         # Check if vector store supports batch search
         if hasattr(self.vector_store, 'search_batch'):
             try:
-                results = self.vector_store.search_batch(query_vecs, pool_size)
-                return [
-                    [r['id'] for r in res if self.graph_store.contains(r['id'])]
-                    for res in results
-                ]
+                # search_batch now returns (ids_tensor, scores_tensor) with shape (n_queries, limit)
+                batch_ids, batch_scores = self.vector_store.search_batch(query_vecs, pool_size)
+                all_results = []
+                for i in range(batch_ids.shape[0]):
+                    ids_list = batch_ids[i].tolist()
+                    valid_ids = [nid for nid in ids_list if self.graph_store.contains(nid)]
+                    all_results.append(valid_ids)
+                return all_results
             except Exception as e:
                 logger.debug(f"Batch search failed, falling back to sequential: {e}")
 
-        # Fall back to sequential
+        # Fall back to sequential - search() now returns (ids, scores) tensors
         all_results = []
         for vec in query_vecs:
-            search_res = self.vector_store.search(vec, limit=pool_size)
-            valid_ids = [r['id'] for r in search_res if self.graph_store.contains(r['id'])]
+            search_ids, search_scores = self.vector_store.search(vec, limit=pool_size)
+            ids_list = search_ids.tolist() if isinstance(search_ids, torch.Tensor) else list(search_ids)
+            valid_ids = [nid for nid in ids_list if self.graph_store.contains(nid)]
             all_results.append(valid_ids)
 
         return all_results
@@ -1977,7 +2015,8 @@ class SwarmRetriever:
         weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
         agent_locations = torch.tensor(
             py_rng.choices(drop_zone, weights=weights, k=n_agents),
-            dtype=torch.long
+            dtype=torch.long,
+            device=self._device
         )
         agent_trajectories = [[loc.item()] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
@@ -2122,7 +2161,7 @@ class SwarmRetriever:
 
         # Spawn agents
         weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
-        agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long)
+        agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long, device=self._device)
         agent_trajectories = [[loc.item()] for loc in agent_locations]
         query_pheromones = self.base_pheromones.copy()
 

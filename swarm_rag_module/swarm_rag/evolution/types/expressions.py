@@ -35,7 +35,8 @@ class ExpressionNode:
             elif self.value == 'sqrt':
                 return torch.sqrt(torch.abs(arg_tensor))
             elif self.value == 'exp':
-                return torch.exp(torch.minimum(arg_tensor, torch.tensor(10.0)))  # Prevent overflow
+                # Prevent overflow - use scalar to avoid device mismatch
+                return torch.exp(torch.clamp(arg_tensor, max=10.0))
             elif self.value == 'log':
                 return torch.log(torch.abs(arg_tensor) + 1e-8)
             elif self.value == 'abs':
@@ -69,15 +70,17 @@ class ExpressionNode:
                 return left * right
             elif self.value == '/':
                 right_tensor = torch.as_tensor(right) if not isinstance(right, torch.Tensor) else right
-                denom = torch.where(right_tensor == 0, torch.tensor(1e-8), right_tensor) if isinstance(right_tensor, torch.Tensor) else (right if right != 0 else 1e-8)
+                # Use where with scalar fill to avoid device mismatch
+                denom = torch.where(right_tensor == 0, 1e-8, right_tensor) if isinstance(right_tensor, torch.Tensor) else (right if right != 0 else 1e-8)
                 return left / denom
             elif self.value == 'max':
-                left_tensor = left if isinstance(left, torch.Tensor) else torch.tensor(float(left))
-                right_tensor = right if isinstance(right, torch.Tensor) else torch.tensor(float(right))
+                # Ensure tensors on same device - use left_tensor's device as reference
+                left_tensor = left if isinstance(left, torch.Tensor) else torch.as_tensor(left)
+                right_tensor = right if isinstance(right, torch.Tensor) else torch.tensor(float(right), device=left_tensor.device)
                 return torch.maximum(left_tensor, right_tensor)
             elif self.value == 'min':
-                left_tensor = left if isinstance(left, torch.Tensor) else torch.tensor(float(left))
-                right_tensor = right if isinstance(right, torch.Tensor) else torch.tensor(float(right))
+                left_tensor = left if isinstance(left, torch.Tensor) else torch.as_tensor(left)
+                right_tensor = right if isinstance(right, torch.Tensor) else torch.tensor(float(right), device=left_tensor.device)
                 return torch.minimum(left_tensor, right_tensor)
 
         return 0.0

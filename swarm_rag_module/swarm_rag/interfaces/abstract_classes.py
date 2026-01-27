@@ -6,86 +6,98 @@ import torch
 Matrix: TypeAlias = torch.Tensor  # Shape (N, D)
 
 class VectorStore(ABC):
-    """Abstract contract for Vector Databases (LanceDB, Chroma, Faiss, In-Memory)"""
+    """
+    Abstract contract for Vector Databases (LanceDB, Chroma, Faiss, In-Memory).
+
+    All methods are tensor-native and return data on the store's configured device.
+    Callers are responsible for calling .cpu() if they need CPU data.
+    """
 
     @abstractmethod
-    def search(self, query_vec: torch.Tensor, limit: int) -> Sequence[Dict[str, Any]]:
-        """Returns sequence of dicts: [{'id': ..., 'score': ...}, ...]"""
-        pass
-
-    @abstractmethod
-    def fetch_batch(self, node_ids: Sequence[Any]) -> Matrix:
-        """Returns a 2D matrix of shape (N, D). NaN for invalid indices."""
-        pass
-
-    @abstractmethod
-    def fetch(self, node_ids: Any) -> Optional[torch.Tensor]:
-        """Returns single vector"""
-        pass
-
-    # ===== Tensor-native interface methods (optional, for GPU acceleration) =====
-
-    def search_tensor(
-        self,
-        query_vec: torch.Tensor,
-        limit: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def search(self, query_vec: torch.Tensor, limit: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        GPU-native search returning tensors instead of dicts.
+        Find top-k most similar documents.
 
         Args:
-            query_vec: Query vector (tensor)
-            limit: Maximum results to return
+            query_vec: Query embedding vector
+            limit: Maximum number of results to return
 
         Returns:
-            Tuple of (ids_tensor, scores_tensor) on device
-
-        Default implementation converts from search() result.
+            Tuple of (ids_tensor, scores_tensor) on device, sorted by score descending
         """
-        results = self.search(query_vec, limit)
-        ids = torch.tensor([r['id'] for r in results], dtype=torch.long)
-        scores = torch.tensor([r['score'] for r in results], dtype=torch.float32)
-        return ids, scores
+        pass
 
-    def fetch_batch_tensor(
-        self,
-        node_ids: Union[Sequence[Any], torch.Tensor],
-        device: str = None
-    ) -> torch.Tensor:
+    @abstractmethod
+    def search_batch(self, query_vecs: torch.Tensor, limit: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Fetch embeddings as tensor on specified device.
+        Batch search for multiple queries.
+
+        Args:
+            query_vecs: Query vectors of shape (n_queries, dim)
+            limit: Maximum results per query
+
+        Returns:
+            Tuple of (ids_tensor, scores_tensor) with shape (n_queries, limit)
+        """
+        pass
+
+    @abstractmethod
+    def fetch_batch(self, node_ids: Union[Sequence[Any], torch.Tensor]) -> Matrix:
+        """
+        Fetch embeddings for multiple documents.
 
         Args:
             node_ids: Sequence or tensor of node IDs
-            device: Target device (None for auto-detect)
 
         Returns:
             Tensor of shape (N, D) on device. NaN for invalid indices.
-
-        Default implementation converts from fetch_batch() result.
         """
-        from ..utils.device import get_device
+        pass
 
-        if isinstance(node_ids, torch.Tensor):
-            node_ids = node_ids.cpu().tolist()
+    @abstractmethod
+    def fetch(self, node_id: Any) -> Optional[torch.Tensor]:
+        """
+        Fetch embedding for a single document.
 
-        result = self.fetch_batch(node_ids)
-        return result.to(device or get_device())
-
-    def supports_tensor_ops(self) -> bool:
-        """Check if this store has optimized tensor operations."""
-        return False
+        Returns:
+            Tensor on device, or None if not found
+        """
+        pass
     
 class GraphStore(ABC):
-    """Abstract contract for Graph Structures (NetworkX, PyG, Neo4j)"""
+    """
+    Abstract contract for Graph Structures (NetworkX, PyG, Neo4j).
+
+    All methods are tensor-native and return data on the store's configured device.
+    Callers are responsible for calling .cpu() if they need CPU data.
+    """
 
     @abstractmethod
     def get_neighbors(self, node_id: Any) -> torch.Tensor:
-        """Returns a 1D tensor of neighbor node IDs"""
+        """
+        Get neighbors for a single node.
+
+        Returns:
+            1D tensor of neighbor IDs on device
+        """
         pass
 
-    def get_neighbors_batch(self, node_ids: Any):
-        """Returns Tuple of (neighbors tensor, mask tensor) if GPU is available, otherwise (list of neighbor tensors, None)"""
+    @abstractmethod
+    def get_neighbors_batch(
+        self,
+        node_ids: Union[Sequence[int], torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Batch neighbor lookup for multiple nodes.
+
+        Args:
+            node_ids: Sequence or tensor of node IDs
+
+        Returns:
+            Tuple of:
+                - neighbors: 2D tensor (batch, max_degree) padded with -1
+                - mask: Boolean tensor indicating valid neighbors
+        """
         pass
 
     @abstractmethod
@@ -98,80 +110,17 @@ class GraphStore(ABC):
         """Returns the average degree of the graph"""
         return self.avg_degree
 
-    # ===== Tensor-native interface methods (optional, for GPU acceleration) =====
+    @abstractmethod
+    def get_degree(self, node_id: Any) -> int:
+        """Returns the degree (number of neighbors) of a single node."""
+        pass
 
-    def get_neighbors_tensor(
+    def get_degrees_batch(
         self,
-        node_id: int,
-        device: str = None
+        node_ids: Union[Sequence[int], torch.Tensor]
     ) -> torch.Tensor:
-        """
-        Get neighbors as tensor on device.
-
-        Args:
-            node_id: Node to get neighbors for
-            device: Target device (None for auto-detect)
-
-        Returns:
-            1D tensor of neighbor IDs on device
-
-        Default implementation converts from get_neighbors() result.
-        """
-        from ..utils.device import get_device
-
-        neighbors = self.get_neighbors(node_id)
-        return neighbors.to(device or get_device())
-
-    def get_neighbors_batch_tensor(
-        self,
-        node_ids: Union[Sequence[int], torch.Tensor],
-        device: str = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Batch neighbor lookup returning tensors.
-
-        Args:
-            node_ids: Sequence or tensor of node IDs
-            device: Target device (None for auto-detect)
-
-        Returns:
-            Tuple of:
-                - neighbors: 2D tensor (batch, max_degree) padded with -1
-                - mask: Boolean tensor indicating valid neighbors
-
-        Default implementation calls get_neighbors() for each node.
-        """
-        from ..utils.device import get_device
-
-        target_device = device or get_device()
-
-        if isinstance(node_ids, torch.Tensor):
-            node_ids = node_ids.cpu().tolist()
-
-        all_neighbors = [self.get_neighbors(nid) for nid in node_ids]
-        max_degree = max(len(n) for n in all_neighbors) if all_neighbors else 0
-
-        if max_degree == 0:
-            batch_size = len(node_ids)
-            return (
-                torch.full((batch_size, 1), -1, device=target_device, dtype=torch.long),
-                torch.zeros((batch_size, 1), device=target_device, dtype=torch.bool)
-            )
-
-        batch_size = len(node_ids)
-        neighbors = torch.full((batch_size, max_degree), -1, device=target_device, dtype=torch.long)
-        mask = torch.zeros((batch_size, max_degree), device=target_device, dtype=torch.bool)
-
-        for i, n in enumerate(all_neighbors):
-            if len(n) > 0:
-                neighbors[i, :len(n)] = n.to(target_device)
-                mask[i, :len(n)] = True
-
-        return neighbors, mask
-
-    def supports_tensor_ops(self) -> bool:
-        """Check if this store has optimized tensor operations."""
-        return False
+        """Batch degree lookup for multiple nodes. Returns tensor of degrees on device."""
+        pass
 
 
 class EmbeddingProvider(ABC):

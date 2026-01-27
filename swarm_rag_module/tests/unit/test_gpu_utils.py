@@ -382,32 +382,14 @@ class TestHeuristicsGPU:
         assert abs(float(result) - expected) < 1e-6
 
 
-class TestGPUVectorStore:
-    """Tests for GPUVectorStore (also known as TorchVectorStore)."""
+class TestTorchVectorStore:
+    """Tests for TorchVectorStore."""
 
-    def test_torch_vector_store_alias(self):
-        """Test that TorchVectorStore is an alias for GPUVectorStore."""
-        try:
-            from swarm_rag.integrations.gpu_vector_store import GPUVectorStore, TorchVectorStore
-        except ImportError:
-            pytest.skip("PyTorch not available")
-
-        assert TorchVectorStore is GPUVectorStore
-
-    def test_torch_graph_store_alias(self):
-        """Test that TorchGraphStore is an alias for GPUGraphStore."""
-        try:
-            from swarm_rag.integrations.gpu_graph_store import GPUGraphStore, TorchGraphStore
-        except ImportError:
-            pytest.skip("PyTorch not available")
-
-        assert TorchGraphStore is GPUGraphStore
-
-    def test_gpu_vector_store_creation(self):
-        """Test GPUVectorStore creation."""
+    def test_torch_vector_store_creation(self):
+        """Test TorchVectorStore creation."""
         try:
             import torch
-            from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
+            from swarm_rag.integrations.torch_vector_store import TorchVectorStore
         except ImportError:
             pytest.skip("PyTorch not available")
 
@@ -415,34 +397,37 @@ class TestGPUVectorStore:
         embeddings = torch.randn(100, 64)
         ids = list(range(100))
 
-        store = GPUVectorStore(embeddings, ids, device="cpu")
+        store = TorchVectorStore(embeddings, ids, device="cpu")
 
         assert store.n_docs == 100
         assert store.dim == 64
 
-    def test_gpu_vector_store_search(self):
-        """Test GPUVectorStore search."""
-        from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
+    def test_torch_vector_store_search(self):
+        """Test TorchVectorStore search returns tensors."""
+        from swarm_rag.integrations.torch_vector_store import TorchVectorStore
 
         # Create test data with known relationships
         embeddings = torch.zeros(10, 64)
         embeddings[0] = torch.tensor([1.0] + [0.0] * 63)  # Will be most similar to query
         ids = list(range(10))
 
-        store = GPUVectorStore(embeddings, ids, device="cpu")
+        store = TorchVectorStore(embeddings, ids, device="cpu")
 
         # Query similar to doc 0
         query = torch.tensor([1.0] + [0.0] * 63, dtype=torch.float32)
-        results = store.search(query, limit=5)
+        result_ids, result_scores = store.search(query, limit=5)
 
-        assert len(results) == 5
-        assert results[0]['id'] == 0  # Doc 0 should be most similar
+        # Results are now tensors
+        assert isinstance(result_ids, torch.Tensor)
+        assert isinstance(result_scores, torch.Tensor)
+        assert len(result_ids) == 5
+        assert result_ids[0].item() == 0  # Doc 0 should be most similar
 
-    def test_gpu_vector_store_from_dict(self):
-        """Test GPUVectorStore.from_dict."""
+    def test_torch_vector_store_from_dict(self):
+        """Test TorchVectorStore.from_dict."""
         try:
             import torch
-            from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
+            from swarm_rag.integrations.torch_vector_store import TorchVectorStore
         except ImportError:
             pytest.skip("PyTorch not available")
 
@@ -452,25 +437,82 @@ class TestGPUVectorStore:
             2: torch.randn(64),
         }
 
-        store = GPUVectorStore.from_dict(doc_embs, device="cpu")
+        store = TorchVectorStore.from_dict(doc_embs, device="cpu")
 
         assert store.n_docs == 3
         assert store.dim == 64
 
-    def test_gpu_vector_store_fetch_batch(self):
-        """Test GPUVectorStore.fetch_batch."""
-        from swarm_rag.integrations.gpu_vector_store import GPUVectorStore
+    def test_torch_vector_store_fetch_batch(self):
+        """Test TorchVectorStore.fetch_batch."""
+        from swarm_rag.integrations.torch_vector_store import TorchVectorStore
 
         embeddings = torch.randn(10, 64)
         ids = list(range(10))
 
-        store = GPUVectorStore(embeddings, ids, device="cpu")
+        store = TorchVectorStore(embeddings, ids, device="cpu")
 
         result = store.fetch_batch([0, 1, 2])
 
         assert result.shape == (3, 64)
         # Check no NaN for valid IDs
         assert not torch.isnan(result).any()
+
+
+class TestTorchGraphStore:
+    """Tests for TorchGraphStore."""
+
+    def test_torch_graph_store_creation(self):
+        """Test TorchGraphStore creation from adjacency dict."""
+        from swarm_rag.integrations.torch_graph_store import TorchGraphStore
+
+        adj_dict = {
+            0: [1, 2],
+            1: [0, 2],
+            2: [0, 1, 3],
+            3: [2],
+        }
+
+        store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cpu")
+
+        assert store.n_nodes == 4
+        assert store.get_degree(0) == 2
+        assert store.get_degree(2) == 3
+
+    def test_torch_graph_store_neighbors(self):
+        """Test TorchGraphStore neighbor lookup."""
+        from swarm_rag.integrations.torch_graph_store import TorchGraphStore
+
+        adj_dict = {
+            0: [1, 2],
+            1: [0],
+            2: [0, 1],
+        }
+
+        store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cpu")
+
+        neighbors = store.get_neighbors(0)
+        assert len(neighbors) == 2
+        assert set(neighbors.tolist()) == {1, 2}
+
+    def test_torch_graph_store_batch_neighbors(self):
+        """Test TorchGraphStore batch neighbor lookup."""
+        from swarm_rag.integrations.torch_graph_store import TorchGraphStore
+
+        adj_dict = {
+            0: [1, 2],
+            1: [0],
+            2: [0, 1, 3],
+            3: [2],
+        }
+
+        store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cpu")
+
+        neighbors, mask = store.get_neighbors_batch([0, 1, 2])
+
+        assert neighbors.shape[0] == 3
+        assert mask.shape[0] == 3
+        # Node 2 has most neighbors (3)
+        assert neighbors.shape[1] == 3
 
 
 if __name__ == "__main__":
