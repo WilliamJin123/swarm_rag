@@ -117,7 +117,7 @@ class HeuristicContext:
     """
     query_vec: torch.Tensor  # Shape: (D,)
     target_vecs: Optional[torch.Tensor] = None
-    target_ids: Union[List[int], torch.Tensor] = None
+    target_ids: Optional[torch.Tensor] = None  # Always tensor for batched operations
 
     pheromone_values: torch.Tensor = field(default_factory=lambda: torch.tensor([]))
     node_degrees: torch.Tensor = field(default_factory=lambda: torch.tensor([]))
@@ -127,7 +127,7 @@ class HeuristicContext:
     avg_degree: float = 1.0
     step_index: int = 0
     agent_index: int = 0
-    votes: int = 0
+    votes: Optional[torch.Tensor] = None  # Tensor for batched ranking (visit counts)
     total_agents: int = 0
 
     extra_data: Dict[str, Any] = field(default_factory=dict)
@@ -206,7 +206,8 @@ class Heuristics:
         """
         Adds pure chaos to break loops.
         """
-        count = len(ctx.target_ids) if ctx.target_ids is not None else 1
+        # Use target_vecs shape instead of target_ids length (tensor-native)
+        count = ctx.target_vecs.shape[0] if ctx.target_vecs is not None else 1
         device = ctx.target_vecs.device if isinstance(ctx.target_vecs, torch.Tensor) else "cpu"
         return torch.rand(count, device=device)
 
@@ -214,22 +215,22 @@ class Heuristics:
 
     @staticmethod
     @HeuristicRegistry.register_ranking(HeuristicKey.PERCENTAGE_VISITED)
-    def percentage_visited(ctx: HeuristicContext) -> float:
-        """Percentage of total agents that visited this node."""
-        if ctx.total_agents == 0: return 0.0
-        return ctx.votes / ctx.total_agents
+    def percentage_visited(ctx: HeuristicContext) -> torch.Tensor:
+        """Percentage of total agents that visited this node. Returns tensor for batched ranking."""
+        if ctx.total_agents == 0:
+            if ctx.votes is not None:
+                return torch.zeros_like(ctx.votes, dtype=torch.float32)
+            return torch.tensor(0.0)
+        return ctx.votes.float() / ctx.total_agents
 
     @staticmethod
     @HeuristicRegistry.register_ranking(HeuristicKey.SEMANTIC_RANK)
-    def semantic_rank(ctx: HeuristicContext) -> float:
+    def semantic_rank(ctx: HeuristicContext) -> torch.Tensor:
         """
-        RAW semantic similarity for final ranking.
+        RAW semantic similarity for final ranking. Returns tensor for batched operations.
         Uses full [-1, 1] range since we want to distinguish good from bad.
         """
-        val = Heuristics.semantic_similarity_unnormalized(ctx)
-        if hasattr(val, 'item'):
-            return val.item()
-        return float(val)
+        return Heuristics.semantic_similarity_unnormalized(ctx)
 
     # --- DEPOSIT HEURISTICS ---
 

@@ -107,7 +107,8 @@ class TestWeightTensors:
         )
 
         d = wt.to_dict()
-        wt_restored = WeightTensors.from_dict(d)
+        # Restore on CPU to match original tensors for comparison
+        wt_restored = WeightTensors.from_dict(d, device="cpu")
 
         assert wt_restored.n_groups == wt.n_groups
         assert torch.allclose(wt_restored.movement_weights, wt.movement_weights)

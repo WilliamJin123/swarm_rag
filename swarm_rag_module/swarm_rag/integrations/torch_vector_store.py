@@ -120,7 +120,7 @@ class TorchVectorStore(VectorStore):
 
         Args:
             doc_embs: Dictionary mapping doc_id -> embedding vector
-            device: Target device (auto-detected if None)
+            device: Target device (caller should provide; auto-detected if None)
 
         Returns:
             TorchVectorStore instance
@@ -128,9 +128,12 @@ class TorchVectorStore(VectorStore):
         if not doc_embs:
             raise ValueError("Cannot create store from empty dictionary")
 
+        # Device should be provided by caller; fallback to auto-detect for compatibility
+        target_device = device if device is not None else get_device()
+
         # Sort keys for deterministic ordering
         sorted_ids = sorted(doc_embs.keys())
-        ids = torch.tensor(sorted_ids, dtype=torch.long)
+        ids = torch.tensor(sorted_ids, dtype=torch.long, device=target_device)
 
         # Stack embeddings
         first_emb = doc_embs[sorted_ids[0]]
@@ -143,6 +146,9 @@ class TorchVectorStore(VectorStore):
             embeddings = torch.stack([
                 torch.as_tensor(doc_embs[i]).squeeze() for i in sorted_ids
             ])
+
+        # Move stacked embeddings to target device
+        embeddings = embeddings.to(device=target_device)
 
         # Ensure 2D: (n_docs, dim)
         if embeddings.dim() == 1:
@@ -361,9 +367,15 @@ class TorchVectorStore(VectorStore):
         return self._embeddings
 
     def to(self, device: str) -> "TorchVectorStore":
-        """Move store to a different device."""
+        """Move store to a different device. Deprecated: set device at construction."""
+        logger.warning("TorchVectorStore.to() is deprecated - set device at construction time")
         self._embeddings = self._embeddings.to(device)
         self._device = device
+        # Clear cached lookup tensors
+        if hasattr(self, '_ids_tensor'):
+            self._ids_tensor = None
+        if hasattr(self, '_id_lookup_tensor'):
+            self._id_lookup_tensor = None
         return self
 
     def close(self):

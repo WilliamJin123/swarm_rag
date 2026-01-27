@@ -1,47 +1,68 @@
 import torch
 import random
 import time
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 from swarm_rag.core.swarm_retriever import SwarmRetriever
 from swarm_rag.interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 from swarm_rag.eval import Evaluator, EvalReporter
 
 # Dummy implementations of abstract classes
 class DummyVectorStore(VectorStore):
-    def __init__(self, num_nodes=1000, embedding_dim=128):
+    def __init__(self, num_nodes=1000, embedding_dim=128, device: str = "cpu"):
         self.num_nodes = num_nodes
         self.embedding_dim = embedding_dim
+        self._device = device
         # Generate deterministic embeddings
         torch.manual_seed(42)
         self.embeddings = {
-            i: torch.randn(embedding_dim, dtype=torch.float32)
+            i: torch.randn(embedding_dim, dtype=torch.float32, device=device)
             for i in range(num_nodes)
         }
+        # Pre-stack for efficient search
+        self._embedding_matrix = torch.stack([self.embeddings[i] for i in range(num_nodes)])
 
-    def search(self, query_vec: torch.Tensor, limit: int) -> List[Dict[str, Any]]:
-        """Mock search that returns deterministic nodes based on query vector"""
-        # Convert to tensor if needed
+    @property
+    def device(self) -> str:
+        return self._device
+
+    def search(self, query_vec: torch.Tensor, limit: int):
+        """Mock search returning (ids_tensor, scores_tensor)"""
         if not isinstance(query_vec, torch.Tensor):
             query_vec = torch.as_tensor(query_vec, dtype=torch.float32)
-        # Use query vector to seed selection for determinism
-        query_hash = hash(tuple(query_vec.flatten().tolist())) % (2**32)
-        rng = random.Random(query_hash)
+        query_vec = query_vec.flatten()
+        query_norm = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
 
-        results = []
-        seen_ids = set()
-        while len(results) < min(limit, self.num_nodes) and len(seen_ids) < self.num_nodes:
-            node_id = rng.randint(0, self.num_nodes - 1)
-            if node_id not in seen_ids:
-                seen_ids.add(node_id)
-                emb = self.embeddings[node_id]
-                score = torch.dot(query_vec, emb) / (
-                    torch.linalg.norm(query_vec) * torch.linalg.norm(emb) + 1e-8
-                )
-                results.append({'id': node_id, 'score': float(score)})
-        return sorted(results, key=lambda x: x['score'], reverse=True)
+        # Compute all similarities
+        scores = torch.matmul(self._embedding_matrix, query_norm)
 
-    def fetch_batch(self, node_ids: List[Any]) -> torch.Tensor:
+        # Get top-k
+        k = min(limit, self.num_nodes)
+        top_scores, top_indices = torch.topk(scores, k)
+
+        return top_indices, top_scores
+
+    def search_batch(self, query_vecs: torch.Tensor, limit: int):
+        """Batch search returning (ids_tensor, scores_tensor) with shape (n_queries, limit)"""
+        if not isinstance(query_vecs, torch.Tensor):
+            query_vecs = torch.as_tensor(query_vecs, dtype=torch.float32)
+
+        # Normalize queries
+        query_norms = torch.linalg.norm(query_vecs, dim=1, keepdim=True) + 1e-8
+        query_vecs_norm = query_vecs / query_norms
+
+        # Compute all similarities: (n_queries, dim) @ (dim, n_nodes) -> (n_queries, n_nodes)
+        all_scores = torch.matmul(query_vecs_norm, self._embedding_matrix.t())
+
+        # Get top-k for each query
+        k = min(limit, self.num_nodes)
+        top_scores, top_indices = torch.topk(all_scores, k, dim=1)
+
+        return top_indices, top_scores
+
+    def fetch_batch(self, node_ids) -> torch.Tensor:
         """Fetch embeddings for given node IDs, returning stacked tensor matrix"""
+        if isinstance(node_ids, torch.Tensor):
+            node_ids = node_ids.tolist()
         embeddings = []
         for nid in node_ids:
             emb = self.embeddings.get(nid)
@@ -72,12 +93,14 @@ class DegreeView:
 
 
 class DummyGraphStore(GraphStore):
-    def __init__(self, num_nodes=1000, avg_degree=5):
+    def __init__(self, num_nodes=1000, avg_degree=5, device: str = "cpu"):
         self.num_nodes = num_nodes
-        self.avg_degree = avg_degree
+        self.n_nodes = num_nodes  # Required by SwarmRetriever for pheromone tensor
+        self._avg_degree = avg_degree
+        self._device = device
         # Create a simple graph structure
         self.graph = {i: set() for i in range(num_nodes)}
-        
+
         # Add random edges
         random.seed(42)
         for i in range(num_nodes):
@@ -86,26 +109,60 @@ class DummyGraphStore(GraphStore):
                 if neighbor != i:
                     self.graph[i].add(neighbor)
                     self.graph[neighbor].add(i)
-        
+
         # Add the NetworkX-like degree view
         self.degree = DegreeView(self.graph)
-    
-    def get_neighbors(self, node_id: Any) -> List[Any]:
-        """Get neighbors of a node"""
-        return list(self.graph.get(node_id, set()))
-    
+
+    @property
+    def device(self) -> str:
+        return self._device
+
+    def get_neighbors(self, node_id: Any) -> torch.Tensor:
+        """Get neighbors of a node as tensor"""
+        neighbors = list(self.graph.get(node_id, set()))
+        return torch.tensor(neighbors, dtype=torch.long)
+
+    def get_neighbors_batch(self, node_ids):
+        """Batch neighbor lookup returning (neighbors_tensor, mask_tensor)"""
+        if isinstance(node_ids, torch.Tensor):
+            node_ids = node_ids.tolist()
+
+        all_neighbors = []
+        max_degree = 0
+        for nid in node_ids:
+            neighbors = list(self.graph.get(nid, set()))
+            all_neighbors.append(neighbors)
+            max_degree = max(max_degree, len(neighbors))
+
+        if max_degree == 0:
+            max_degree = 1
+
+        # Pad to max_degree
+        padded = torch.full((len(node_ids), max_degree), -1, dtype=torch.long)
+        mask = torch.zeros((len(node_ids), max_degree), dtype=torch.bool)
+
+        for i, neighbors in enumerate(all_neighbors):
+            if neighbors:
+                padded[i, :len(neighbors)] = torch.tensor(neighbors, dtype=torch.long)
+                mask[i, :len(neighbors)] = True
+
+        return padded, mask
+
     def contains(self, node_id: Any) -> bool:
         """Check if node exists"""
         return node_id in self.graph
-    
-    def neighbors(self, node_id: Any) -> List[Any]:
+
+    def neighbors(self, node_id: Any) -> torch.Tensor:
         """Alias for get_neighbors"""
         return self.get_neighbors(node_id)
-    
+
     def get_avg_degree(self):
-        # Basic implementation if base class doesn't handle it
         total_degrees = sum(len(n) for n in self.graph.values())
         return total_degrees / max(1, len(self.graph))
+
+    def get_degree(self, node_id: Any) -> int:
+        """Get degree of a single node"""
+        return len(self.graph.get(node_id, set()))
 
 class DummyEmbeddingProvider(EmbeddingProvider):
     def __init__(self, embedding_dim=128):
@@ -131,26 +188,28 @@ class DummyEmbeddingProvider(EmbeddingProvider):
 
 def test_swarm_retriever():
     """Comprehensive test of SwarmRetriever functionality"""
-    
+
     print("=" * 60)
     print("SWARM RETRIEVER TEST SUITE")
     print("=" * 60)
-    
-    # 1. Initialize dummy components
+
+    # 1. Initialize dummy components (force CPU for unit tests)
     print("\n Initializing dummy components...")
-    vector_store = DummyVectorStore(num_nodes=1000, embedding_dim=128)
-    graph_store = DummyGraphStore(num_nodes=1000, avg_degree=5)
+    test_device = "cpu"  # Use CPU for unit tests to avoid GPU dependencies
+    vector_store = DummyVectorStore(num_nodes=1000, embedding_dim=128, device=test_device)
+    graph_store = DummyGraphStore(num_nodes=1000, avg_degree=5, device=test_device)
     embedder = DummyEmbeddingProvider(embedding_dim=128)
     evaluator = Evaluator(index_name="SwarmRetriever")
-    
-    # 2. Initialize SwarmRetriever
+
+    # 2. Initialize SwarmRetriever with explicit device
     print("\n Initializing SwarmRetriever...")
     retriever = SwarmRetriever(
         vector_store=vector_store,
         graph_store=graph_store,
         embedding_provider=embedder,
         cache_neighbors=True, # Enable caching to test locks
-        cache_vectors=True
+        cache_vectors=True,
+        device=test_device  # Use same device as stores
     )
 
     reporter = EvalReporter()
@@ -245,13 +304,14 @@ def test_swarm_retriever_groups():
     print("=" * 60)
     print("SWARM RETRIEVER: HETEROGENEOUS GROUPS TEST")
     print("=" * 60)
-    
-    # 1. Init
-    vector_store = DummyVectorStore()
-    graph_store = DummyGraphStore()
+
+    # 1. Init (force CPU for unit tests)
+    test_device = "cpu"
+    vector_store = DummyVectorStore(device=test_device)
+    graph_store = DummyGraphStore(device=test_device)
     embedder = DummyEmbeddingProvider()
-    
-    retriever = SwarmRetriever(vector_store, graph_store, embedder)
+
+    retriever = SwarmRetriever(vector_store, graph_store, embedder, device=test_device)
     
     # 2. Define Groups
     # Group A: 5 Agents, Semantic

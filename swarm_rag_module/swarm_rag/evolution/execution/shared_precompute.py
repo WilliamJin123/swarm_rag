@@ -102,8 +102,8 @@ def prepare_shared_context(
             embeddings.append(emb)
         query_embeddings = torch.stack(embeddings)
 
-    # Move to target device if needed
-    if device == "cuda" and query_embeddings.device.type != "cuda":
+    # Ensure embeddings are on target device (no-op if already there)
+    if not str(query_embeddings.device).startswith(device):
         query_embeddings = query_embeddings.to(device=device)
 
     logger.debug(f"  > Query embeddings shape: {query_embeddings.shape}")

@@ -25,8 +25,6 @@ from swarm_rag.evolution.focused_mutation import (
 from swarm_rag.evolution.types.fitness_results import FitnessResult
 from swarm_rag.evolution.execution.strategies import GeneticRegistry, GeneticStrategies
 from swarm_rag.interfaces.enums import GeneticKey
-from swarm_rag.core.swarm_retriever import should_continue_stepping
-import torch
 
 
 class TestEvolutionImprovementsIntegration:
@@ -88,19 +86,6 @@ class TestEvolutionImprovementsIntegration:
         config = GeneticConfig()
         assert hasattr(config, "parallel_mutation_workers")
         assert config.parallel_mutation_workers >= 1
-
-    def test_convergence_detection_works_correctly(self):
-        """should_continue_stepping should detect convergence."""
-        # All agents stuck
-        positions = torch.tensor([1, 2, 3, 4, 5])
-        prev_positions = torch.tensor([1, 2, 3, 4, 5])
-
-        # Should continue in early steps
-        assert should_continue_stepping(positions, prev_positions, step_idx=0) is True
-        assert should_continue_stepping(positions, prev_positions, step_idx=1) is True
-
-        # Should stop after min_steps when converged
-        assert should_continue_stepping(positions, prev_positions, step_idx=2) is False
 
     def test_focused_mutation_affects_weak_metric_params(self):
         """Focused mutation should target params for weakest metric."""
@@ -165,6 +150,3 @@ class TestEvolutionImprovementsIntegration:
 
         # 5. Verify early exit threshold is configured
         assert DEFAULT_EARLY_EXIT_THRESHOLD == 0.30
-
-        # 6. Verify convergence detection is available
-        assert callable(should_continue_stepping)

@@ -444,7 +444,7 @@ class PopulationEvaluator:
 
         start_time = time.time()
         n_queries = len(queries)
-        quarter = n_queries // 4
+        quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
 
         # Get pre-computed initial pools
         initial_pools = shared_context.initial_pools.get(pool_size, [])
@@ -840,7 +840,7 @@ class PopulationEvaluator:
 
         start_time = time.time()
         n_queries = len(queries)
-        quarter = n_queries // 4
+        quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
 
         # Phase 1: Evaluate first quarter for early exit check
         if decision_tracker is not None:
@@ -1009,8 +1009,11 @@ class PopulationEvaluator:
         if max_retrieved == 0:
             return {}
 
-        # Extract IDs as tensor, padding with -1 for missing values
-        retrieved_ids = torch.full((n_queries, max_retrieved), -1, dtype=torch.long)
+        # Extract IDs as tensor on target device, padding with -1 for missing values
+        target_device = self.device if self.device == "cuda" else "cpu"
+        retrieved_ids = torch.full(
+            (n_queries, max_retrieved), -1, dtype=torch.long, device=target_device
+        )
 
         for i, items in enumerate(results):
             for j, item in enumerate(items):
@@ -1033,9 +1036,8 @@ class PopulationEvaluator:
         # Use GPU-accelerated batch metric computation if on CUDA
         if self.device == "cuda":
             try:
-                retrieved_ids_tensor = retrieved_ids.to(device="cuda")
                 metrics = MetricFunctions.compute_all_metrics_batch_gpu(
-                    retrieved_ids_tensor,
+                    retrieved_ids,
                     gt_sets,
                     k_values=self.evaluator.k_values,
                     device="cuda"
@@ -1043,7 +1045,7 @@ class PopulationEvaluator:
             except Exception as e:
                 logger.debug(f"GPU metrics failed, falling back to CPU: {e}")
                 metrics = MetricFunctions.compute_all_metrics_batch(
-                    retrieved_ids,
+                    retrieved_ids.cpu(),
                     gt_sets,
                     k_values=self.evaluator.k_values
                 )
@@ -1146,7 +1148,7 @@ class PopulationEvaluator:
 
         start_time = time.time()
         n_queries = len(queries)
-        quarter = n_queries // 4
+        quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
 
         # Get pre-computed initial pools
         initial_pools = shared_context.initial_pools.get(pool_size, [])

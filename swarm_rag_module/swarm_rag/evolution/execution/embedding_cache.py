@@ -12,6 +12,8 @@ import torch
 from dataclasses import dataclass, field
 import time
 
+from ...utils.device import get_device
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,10 +57,12 @@ class QueryEmbeddingCache:
         self,
         embedding_fn: Callable[[str], torch.Tensor] = None,
         batch_embedding_fn: Callable[[List[str]], torch.Tensor] = None,
-        use_gpu: bool = True,
+        device: str = None,
         batch_size: int = 32,
-        store_on_gpu: bool = False,
-        storage_device: str = "auto",
+        # Deprecated parameters for backward compatibility
+        use_gpu: bool = None,
+        store_on_gpu: bool = None,
+        storage_device: str = None,
     ):
         """
         Initialize embedding cache.
@@ -66,48 +70,46 @@ class QueryEmbeddingCache:
         Args:
             embedding_fn: Function to embed a single query
             batch_embedding_fn: Optional function to embed multiple queries at once
-            use_gpu: Whether to use GPU for batching if available
+            device: Device for storing embeddings ("cuda" or "cpu", auto-detected if None)
             batch_size: Batch size for GPU embedding
-            store_on_gpu: If True, store embeddings as GPU tensors to avoid CPU->GPU transfers.
-                          Only effective if use_gpu=True and CUDA is available.
-                          (Deprecated: use storage_device instead)
-            storage_device: Device for storing embeddings:
-                - "auto" (default): Use GPU if available and store_on_gpu=True, else CPU
-                - "cuda": Store on GPU (requires CUDA)
-                - "cpu": Store on CPU as tensors
-                - "numpy": Store as numpy arrays (legacy mode)
+            use_gpu: Deprecated - use device parameter
+            store_on_gpu: Deprecated - use device parameter
+            storage_device: Deprecated - use device parameter
         """
         self.embedding_fn = embedding_fn
         self.batch_embedding_fn = batch_embedding_fn
-        self.use_gpu = use_gpu and torch.cuda.is_available()
         self.batch_size = batch_size
 
-        # Resolve storage device
-        if storage_device == "auto":
-            # Use store_on_gpu for backward compatibility
-            if store_on_gpu and self.use_gpu and torch.cuda.is_available():
-                self._storage_device = "cuda"
-            else:
-                self._storage_device = "cpu"  # Store as CPU tensors
-        elif storage_device == "cuda":
-            if not torch.cuda.is_available():
-                logger.warning("CUDA requested but not available, falling back to CPU tensors")
-                self._storage_device = "cpu"
-            else:
-                self._storage_device = "cuda"
-        elif storage_device == "cpu":
-            self._storage_device = "cpu"
+        # Resolve device - prioritize new 'device' parameter, fall back to legacy
+        if device is not None:
+            self._device = device
+        elif storage_device is not None and storage_device != "auto":
+            # Legacy storage_device parameter
+            self._device = storage_device if storage_device != "numpy" else "cpu"
+        elif store_on_gpu is True:
+            # Legacy store_on_gpu parameter
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        elif use_gpu is False:
+            self._device = "cpu"
         else:
-            self._storage_device = "cpu"  # Default to CPU tensors
+            # Auto-detect
+            self._device = get_device()
 
-        # Legacy flag (for backward compatibility)
-        self.store_on_gpu = self._storage_device == "cuda"
+        # Validate device
+        if self._device == "cuda" and not torch.cuda.is_available():
+            logger.warning("CUDA requested but not available, falling back to CPU")
+            self._device = "cpu"
+
+        # Legacy compatibility aliases
+        self._storage_device = self._device
+        self.store_on_gpu = self._device == "cuda"
+        self.use_gpu = self._device == "cuda"
 
         self._cache: Dict[str, Any] = {}  # Stores torch.Tensor
         self._embedding_dim: Optional[int] = None
         self.stats = EmbeddingCacheStats()
 
-        logger.debug(f"EmbeddingCache initialized with storage_device={self._storage_device}")
+        logger.debug(f"EmbeddingCache initialized with device={self._device}")
 
     def precompute(
         self,
@@ -184,35 +186,25 @@ class QueryEmbeddingCache:
                     else:
                         self._embedding_dim = len(storage_embeddings[j])
 
-    def _convert_to_storage_format(self, embeddings):
+    def _to_device(self, embeddings) -> torch.Tensor:
         """
-        Convert embeddings to the configured storage format.
-
-        Does a single conversion from input format to storage format,
-        avoiding intermediate conversions.
+        Convert embeddings to tensor on the configured device.
 
         Args:
-            embeddings: Input embeddings (np.ndarray, torch.Tensor, or list)
+            embeddings: Input embeddings (torch.Tensor or list)
 
         Returns:
-            Embeddings in storage format (indexable)
+            Tensor on self._device
         """
-        # Determine input type
-        is_torch = isinstance(embeddings, torch.Tensor)
+        if isinstance(embeddings, torch.Tensor):
+            if str(embeddings.device).startswith(self._device):
+                return embeddings
+            return embeddings.to(self._device)
+        return torch.tensor(embeddings, device=self._device, dtype=torch.float32)
 
-        if self._storage_device == "cuda":
-            # Store on GPU
-            if is_torch:
-                return embeddings.to("cuda") if embeddings.device.type != "cuda" else embeddings
-            else:
-                return torch.tensor(embeddings, device="cuda", dtype=torch.float32)
-
-        else:
-            # Store as CPU tensors
-            if is_torch:
-                return embeddings.cpu() if embeddings.device.type != "cpu" else embeddings
-            else:
-                return torch.as_tensor(embeddings, dtype=torch.float32)
+    def _convert_to_storage_format(self, embeddings):
+        """Convert embeddings to tensor on configured device. Deprecated: use _to_device."""
+        return self._to_device(embeddings)
 
     def _sequential_embed(self, queries: List[str], show_progress: bool):
         """
@@ -237,29 +229,8 @@ class QueryEmbeddingCache:
                 self._embedding_dim = dim
 
     def _convert_single_to_storage_format(self, embedding):
-        """
-        Convert a single embedding to the configured storage format.
-
-        Args:
-            embedding: Single embedding (np.ndarray, torch.Tensor, or list)
-
-        Returns:
-            Embedding in storage format
-        """
-        is_torch = isinstance(embedding, torch.Tensor)
-
-        if self._storage_device == "cuda":
-            if is_torch:
-                return embedding.to("cuda") if embedding.device.type != "cuda" else embedding
-            else:
-                return torch.tensor(embedding, device="cuda", dtype=torch.float32)
-
-        else:
-            # Store as CPU tensors
-            if is_torch:
-                return embedding.cpu() if embedding.device.type != "cpu" else embedding
-            else:
-                return torch.as_tensor(embedding, dtype=torch.float32)
+        """Convert single embedding to tensor on configured device. Deprecated: use _to_device."""
+        return self._to_device(embedding)
 
     def get(self, query: str, as_tensor: bool = False) -> Optional[torch.Tensor]:
         """
@@ -267,61 +238,28 @@ class QueryEmbeddingCache:
 
         Args:
             query: Query string
-            as_tensor: If True, return torch.Tensor on GPU if available.
-                       If False (default), return CPU tensor.
+            as_tensor: Deprecated parameter (kept for backward compatibility).
+                       Embeddings are always returned on the storage device.
 
         Returns:
-            Embedding as torch tensor, None if not cached and no embedding_fn.
+            Embedding as torch tensor on storage device, None if not cached and no embedding_fn.
         """
         if query in self._cache:
             self.stats.cache_hits += 1
-            emb = self._cache[query]
-
-            if as_tensor:
-                if isinstance(emb, torch.Tensor):
-                    return emb
-                # Convert to tensor on GPU if available
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                return torch.tensor(emb, device=device, dtype=torch.float32)
-
-            # Return as CPU tensor (default)
-            if isinstance(emb, torch.Tensor):
-                return emb.cpu()
-            return torch.as_tensor(emb, dtype=torch.float32)
+            return self._cache[query]
 
         self.stats.cache_misses += 1
 
-        # Optionally compute on miss
+        # Compute on miss if embedding function available
         if self.embedding_fn is not None:
             start = time.time()
             embedding = self.embedding_fn(query)
             self.stats.total_embedding_time += time.time() - start
 
-            # Convert to appropriate storage format
-            if isinstance(embedding, torch.Tensor):
-                if self.store_on_gpu:
-                    cache_emb = embedding.to("cuda") if embedding.device.type != "cuda" else embedding
-                else:
-                    cache_emb = embedding.cpu()
-            else:
-                if self.store_on_gpu:
-                    cache_emb = torch.tensor(embedding, device="cuda", dtype=torch.float32)
-                else:
-                    cache_emb = torch.as_tensor(embedding, dtype=torch.float32)
-
+            # Store on configured device
+            cache_emb = self._to_device(embedding)
             self._cache[query] = cache_emb
-
-            # Return in requested format
-            if as_tensor:
-                if isinstance(cache_emb, torch.Tensor):
-                    return cache_emb
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                return torch.tensor(cache_emb, device=device, dtype=torch.float32)
-
-            # Return as CPU tensor
-            if isinstance(cache_emb, torch.Tensor):
-                return cache_emb.cpu()
-            return torch.as_tensor(cache_emb, dtype=torch.float32)
+            return cache_emb
 
         return None
 
@@ -329,7 +267,7 @@ class QueryEmbeddingCache:
         """
         Get embedding for a query as CPU tensor.
 
-        Legacy compatibility method - returns CPU tensor.
+        Legacy compatibility method - converts to CPU if needed.
 
         Args:
             query: Query string
@@ -337,7 +275,12 @@ class QueryEmbeddingCache:
         Returns:
             Embedding as CPU tensor, None if not cached and no embedding_fn.
         """
-        return self.get(query, as_tensor=False)
+        emb = self.get(query)
+        if emb is None:
+            return None
+        if self._device == "cuda":
+            return emb.cpu()
+        return emb
 
     def get_tensor(self, query: str, device: str = None) -> Optional["torch.Tensor"]:
         """
@@ -350,17 +293,19 @@ class QueryEmbeddingCache:
         Returns:
             Embedding as torch.Tensor on device, None if not cached and no embedding_fn.
         """
-        emb = self.get(query, as_tensor=True)
+        emb = self.get(query)
         if emb is None:
             return None
 
-        target_device = device or self._storage_device
-        if target_device == "numpy":
-            target_device = "cpu"
-
-        if str(emb.device) != target_device:
+        target_device = device or self._device
+        if not str(emb.device).startswith(target_device):
             return emb.to(target_device)
         return emb
+
+    @property
+    def device(self) -> str:
+        """Return the device embeddings are stored on."""
+        return self._device
 
     def get_batch(self, queries: List[str]) -> Dict[str, torch.Tensor]:
         """

@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 from typing import List, Dict, Any, Optional, Sequence, TypeAlias, Union, Tuple
 import torch
 
@@ -11,7 +11,16 @@ class VectorStore(ABC):
 
     All methods are tensor-native and return data on the store's configured device.
     Callers are responsible for calling .cpu() if they need CPU data.
+
+    Device configuration should be set at construction time and flow down from
+    the caller (e.g., EvolutionEngine -> SwarmRetriever -> VectorStore).
     """
+
+    @property
+    @abstractmethod
+    def device(self) -> str:
+        """Return the device this store operates on ('cuda' or 'cpu')."""
+        pass
 
     @abstractmethod
     def search(self, query_vec: torch.Tensor, limit: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -70,7 +79,16 @@ class GraphStore(ABC):
 
     All methods are tensor-native and return data on the store's configured device.
     Callers are responsible for calling .cpu() if they need CPU data.
+
+    Device configuration should be set at construction time and flow down from
+    the caller (e.g., EvolutionEngine -> SwarmRetriever -> GraphStore).
     """
+
+    @property
+    @abstractmethod
+    def device(self) -> str:
+        """Return the device this store operates on ('cuda' or 'cpu')."""
+        pass
 
     @abstractmethod
     def get_neighbors(self, node_id: Any) -> torch.Tensor:
@@ -121,6 +139,7 @@ class GraphStore(ABC):
     ) -> torch.Tensor:
         """Batch degree lookup for multiple nodes. Returns tensor of degrees on device."""
         pass
+
 
 
 class EmbeddingProvider(ABC):

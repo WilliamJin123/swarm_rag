@@ -114,7 +114,7 @@ class StarkGraphAdapter(GraphStore):
                 self._crow_indices = None
                 self._col_indices = None
                 self._degrees = None
-                self._n_nodes = self._torch_store.n_nodes
+                self.n_nodes = self._torch_store.n_nodes
                 logger.info(f"GPU graph store ready on {self._device}")
             except Exception as e:
                 logger.warning(f"GPU graph initialization failed: {e}. Falling back to CPU.")
@@ -160,7 +160,7 @@ class StarkGraphAdapter(GraphStore):
 
     def _init_cpu_tensors(self, csr: sp.csr_matrix):
         """Initialize torch tensors from scipy CSR for CPU operations."""
-        self._n_nodes = csr.shape[0]
+        self.n_nodes = csr.shape[0]
         self._crow_indices = torch.tensor(csr.indptr, dtype=torch.long, device=self._device)
         self._col_indices = torch.tensor(csr.indices, dtype=torch.long, device=self._device)
         self._degrees = self._crow_indices[1:] - self._crow_indices[:-1]
@@ -170,7 +170,7 @@ class StarkGraphAdapter(GraphStore):
         if self._torch_store is not None:
             return self._torch_store.get_neighbors(node_id)
 
-        if node_id < 0 or node_id >= self._n_nodes:
+        if node_id < 0 or node_id >= self.n_nodes:
             return torch.tensor([], dtype=torch.long, device=self._device)
 
         start = self._crow_indices[node_id].item()
@@ -197,8 +197,8 @@ class StarkGraphAdapter(GraphStore):
                 torch.empty((0, 0), device=self._device, dtype=torch.bool)
             )
 
-        valid_mask = (ids >= 0) & (ids < self._n_nodes)
-        clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
+        valid_mask = (ids >= 0) & (ids < self.n_nodes)
+        clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
 
         starts = self._crow_indices[clamped_ids]
         ends = self._crow_indices[clamped_ids + 1]
@@ -256,8 +256,8 @@ class StarkGraphAdapter(GraphStore):
         else:
             ids = node_ids.to(device=self._device, dtype=torch.long)
 
-        valid_mask = (ids >= 0) & (ids < self._n_nodes)
-        clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
+        valid_mask = (ids >= 0) & (ids < self.n_nodes)
+        clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
 
         degrees = self._degrees[clamped_ids]
         return torch.where(valid_mask, degrees, torch.zeros_like(degrees))
@@ -267,7 +267,7 @@ class StarkGraphAdapter(GraphStore):
         if self._torch_store is not None:
             return self._torch_store.get_degree(node_id)
 
-        if node_id < 0 or node_id >= self._n_nodes:
+        if node_id < 0 or node_id >= self.n_nodes:
             return 0
         return int(self._degrees[node_id].item())
 
@@ -275,7 +275,7 @@ class StarkGraphAdapter(GraphStore):
         """Check if node exists in graph."""
         if self._torch_store is not None:
             return self._torch_store.contains(node_id)
-        return 0 <= node_id < self._n_nodes
+        return 0 <= node_id < self.n_nodes
 
     def get_avg_degree(self) -> float:
         """Return average graph degree."""
@@ -530,18 +530,24 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     """
     Pre-computed embedding lookup.
 
-    Stores embeddings as CPU tensors. Caller is responsible for
-    moving to GPU if needed.
+    Stores embeddings on the configured device.
     """
 
-    def __init__(self, query_embs: dict[int, torch.Tensor]):
-        """Initialize from embedding dictionary."""
+    def __init__(self, query_embs: dict[int, torch.Tensor], device: str = None):
+        """
+        Initialize from embedding dictionary.
+
+        Args:
+            query_embs: Dictionary mapping query_id -> embedding tensor
+            device: Target device for storage (auto-detected if None)
+        """
+        self._device = device if device is not None else get_device()
         self.query_embs = {}
         for qid, emb in query_embs.items():
             if isinstance(emb, torch.Tensor):
-                tensor = emb.cpu().detach().squeeze()
+                tensor = emb.detach().squeeze().to(self._device)
             else:
-                tensor = torch.as_tensor(emb).squeeze()
+                tensor = torch.as_tensor(emb, device=self._device).squeeze()
             self.query_embs[qid] = tensor
 
     def embed_query(self, query_id: int) -> torch.Tensor:
@@ -550,3 +556,8 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     def embed_query_batch(self, query_ids: list[int]) -> Matrix:
         """Returns a 2D matrix (N_queries, Dimension) of embeddings."""
         return torch.stack([self.query_embs[qid] for qid in query_ids])
+
+    @property
+    def device(self) -> str:
+        """Return the device embeddings are stored on."""
+        return self._device

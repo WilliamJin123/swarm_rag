@@ -61,24 +61,15 @@ class TorchGraphStore(GraphStore):
             device: Target device ("cuda" or "cpu")
         """
         self._device = device or get_device()
-        self._n_nodes = n_nodes
+        self.n_nodes = n_nodes
         self._avg_degree = avg_degree
 
         # Store CSR components on device
-        if isinstance(crow_indices, torch.Tensor):
-            self._crow_indices = crow_indices.to(device=self._device, dtype=torch.long)
-        else:
-            self._crow_indices = torch.tensor(crow_indices, device=self._device, dtype=torch.long)
+        self._crow_indices = crow_indices.to(device=self._device, dtype=torch.long)
 
-        if isinstance(col_indices, torch.Tensor):
-            self._col_indices = col_indices.to(device=self._device, dtype=torch.long)
-        else:
-            self._col_indices = torch.tensor(col_indices, device=self._device, dtype=torch.long)
+        self._col_indices = col_indices.to(device=self._device, dtype=torch.long)
 
-        if isinstance(degree_tensor, torch.Tensor):
-            self._degrees = degree_tensor.to(device=self._device, dtype=torch.int32)
-        else:
-            self._degrees = torch.tensor(degree_tensor, device=self._device, dtype=torch.int32)
+        self._degrees = degree_tensor.to(device=self._device, dtype=torch.int32)
 
         self._max_degree = int(self._degrees.max().item()) if n_nodes > 0 else 0
 
@@ -172,9 +163,10 @@ class TorchGraphStore(GraphStore):
             TorchGraphStore instance
         """
         n_nodes = csr_matrix.shape[0]
+        target_device = device or get_device()
 
-        indptr = torch.tensor(csr_matrix.indptr, dtype=torch.long)
-        indices = torch.tensor(csr_matrix.indices, dtype=torch.long)
+        indptr = torch.tensor(csr_matrix.indptr, dtype=torch.long, device=target_device)
+        indices = torch.tensor(csr_matrix.indices, dtype=torch.long, device=target_device)
         degrees = indptr[1:] - indptr[:-1]
 
         if avg_degree is None:
@@ -192,7 +184,7 @@ class TorchGraphStore(GraphStore):
 
     def get_neighbors(self, node_id: int) -> torch.Tensor:
         """Get neighbors for a single node. Returns tensor on device."""
-        if node_id < 0 or node_id >= self._n_nodes:
+        if node_id < 0 or node_id >= self.n_nodes:
             return torch.tensor([], dtype=torch.long, device=self._device)
 
         start = self._crow_indices[node_id].item()
@@ -233,8 +225,8 @@ class TorchGraphStore(GraphStore):
                 torch.empty((0, 0), device=self._device, dtype=torch.bool)
             )
 
-        valid_mask = (ids >= 0) & (ids < self._n_nodes)
-        clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
+        valid_mask = (ids >= 0) & (ids < self.n_nodes)
+        clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
 
         starts = self._crow_indices[clamped_ids]
         ends = self._crow_indices[clamped_ids + 1]
@@ -303,8 +295,8 @@ class TorchGraphStore(GraphStore):
         else:
             ids = torch.tensor(node_ids, device=self._device, dtype=torch.long)
 
-        valid_mask = (ids >= 0) & (ids < self._n_nodes)
-        clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
+        valid_mask = (ids >= 0) & (ids < self.n_nodes)
+        clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
 
         degrees = self._degrees[clamped_ids]
         degrees = torch.where(valid_mask, degrees, torch.zeros_like(degrees))
@@ -313,22 +305,17 @@ class TorchGraphStore(GraphStore):
 
     def get_degree(self, node_id: int) -> int:
         """Get degree for a single node."""
-        if node_id < 0 or node_id >= self._n_nodes:
+        if node_id < 0 or node_id >= self.n_nodes:
             return 0
         return int(self._degrees[node_id].item())
 
     def contains(self, node_id: int) -> bool:
         """Check if node exists in graph."""
-        return 0 <= node_id < self._n_nodes
+        return 0 <= node_id < self.n_nodes
 
     def get_avg_degree(self) -> float:
         """Return average graph degree."""
         return self._avg_degree
-
-    @property
-    def n_nodes(self) -> int:
-        """Total number of nodes."""
-        return self._n_nodes
 
     @property
     def max_degree(self) -> int:
@@ -346,7 +333,8 @@ class TorchGraphStore(GraphStore):
         return self._device == "cuda"
 
     def to(self, device: str) -> "TorchGraphStore":
-        """Move store to different device."""
+        """Move store to different device. Deprecated: set device at construction."""
+        logger.warning("TorchGraphStore.to() is deprecated - set device at construction time")
         self._crow_indices = self._crow_indices.to(device)
         self._col_indices = self._col_indices.to(device)
         self._degrees = self._degrees.to(device)

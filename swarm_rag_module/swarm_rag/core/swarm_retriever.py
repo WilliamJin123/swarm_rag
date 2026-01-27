@@ -21,52 +21,6 @@ class AgentGroupConfig(TypedDict):
 logger = logging.getLogger(__name__)
 
 
-def should_continue_stepping(
-    positions: torch.Tensor,
-    prev_positions: torch.Tensor,
-    step_idx: int,
-    min_steps: int = 2,
-    convergence_threshold: float = 0.8,
-) -> bool:
-    """
-    Check if agents have converged and further steps are unlikely to help.
-
-    Implements early stopping for the swarm traversal loop to save computation
-    when agents are no longer exploring new nodes.
-
-    Args:
-        positions: Current agent positions tensor
-        prev_positions: Previous step agent positions tensor
-        step_idx: Current step index (0-based)
-        min_steps: Minimum steps to always complete before checking convergence
-        convergence_threshold: Fraction of stuck agents (0-1) that triggers early stop
-
-    Returns:
-        True if stepping should continue, False if converged and should stop early
-    """
-    # Always continue for first min_steps
-    if step_idx < min_steps:
-        return True
-
-    # Count agents that haven't moved
-    n_agents = len(positions)
-    if n_agents == 0:
-        return False
-
-    stuck = (positions == prev_positions).sum().item()
-    stuck_fraction = stuck / n_agents
-
-    # Stop if too many agents are stuck
-    if stuck_fraction >= convergence_threshold:
-        logger.debug(
-            f"Early convergence at step {step_idx}: {stuck}/{n_agents} agents stuck "
-            f"({stuck_fraction:.1%} >= {convergence_threshold:.0%})"
-        )
-        return False
-
-    return True
-
-
 class SwarmRetriever:
     _DEFAULT_PARAMS = dict(
         # Global Defaults
@@ -106,7 +60,7 @@ class SwarmRetriever:
         cache_vectors: bool = True,
         doc_cache_size: int = 50000,
         query_cache_size: int = 1000,
-        use_gpu: bool = True,
+        device: str = None,
         tensor_mode: bool = True,
     ):
         self.vector_store = vector_store
@@ -125,6 +79,8 @@ class SwarmRetriever:
         self._query_lock = Lock()
 
         self.avg_degree = self.graph_store.get_avg_degree()
+        # Cache max_node_id for dense pheromone tensor building
+        self._max_node_id = self.graph_store.n_nodes
 
         self.cache_neighbors = cache_neighbors
         if self.cache_neighbors:
@@ -136,18 +92,16 @@ class SwarmRetriever:
             self.doc_cache = LRUCache(doc_cache_size)
             self.query_cache = LRUCache(query_cache_size)
 
-        # GPU support detection
-        self._use_gpu = use_gpu and get_device() == "cuda"
-        self._has_gpu_store = hasattr(vector_store, 'compute_similarities') and hasattr(vector_store, 'is_gpu')
+        # Device configuration - flows down from caller
+        if device is None:
+            device = get_device()
+        self._device = device
+        self._use_gpu = (device == "cuda")
 
-        if self._use_gpu and self._has_gpu_store and getattr(vector_store, 'is_gpu', False):
-            self._device = getattr(vector_store, 'device', 'cuda')
+        if self._use_gpu:
             logger.info(f"SwarmRetriever: GPU acceleration enabled on {self._device}")
         else:
-            self._device = "cpu"
-            self._use_gpu = False
-            if use_gpu:
-                logger.debug("SwarmRetriever: GPU not available, using CPU")
+            logger.debug("SwarmRetriever: Using CPU mode")
 
         # Tensor mode: keep data as tensors on GPU when possible
         self._tensor_mode = tensor_mode and self._use_gpu
@@ -426,7 +380,12 @@ class SwarmRetriever:
         # Spawn Agents (Weigh "better" nodes higher)
         weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
         agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long, device=self._device)
-        agent_trajectories = [[loc.item()] for loc in agent_locations]
+
+        # Position history tensor: (n_agents, steps + 1), -1 = unvisited
+        # Eliminates per-agent .item() calls in the hot loop
+        position_history = torch.full((n_agents, steps + 1), -1, device=self._device, dtype=torch.long)
+        position_history[:, 0] = agent_locations
+
         query_pheromones = self.base_pheromones.copy()
 
         # Initialize decision tracking if provided
@@ -462,18 +421,14 @@ class SwarmRetriever:
                     torch_gen=torch_gen,
                 )
 
-                # Update locations and trajectories
-                for agent_idx in range(n_agents):
-                    new_loc = new_locations[agent_idx].item() if isinstance(new_locations[agent_idx], torch.Tensor) else new_locations[agent_idx]
-                    old_loc = agent_locations[agent_idx].item() if isinstance(agent_locations[agent_idx], torch.Tensor) else agent_locations[agent_idx]
-                    if new_loc != old_loc:
-                        agent_trajectories[agent_idx].append(new_loc)
+                # Pure tensor assignment - no .item() calls
+                position_history[:, step + 1] = new_locations
                 agent_locations = new_locations
 
             else:
-                # Original sequential processing
+                # Sequential processing with decision tracking support
                 for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
-                    current_loc = agent_locations[agent_idx].item() if isinstance(agent_locations[agent_idx], torch.Tensor) else agent_locations[agent_idx]
+                    current_loc = agent_locations[agent_idx].item()
 
                     result = self._process_agent_step(
                         agent_id=agent_idx,
@@ -491,7 +446,7 @@ class SwarmRetriever:
                     if result:
                         next_node = result['new_location']
                         agent_locations[agent_idx] = next_node
-                        agent_trajectories[agent_idx].append(next_node)
+                        position_history[agent_idx, step + 1] = next_node
 
                         deposit = result['deposit']
                         # Aggressive pruning: only track significant deposits
@@ -512,11 +467,11 @@ class SwarmRetriever:
             # 2. Add new deposits
             for node_id, amount in pheromone_updates.items():
                 query_pheromones[node_id] += amount
-            
-        return self._ranking(
-            agent_trajectories, 
-            query_vec, 
-            ranking_func, 
+
+        return self._ranking_from_history(
+            position_history,
+            query_vec,
+            ranking_func,
             top_k,
             n_agents
         )          
@@ -599,10 +554,20 @@ class SwarmRetriever:
             return combined_deposit
 
         elif strategy_type == "ranking":
-            def combined_ranking(ctx: HeuristicContext) -> float:
-                total = 0.0
+            def combined_ranking(ctx: HeuristicContext) -> torch.Tensor:
+                # Initialize accumulator based on target shape
+                if ctx.target_vecs is not None:
+                    device = ctx.target_vecs.device
+                    total = torch.zeros(ctx.target_vecs.shape[0], device=device, dtype=torch.float32)
+                else:
+                    total = torch.tensor(0.0)
+
                 for func, w in components:
-                    total += func(ctx) * w
+                    val = func(ctx)
+                    # Ensure tensor
+                    if not isinstance(val, torch.Tensor):
+                        val = torch.tensor(val, device=total.device, dtype=torch.float32)
+                    total = total + val * w
                 return total
             return combined_ranking
 
@@ -623,6 +588,70 @@ class SwarmRetriever:
             return combined_movement
 
         return lambda ctx: 0.0  # Fallback
+
+    def _fetch_embeddings(
+        self,
+        node_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Unified embedding fetch. Keeps everything as tensors.
+
+        Args:
+            node_ids: Tensor of node IDs to fetch
+
+        Returns:
+            (embeddings, valid_ids) - both tensors on device
+            Only returns rows for valid IDs (no NaN rows).
+        """
+        device = node_ids.device
+
+        if not self.cache_vectors:
+            # Direct fetch from store (returns tensor per interface contract)
+            matrix = self.vector_store.fetch_batch(node_ids)
+            valid_mask = ~torch.isnan(matrix).any(dim=1)
+            return matrix[valid_mask], node_ids[valid_mask]
+
+        # Cache-aware fetch - need list for dict key lookup
+        node_ids_list = node_ids.tolist()
+
+        raw_vecs = [None] * len(node_ids_list)
+        missing_indices = []
+        missing_ids = []
+
+        # Phase 1: Read (Locked)
+        with self._doc_lock:
+            for i, node_id in enumerate(node_ids_list):
+                cached_vec = self.doc_cache.get(node_id)
+                if cached_vec is not None:
+                    raw_vecs[i] = cached_vec
+                else:
+                    missing_indices.append(i)
+                    missing_ids.append(node_id)
+
+        # Phase 2: Fetch (Unlocked)
+        if missing_ids:
+            fetched_matrix = self.vector_store.fetch_batch(missing_ids)
+            valid_fetched_mask = ~torch.isnan(fetched_matrix).any(dim=1)
+
+            # Phase 3: Write-back (Locked)
+            with self._doc_lock:
+                for i, is_valid in enumerate(valid_fetched_mask):
+                    if is_valid:
+                        original_idx = missing_indices[i]
+                        vec = fetched_matrix[i]
+                        self.doc_cache.set(node_ids_list[original_idx], vec)
+                        raw_vecs[original_idx] = vec
+
+        # Build output tensors
+        valid_data = [(nid, v) for nid, v in zip(node_ids_list, raw_vecs) if v is not None]
+
+        if not valid_data:
+            return torch.tensor([], device=device), torch.tensor([], dtype=torch.long, device=device)
+
+        valid_ids_list, valid_vecs = zip(*valid_data)
+        embeddings = torch.stack(list(valid_vecs))
+        valid_ids_tensor = torch.tensor(valid_ids_list, dtype=torch.long, device=device)
+        return embeddings, valid_ids_tensor
 
     def _process_agent_step(
         self,
@@ -1056,67 +1085,78 @@ class SwarmRetriever:
         except Exception:
             pass
         return scores
-    
-    def _ranking(
+
+    def _ranking_from_history(
         self,
-        agent_trajectories: List[List[int]],
+        position_history: torch.Tensor,
         query_vec: torch.Tensor,
         ranking_func: Callable,
         top_k: int,
         n_agents: int
     ) -> List[Dict]:
-        """Parallel ranking of visited nodes."""
-        # Count votes
-        all_visited = [node for path in agent_trajectories for node in path]
-        vote_counts = Counter(all_visited)
-        unique_visited = list(vote_counts.keys())
+        """
+        Tensor-native ranking from position history.
 
-        vectors_matrix, valid_ids = self._fetch_vectors_batch(unique_visited)
-        results = []
+        Uses torch.unique for visit counts and batched ranking context.
+        Eliminates CPU-GPU transfers in the ranking hot path.
 
-        # Ensure query_vec is on the same device as the vectors
-        if vectors_matrix.numel() > 0:
-            query_vec = query_vec.to(device=vectors_matrix.device)
+        Args:
+            position_history: Shape (n_agents, max_steps+1), -1 for unvisited
+            query_vec: Query embedding vector
+            ranking_func: Composed ranking function
+            top_k: Number of top results
+            n_agents: Total agent count
 
-        # Iterate over valid vectors
-        for i, node_id in enumerate(valid_ids):
-            vec = vectors_matrix[i]
-            score = self._calculate_node_score(
-                node_id=node_id,
-                votes=vote_counts[node_id],
-                query_vec=query_vec,
-                target_vec=vec,
-                ranking_func=ranking_func,
-                n_agents=n_agents
-            )
-            results.append({'id': node_id, 'score': score})
+        Returns:
+            List of top-k results with scores
+        """
+        device = position_history.device
 
-        results.sort(key=lambda x: x['score'], reverse=True)
-        return results[:top_k]
+        # Flatten and get unique visited nodes with counts
+        all_positions = position_history.flatten()
+        valid_positions = all_positions[all_positions >= 0]
 
-    def _calculate_node_score(
-        self,
-        node_id: int,
-        votes: int,
-        query_vec: torch.Tensor,
-        target_vec: Optional[torch.Tensor],
-        ranking_func: Callable,
-        n_agents: int
-    ) -> float:
-        """Calculate final score for a single node."""
-        if target_vec is None:
-            return 0.0
+        if valid_positions.numel() == 0:
+            return []
 
-        node_ctx = HeuristicContext(
+        unique_visited, visit_counts = torch.unique(valid_positions, return_counts=True)
+
+        # Fetch embeddings - uses unified tensor-native method
+        embeddings, valid_ids = self._fetch_embeddings(unique_visited)
+
+        if valid_ids.numel() == 0:
+            return []
+
+        # Align visit_counts with valid_ids (some nodes may not have embeddings)
+        # Build a mapping from unique_visited to visit_counts
+        id_to_count = torch.zeros(unique_visited.max().item() + 1, dtype=torch.long, device=device)
+        id_to_count[unique_visited] = visit_counts
+        aligned_counts = id_to_count[valid_ids]
+
+        # Batched ranking context
+        query_vec = query_vec.to(device=embeddings.device)
+        ctx = HeuristicContext(
             query_vec=query_vec,
-            target_vecs=target_vec,
-            target_ids=node_id,
-            graph=self.graph_store,
-            votes=votes,
-            total_agents=n_agents
+            target_vecs=embeddings,
+            target_ids=valid_ids,
+            votes=aligned_counts,
+            total_agents=n_agents,
+            graph=self.graph_store
         )
 
-        return ranking_func(node_ctx)
+        # Get scores from ranking function (returns tensor)
+        scores = ranking_func(ctx).flatten()
+
+        # Top-k selection on GPU
+        k = min(top_k, scores.numel())
+        top_scores, top_indices = torch.topk(scores, k=k)
+        top_ids = valid_ids[top_indices]
+
+        # Convert at API boundary only
+        return [
+            {'id': int(nid), 'score': float(sc)}
+            for nid, sc in zip(top_ids.tolist(), top_scores.tolist())
+        ]
 
     def _get_cached_neighbors(self, node_id: int) -> torch.Tensor:
         """Gets or computes and caches the neighbor list, if enabled."""
@@ -1257,16 +1297,20 @@ class SwarmRetriever:
         if not self.cache_vectors:
             emb = self.embed_fn.embed_query(query)
             if not isinstance(emb, torch.Tensor):
-                emb = torch.as_tensor(emb, dtype=torch.float32)
+                emb = torch.as_tensor(emb, dtype=torch.float32, device=self._device)
+            else:
+                emb = emb.to(device=self._device)
             return emb
         with self._query_lock:
             cached = self.query_cache.get(query)
         if cached is not None:
-            return cached
+            return cached.to(device=self._device)
 
         emb = self.embed_fn.embed_query(query)
         if not isinstance(emb, torch.Tensor):
-            emb = torch.as_tensor(emb, dtype=torch.float32)
+            emb = torch.as_tensor(emb, dtype=torch.float32, device=self._device)
+        else:
+            emb = emb.to(device=self._device)
         with self._query_lock:
             self.query_cache.set(query, emb)
         return emb
@@ -1320,47 +1364,6 @@ class SwarmRetriever:
 
         return final_embeddings
 
-    def _compute_similarities_gpu(
-        self,
-        query_vec: torch.Tensor,
-        candidate_ids: Sequence[int]
-    ) -> Tuple[torch.Tensor, List[int]]:
-        """
-        Compute similarities using GPU when available.
-
-        Falls back to standard tensor computation if GPU not available.
-
-        Args:
-            query_vec: Query embedding (tensor)
-            candidate_ids: List of candidate document IDs
-
-        Returns:
-            Tuple of (similarity scores tensor, valid_ids list)
-        """
-        # Try GPU path if available
-        if self._use_gpu and self._has_gpu_store:
-            try:
-                scores, valid_ids = self.vector_store.compute_similarities(
-                    query_vec, list(candidate_ids)
-                )
-                if not isinstance(scores, torch.Tensor):
-                    scores = torch.tensor(scores, dtype=torch.float32)
-                return scores, valid_ids
-            except Exception as e:
-                logger.debug(f"GPU similarity computation failed, falling back to CPU: {e}")
-
-        # CPU fallback
-        candidate_matrix, valid_ids = self._fetch_vectors_batch(candidate_ids)
-        if len(valid_ids) == 0:
-            return torch.tensor([]), []
-
-        # Normalize query
-        query_norm = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
-
-        # Compute cosine similarity
-        scores = torch.matmul(candidate_matrix, query_norm)
-        return scores, valid_ids
-
     @property
     def device(self) -> str:
         """Return the device this retriever is using."""
@@ -1370,321 +1373,6 @@ class SwarmRetriever:
     def is_gpu_enabled(self) -> bool:
         """Check if GPU acceleration is active."""
         return self._use_gpu
-
-    # === BATCH OPTIMIZATION METHODS ===
-
-    def _fetch_vectors_batch_gpu(
-        self,
-        node_ids: Sequence[int]
-    ) -> Tuple[Any, List[int]]:
-        """
-        Fetch vectors as GPU tensors when available, with automatic fallback.
-
-        This method keeps data on GPU to avoid CPU-GPU transfers when possible.
-
-        Args:
-            node_ids: Sequence of node IDs to fetch
-
-        Returns:
-            Tuple of (vectors tensor/array, valid_ids list)
-        """
-        # Try GPU path if store supports it
-        if self._use_gpu and hasattr(self.vector_store, 'fetch_batch_gpu'):
-            try:
-                return self.vector_store.fetch_batch_gpu(list(node_ids))
-            except Exception as e:
-                logger.debug(f"GPU fetch failed, falling back to CPU: {e}")
-
-        # Fall back to standard numpy path
-        return self._fetch_vectors_batch(node_ids)
-
-    def _ranking_vectorized(
-        self,
-        agent_trajectories: List[List[int]],
-        query_vec: torch.Tensor,
-        ranking_func: Callable,
-        top_k: int,
-        n_agents: int
-    ) -> List[Dict]:
-        """
-        Vectorized ranking that leverages GPU when available.
-
-        Optimizes ranking by:
-        1. Batch-fetching all vectors at once
-        2. Computing similarities in a single GPU operation
-        3. Vectorized score computation
-
-        Args:
-            agent_trajectories: List of paths taken by each agent
-            query_vec: Query embedding
-            ranking_func: Ranking function to apply
-            top_k: Number of top results to return
-            n_agents: Total number of agents
-
-        Returns:
-            List of top-k results with scores
-        """
-        # Count votes
-        all_visited = [node for path in agent_trajectories for node in path]
-        vote_counts = Counter(all_visited)
-        unique_visited = list(vote_counts.keys())
-
-        if not unique_visited:
-            return []
-
-        # Batch fetch vectors - use GPU if available
-        vectors_matrix, valid_ids = self._fetch_vectors_batch_gpu(unique_visited)
-
-        if len(valid_ids) == 0:
-            return []
-
-        # Ensure query_vec is on the same device as the vectors
-        query_vec = query_vec.to(device=vectors_matrix.device)
-
-        # Compute base semantic scores vectorized
-        query_norm = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
-        base_scores = torch.matmul(vectors_matrix, query_norm)
-
-        # Build results with combined scores
-        results = []
-        for i, node_id in enumerate(valid_ids):
-            votes = vote_counts[node_id]
-            vote_score = votes / n_agents if n_agents > 0 else 0.0
-
-            # Create context for custom ranking
-            node_ctx = HeuristicContext(
-                query_vec=query_vec,
-                target_vecs=vectors_matrix[i:i+1],
-                target_ids=[node_id],
-                graph=self.graph_store,
-                votes=votes,
-                total_agents=n_agents
-            )
-
-            score = ranking_func(node_ctx)
-            results.append({'id': node_id, 'score': score})
-
-        # Sort and return top-k
-        results.sort(key=lambda x: x['score'], reverse=True)
-        return results[:top_k]
-
-    def _batch_initial_search(
-        self,
-        query_vecs: torch.Tensor,
-        pool_size: int
-    ) -> List[List[int]]:
-        """
-        Perform batch initial search for multiple queries.
-
-        Uses GPU-accelerated batch search when available.
-
-        Args:
-            query_vecs: Query vectors of shape (n_queries, dim)
-            pool_size: Number of candidates per query
-
-        Returns:
-            List of candidate ID lists, one per query
-        """
-        # Check if vector store supports batch search
-        if hasattr(self.vector_store, 'search_batch'):
-            try:
-                # search_batch now returns (ids_tensor, scores_tensor) with shape (n_queries, limit)
-                batch_ids, batch_scores = self.vector_store.search_batch(query_vecs, pool_size)
-                all_results = []
-                for i in range(batch_ids.shape[0]):
-                    ids_list = batch_ids[i].tolist()
-                    valid_ids = [nid for nid in ids_list if self.graph_store.contains(nid)]
-                    all_results.append(valid_ids)
-                return all_results
-            except Exception as e:
-                logger.debug(f"Batch search failed, falling back to sequential: {e}")
-
-        # Fall back to sequential - search() now returns (ids, scores) tensors
-        all_results = []
-        for vec in query_vecs:
-            search_ids, search_scores = self.vector_store.search(vec, limit=pool_size)
-            ids_list = search_ids.tolist() if isinstance(search_ids, torch.Tensor) else list(search_ids)
-            valid_ids = [nid for nid in ids_list if self.graph_store.contains(nid)]
-            all_results.append(valid_ids)
-
-        return all_results
-
-    def _compute_batch_similarities_gpu(
-        self,
-        query_vecs: torch.Tensor,
-        candidate_ids_per_query: List[List[int]]
-    ) -> List[Tuple[torch.Tensor, List[int]]]:
-        """
-        Compute similarities for multiple queries in batch.
-
-        Optimizes by:
-        1. Gathering all unique candidates
-        2. Single fetch for all vectors
-        3. Batch matrix multiplication
-
-        Args:
-            query_vecs: Query vectors of shape (n_queries, dim)
-            candidate_ids_per_query: List of candidate ID lists
-
-        Returns:
-            List of (scores, valid_ids) tuples per query
-        """
-        if not self._use_gpu:
-            # Fall back to sequential
-            results = []
-            for i, (query_vec, candidate_ids) in enumerate(zip(query_vecs, candidate_ids_per_query)):
-                scores, valid_ids = self._compute_similarities_gpu(query_vec, candidate_ids)
-                results.append((scores, valid_ids))
-            return results
-
-        # Gather all unique candidates
-        all_candidates = set()
-        for candidates in candidate_ids_per_query:
-            all_candidates.update(candidates)
-        all_candidates = list(all_candidates)
-
-        if not all_candidates:
-            return [(torch.tensor([]), []) for _ in query_vecs]
-
-        # Batch fetch all vectors
-        all_vectors, valid_all_ids = self._fetch_vectors_batch_gpu(all_candidates)
-
-        if len(valid_all_ids) == 0:
-            return [(torch.tensor([]), []) for _ in query_vecs]
-
-        # Build ID to index mapping
-        id_to_idx = {vid: i for i, vid in enumerate(valid_all_ids)}
-
-        # Normalize queries
-        query_norms = torch.linalg.norm(query_vecs, dim=1, keepdim=True) + 1e-8
-        query_vecs_norm = query_vecs / query_norms
-
-        # Compute all similarities at once: (n_queries, dim) @ (dim, n_candidates) -> (n_queries, n_candidates)
-        all_similarities = torch.matmul(query_vecs_norm, all_vectors.t())
-
-        # Extract per-query results
-        results = []
-        for i, candidate_ids in enumerate(candidate_ids_per_query):
-            valid_ids = [cid for cid in candidate_ids if cid in id_to_idx]
-            if not valid_ids:
-                results.append((torch.tensor([]), []))
-                continue
-
-            indices = [id_to_idx[vid] for vid in valid_ids]
-            scores = all_similarities[i, indices]
-            results.append((scores, valid_ids))
-
-        return results
-
-    def retrieve_batch_optimized(
-        self,
-        queries: List[Any],
-        agent_groups: Optional[List[AgentGroupConfig]] = None,
-        seed: Optional[int] = None,
-        n_agents: Optional[int] = None,
-        steps: Optional[int] = None,
-        decay: Optional[float] = None,
-        drop_zone_inc: Optional[float] = None,
-        initial_pool_size: Optional[int] = None,
-        start_subset: Optional[int] = None,
-        top_k: Optional[int] = None,
-        movement_strategies: Optional[Dict] = None,
-        ranking_strategies: Optional[Dict] = None,
-        deposit_strategies: Optional[Dict] = None,
-        max_workers: Optional[int] = 4,
-        use_vectorized_ranking: bool = True,
-        **kwargs
-    ) -> List[List[Dict]]:
-        """
-        Optimized batch retrieval with GPU acceleration.
-
-        This method provides additional optimizations over retrieve_batch:
-        1. Batch initial searches (single GPU operation for all queries)
-        2. Vectorized ranking when enabled
-        3. Better GPU memory utilization
-
-        Args:
-            queries: List of queries to retrieve for
-            agent_groups: Optional agent group configurations
-            seed: Random seed for reproducibility
-            n_agents: Number of agents per query
-            steps: Number of traversal steps
-            decay: Pheromone decay rate
-            drop_zone_inc: Drop zone increment
-            initial_pool_size: Size of initial candidate pool
-            start_subset: Size of starting subset
-            top_k: Number of results to return
-            movement_strategies: Movement strategy configuration
-            ranking_strategies: Ranking strategy configuration
-            deposit_strategies: Deposit strategy configuration
-            max_workers: Maximum parallel workers
-            use_vectorized_ranking: Whether to use vectorized ranking
-            **kwargs: Additional arguments
-
-        Returns:
-            List of result lists, one per query
-        """
-        if not queries:
-            return []
-
-        # Resolve parameters
-        params = self._resolve_params(
-            n_agents=n_agents,
-            steps=steps,
-            decay=decay,
-            drop_zone_inc=drop_zone_inc,
-            initial_pool_size=initial_pool_size,
-            start_subset=start_subset,
-            top_k=top_k,
-            ranking_strategies=ranking_strategies,
-            movement_strategies=movement_strategies,
-            deposit_strategies=deposit_strategies,
-            **kwargs
-        )
-
-        # Batch embed all queries
-        query_matrix = self._get_cached_query_embeddings_batch(queries)
-
-        # Batch initial search using GPU
-        logger.debug("Performing batch initial search...")
-        initial_pools = self._batch_initial_search(query_matrix, params['initial_pool_size'])
-
-        # Prepare agents
-        resolved_agents = self._prepare_agents(
-            agent_groups=agent_groups,
-            n_agents=params['n_agents'],
-            movement_strategies=params['movement_strategies'],
-            deposit_strategies=params['deposit_strategies'],
-        )
-
-        # Set up seed
-        base_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
-
-        # Process each query
-        results = []
-        for i, (query_vec, initial_pool) in enumerate(zip(query_matrix, initial_pools)):
-            if not initial_pool:
-                results.append([])
-                continue
-
-            q_seed = base_seed + i
-            py_rng = random.Random(q_seed)
-            torch_gen = torch.Generator()
-            torch_gen.manual_seed(q_seed)
-
-            # Use the standard retrieval with pre-fetched pool
-            result = self._retrieve_with_pool(
-                query_vec=query_vec,
-                initial_pool=initial_pool,
-                resolved_agents=resolved_agents,
-                py_rng=py_rng,
-                torch_gen=torch_gen,
-                use_vectorized_ranking=use_vectorized_ranking,
-                **params
-            )
-            results.append(result)
-
-        return results
 
     def retrieve_with_precomputed(
         self,
@@ -2018,7 +1706,11 @@ class SwarmRetriever:
             dtype=torch.long,
             device=self._device
         )
-        agent_trajectories = [[loc.item()] for loc in agent_locations]
+
+        # Position history tensor: (n_agents, steps + 1), -1 = unvisited
+        position_history = torch.full((n_agents, steps + 1), -1, device=self._device, dtype=torch.long)
+        position_history[:, 0] = agent_locations
+
         query_pheromones = self.base_pheromones.copy()
 
         # Initialize decision tracking if provided
@@ -2053,15 +1745,12 @@ class SwarmRetriever:
                     torch_gen=torch_gen,
                 )
 
-                for agent_idx in range(n_agents):
-                    new_loc = new_locations[agent_idx].item() if isinstance(new_locations[agent_idx], torch.Tensor) else new_locations[agent_idx]
-                    old_loc = agent_locations[agent_idx].item() if isinstance(agent_locations[agent_idx], torch.Tensor) else agent_locations[agent_idx]
-                    if new_loc != old_loc:
-                        agent_trajectories[agent_idx].append(new_loc)
+                # Pure tensor assignment - no .item() calls
+                position_history[:, step + 1] = new_locations
                 agent_locations = new_locations
             else:
                 for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
-                    current_loc = agent_locations[agent_idx].item() if isinstance(agent_locations[agent_idx], torch.Tensor) else agent_locations[agent_idx]
+                    current_loc = agent_locations[agent_idx].item()
 
                     result = self._process_agent_step(
                         agent_id=agent_idx,
@@ -2079,7 +1768,7 @@ class SwarmRetriever:
                     if result:
                         next_node = result['new_location']
                         agent_locations[agent_idx] = next_node
-                        agent_trajectories[agent_idx].append(next_node)
+                        position_history[agent_idx, step + 1] = next_node
 
                         deposit = result['deposit']
                         if deposit > self.PHEROMONE_EPSILON:
@@ -2098,121 +1787,6 @@ class SwarmRetriever:
             for node_id, amount in pheromone_updates.items():
                 query_pheromones[node_id] += amount
 
-        return self._ranking(
-            agent_trajectories, query_vec, ranking_func, top_k, n_agents
-        )
-
-    def _retrieve_with_pool(
-        self,
-        query_vec: torch.Tensor,
-        initial_pool: List[int],
-        resolved_agents: List[Tuple[Callable, Callable]],
-        py_rng: random.Random,
-        torch_gen: torch.Generator,
-        steps: int,
-        decay: float,
-        drop_zone_inc: float,
-        start_subset: int,
-        top_k: int,
-        ranking_strategies: Dict,
-        use_vectorized_ranking: bool = True,
-        **kwargs
-    ) -> List[Dict]:
-        """
-        Internal retrieval using a pre-computed initial pool.
-
-        Args:
-            query_vec: Query embedding
-            initial_pool: Pre-computed initial candidate pool
-            resolved_agents: Prepared agent functions
-            py_rng: Python random generator
-            torch_gen: PyTorch random generator
-            steps: Number of traversal steps
-            decay: Pheromone decay rate
-            drop_zone_inc: Drop zone increment
-            start_subset: Starting subset size
-            top_k: Number of results
-            ranking_strategies: Ranking configuration
-            use_vectorized_ranking: Whether to use vectorized ranking
-            **kwargs: Additional arguments
-
-        Returns:
-            List of results with scores
-        """
-        n_agents = len(resolved_agents)
-
-        # Normalize query
-        query_vec = torch.as_tensor(query_vec).flatten()
-        query_vec = query_vec / (torch.linalg.norm(query_vec) + 1e-8)
-
-        # Pre-compose ranking strategy
-        ranking_func = self._compose_strategy(ranking_strategies, "ranking")
-
-        if not initial_pool:
-            return []
-
-        drop_zone = initial_pool[:start_subset]
-        dz_len = len(drop_zone)
-
-        # Cache warming
-        if self.cache_neighbors:
-            with ThreadPoolExecutor(max_workers=min(4, dz_len)) as ex:
-                list(ex.map(self._get_cached_neighbors, drop_zone))
-
-        # Spawn agents
-        weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
-        agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long, device=self._device)
-        agent_trajectories = [[loc.item()] for loc in agent_locations]
-        query_pheromones = self.base_pheromones.copy()
-
-        # Traversal loop
-        for step in range(steps):
-            pheromone_updates = {}
-            max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
-
-            for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
-                current_loc = agent_locations[agent_idx].item()
-
-                result = self._process_agent_step(
-                    agent_id=agent_idx,
-                    current_loc=current_loc,
-                    query_vec=query_vec,
-                    query_pheromones=query_pheromones,
-                    move_func=move_fn,
-                    deposit_func=deposit_fn,
-                    step=step,
-                    max_pheromone=max_pheromone,
-                    torch_gen=torch_gen
-                )
-
-                if result:
-                    next_node = result['new_location']
-                    agent_locations[agent_idx] = next_node
-                    agent_trajectories[agent_idx].append(next_node)
-
-                    deposit = result['deposit']
-                    if deposit > self.PHEROMONE_EPSILON:
-                        pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
-
-            # Update pheromones
-            if query_pheromones:
-                existing_keys = list(query_pheromones.keys())
-                for k in existing_keys:
-                    new_val = query_pheromones[k] * decay
-                    if new_val < self.PHEROMONE_EPSILON:
-                        del query_pheromones[k]
-                    else:
-                        query_pheromones[k] = new_val
-
-            for node_id, amount in pheromone_updates.items():
-                query_pheromones[node_id] += amount
-
-        # Use vectorized ranking if enabled
-        if use_vectorized_ranking:
-            return self._ranking_vectorized(
-                agent_trajectories, query_vec, ranking_func, top_k, n_agents
-            )
-
-        return self._ranking(
-            agent_trajectories, query_vec, ranking_func, top_k, n_agents
+        return self._ranking_from_history(
+            position_history, query_vec, ranking_func, top_k, n_agents
         )

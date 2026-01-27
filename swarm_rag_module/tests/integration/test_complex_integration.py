@@ -60,23 +60,18 @@ def test_variance_calculation_flow():
     # Fitness that cares about Stability
     fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0})
 
-    pop_eval = PopulationEvaluator(retriever, base_eval, fitness_calc)
+    # Disable adaptive/shared precompute for simple variance test
+    pop_eval = PopulationEvaluator(
+        retriever, base_eval, fitness_calc,
+        device="cpu",
+        enable_adaptive=False,
+        enable_shared_precompute=False
+    )
 
     # 2. Create a dummy genome
     g = Genome(id="unstable_agent")
-    class MockStrategy:
-        def size(self): return 10  # Return a fake complexity size
-        def copy(self): return self
-    g.group_ratios = {'g0': 1.0}
-    g.strategies = {
-        'g0_movement': MockStrategy(),
-        'g0_deposit': MockStrategy()
-    }
-    # Manually compile empty cache to pass checks
-    g._compiled_cache = {
-        'g0_movement': lambda x: 0,
-        'g0_deposit': lambda x: 0
-    }
+    # Set minimal params for compiler
+    g.params = {'n_agents': 5, 'steps': 3}
 
     # 3. Evaluate on 2 queries (One Good, One Bad)
     queries = ["q1", "q2"]
