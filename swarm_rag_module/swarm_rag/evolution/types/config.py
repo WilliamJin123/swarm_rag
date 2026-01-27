@@ -299,6 +299,9 @@ class ResourceConfig:
     enable_shared_precompute: bool = True  # Pre-compute query embeddings and initial pools once per generation
     enable_cross_genome_metric_batch: bool = True  # Batch metric computation across all genomes
 
+    # Early exit threshold at halfway checkpoint (quality score threshold)
+    early_exit_threshold: float = 0.30
+
 
 @dataclass
 class MapElitesConfig:
@@ -446,6 +449,7 @@ class StorageConfig:
     checkpoint_frequency: int = 5
     validation_frequency: int = 5
     keep_n_checkpoints: int = 10  # 0 = keep all
+    async_checkpoints: bool = True  # Enable async checkpoint writing
     plot_title: str = "MAP-Elites Evolution"
 
     # Computed paths (set in __post_init__)

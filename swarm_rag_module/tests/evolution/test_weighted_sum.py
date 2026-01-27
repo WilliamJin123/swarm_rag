@@ -475,6 +475,7 @@ class TestCheckpointSerialization:
                 base_dir=tmpdir,
                 dataset="test",
                 run_id="test_run",
+                async_checkpoints=False,  # Disable async for synchronous test
             )
 
             run_manager = RunManager(storage_config)

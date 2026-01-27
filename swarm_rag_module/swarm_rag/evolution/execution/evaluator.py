@@ -1,14 +1,15 @@
 """
-Population Evaluator with Adaptive Multi-Tier Evaluation.
+Population Evaluator with Single-Checkpoint Early Exit.
 
-Implements progressive evaluation to reduce wasted computation on poor-performing
-genomes. Most bad genomes are filtered at early tiers with small sample sizes,
-while promising genomes get full evaluation.
+Implements simplified evaluation with a single quarter checkpoint for early exit.
+Poor-performing genomes are filtered at the 25% point, while promising genomes
+get full evaluation.
 
 Optimization features:
 - Shared pre-computation: Query embeddings and initial pools computed once per generation
 - Cross-genome metric batching: Single GPU call for metrics across all genomes
 - CPU thread pool capping: Prevents worker over-subscription
+- Single quarter checkpoint: Filters bad genomes 3x faster than halfway
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
@@ -33,23 +34,8 @@ from .shared_precompute import (
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class EvaluationTier:
-    """Configuration for a single evaluation tier."""
-    queries: int
-    threshold: Optional[float]  # None = full evaluation (no early exit)
-    name: str = ""
-
-
-# Aggressive evaluation tiers - filter bad genomes faster to reduce wasted computation
-# More aggressive thresholds and fewer queries per tier for faster convergence
-# Expected: ~20% of genomes reach full evaluation
-DEFAULT_TIERS: List[EvaluationTier] = [
-    EvaluationTier(queries=10, threshold=0.15, name="quick_filter"),     # Filter completely broken
-    EvaluationTier(queries=25, threshold=0.30, name="poor_filter"),      # Filter poor performers
-    EvaluationTier(queries=50, threshold=0.45, name="mediocre_filter"), # Filter mediocre
-    EvaluationTier(queries=100_000, threshold=None, name="full"),       # Full eval for promising genomes
-]
+# Default early exit threshold at quarter checkpoint (25% of queries)
+DEFAULT_EARLY_EXIT_THRESHOLD: float = 0.30
 
 
 @dataclass
@@ -63,16 +49,17 @@ class EvaluationStats:
 
 class PopulationEvaluator:
     """
-    Evaluator with multi-tier progressive sampling.
+    Evaluator with single-checkpoint early exit.
 
-    Implements adaptive evaluation that progressively tests genomes with
-    increasing sample sizes, exiting early for poor performers.
+    Implements simplified evaluation with a single quarter checkpoint.
+    Poor-performing genomes are filtered at the 25% point based on
+    quality score threshold.
 
-    This dramatically reduces evaluation time by:
-    1. Quick filter (10 queries): Eliminates clearly bad genomes
-    2. Promising tier (30 queries): Confirms potential
-    3. Competitive tier (60 queries): Validates competitive performance
-    4. Full evaluation (100 queries): Only for top candidates
+    This reduces evaluation time by:
+    1. Evaluating first quarter of queries
+    2. Computing quality score at quarter point
+    3. Early exit if quality < threshold
+    4. Full evaluation only for promising genomes
 
     Args:
         retriever: RetrievalBackend implementation
@@ -84,8 +71,8 @@ class PopulationEvaluator:
         ground_truth: Ground truth for queries
         track_decisions: Enable decision tracking for LLM context
         decision_sample_rate: Fraction of queries to track
-        tiers: Custom evaluation tiers (default: DEFAULT_TIERS)
-        enable_adaptive: Whether to use adaptive evaluation (True) or full evaluation only
+        early_exit_threshold: Quality threshold at quarter point (default: 0.30)
+        enable_adaptive: Whether to use early exit (True) or full evaluation only
     """
 
     def __init__(
@@ -99,7 +86,7 @@ class PopulationEvaluator:
         ground_truth: List[List[Any]] = None,
         track_decisions: bool = False,
         decision_sample_rate: float = 1.0,
-        tiers: List[EvaluationTier] = None,
+        early_exit_threshold: float = DEFAULT_EARLY_EXIT_THRESHOLD,
         enable_adaptive: bool = True,
         device: Any = None,  # torch.device or str
         enable_shared_precompute: bool = True,
@@ -115,7 +102,7 @@ class PopulationEvaluator:
         self.max_workers_per_retrieval = max_workers_per_retrieval
         self.track_decisions = track_decisions
         self.decision_sample_rate = decision_sample_rate
-        self.tiers = tiers or DEFAULT_TIERS
+        self.early_exit_threshold = early_exit_threshold
         self.enable_adaptive = enable_adaptive
 
         # Compilers for both modes
@@ -178,7 +165,7 @@ class PopulationEvaluator:
     def _reset_stats(self):
         """Reset evaluation statistics for a new run."""
         self.stats = EvaluationStats(
-            tier_exits={tier.name: 0 for tier in self.tiers}
+            tier_exits={"early_exit": 0, "full": 0}
         )
 
     def evaluate(
@@ -212,7 +199,8 @@ class PopulationEvaluator:
         logger.info(f"  > Concurrency: {batch_size} | Adaptive: {self.enable_adaptive}")
         logger.info(f"  > Shared precompute: {self.enable_shared_precompute} | Cross-genome batch: {self.enable_cross_genome_metric_batch}")
         if self.enable_adaptive:
-            logger.info(f"  > Tiers: {[(t.queries, t.threshold) for t in self.tiers]}")
+            quarter = len(queries) // 4
+            logger.info(f"  > Early exit: quarter={quarter}, threshold={self.early_exit_threshold}")
 
         # Prepare shared context if enabled
         shared_context = None
@@ -340,7 +328,8 @@ class PopulationEvaluator:
         # Batch compute metrics across all genomes
         if self.enable_cross_genome_metric_batch:
             self._batch_compute_metrics_all_genomes(
-                genomes, batched_results, shared_context.ground_truth_sets
+                genomes, batched_results, shared_context.ground_truth_sets,
+                shared_context=shared_context
             )
         else:
             # Compute metrics individually
@@ -371,19 +360,33 @@ class PopulationEvaluator:
         Evaluate a batch using shared pre-computed context.
 
         This method uses pre-computed query embeddings and initial pools
-        for faster evaluation, while still supporting adaptive tiers.
+        for faster evaluation, with optional single-checkpoint early exit.
         """
         logger.debug(f"  > Starting batch of {len(batch)} genomes with shared context...")
 
         total_queries_used = 0
         completed_count = 0
 
+        # Check if we can use the optimized GPU path with precomputed GT
+        use_gpu_optimized = (
+            self.device == "cuda" and
+            self.enable_adaptive and
+            shared_context.ground_truth_tensor is not None and
+            shared_context.gt_sizes is not None
+        )
+
         # GPU mode: sequential evaluation
         if self.device == "cuda":
             for genome in batch:
-                queries_used, exit_tier = self._evaluate_single_with_shared(
-                    genome, queries, ground_truth, shared_context
-                )
+                if use_gpu_optimized:
+                    # Use optimized path with single checkpoint
+                    queries_used, exit_tier = self._evaluate_single_with_early_exit(
+                        genome, queries, ground_truth, shared_context
+                    )
+                else:
+                    queries_used, exit_tier = self._evaluate_single_with_shared(
+                        genome, queries, ground_truth, shared_context
+                    )
                 total_queries_used += queries_used
                 completed_count += 1
 
@@ -428,6 +431,7 @@ class PopulationEvaluator:
         Evaluate a single genome using shared pre-computed context.
 
         Uses pre-computed query embeddings and initial pools when available.
+        Supports single-checkpoint early exit at quarter point (25%).
         """
         if not self.enable_adaptive:
             return self._evaluate_single_full_with_shared(
@@ -439,71 +443,77 @@ class PopulationEvaluator:
         decision_tracker = self._create_decision_tracker()
 
         start_time = time.time()
-        all_results = []
-        queries_evaluated = 0
-        exit_tier = "full"
+        n_queries = len(queries)
+        quarter = n_queries // 4
 
-        for tier in self.tiers:
-            tier_end = min(tier.queries, len(queries))
-            tier_start = queries_evaluated
+        # Get pre-computed initial pools
+        initial_pools = shared_context.initial_pools.get(pool_size, [])
 
-            if tier_start >= tier_end:
-                continue
-
-            # Get pre-computed data for this tier
-            tier_embeddings = shared_context.query_embeddings[tier_start:tier_end]
-            initial_pools = shared_context.initial_pools.get(pool_size, [])
-            tier_pools = initial_pools[tier_start:tier_end] if initial_pools else []
-
-            if tier_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
-                # Use pre-computed path
-                tier_results = self.retriever.retrieve_batch_with_precomputed(
-                    query_embeddings=tier_embeddings,
-                    initial_pools=tier_pools,
-                    max_workers=self.max_workers_per_retrieval,
-                    genome_id=f"{genome.id}_tier_{tier.name}",
-                    **retriever_kwargs
-                )
-            else:
-                # Fallback to standard batch
-                tier_queries = queries[tier_start:tier_end]
-                tier_results = self.retriever.retrieve_batch(
-                    queries=tier_queries,
-                    max_workers=self.max_workers_per_retrieval,
-                    genome_id=f"{genome.id}_tier_{tier.name}",
-                    **retriever_kwargs
-                )
-
-            all_results.extend(tier_results)
-            queries_evaluated = tier_end
-
-            # Compute metrics and check early exit
-            current_metrics = self._compute_metrics_cumulative(
-                all_results, ground_truth[:queries_evaluated]
+        # Phase 1: Evaluate first quarter for early exit check
+        if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+            first_quarter_results = self.retriever.retrieve_batch_with_precomputed(
+                query_embeddings=shared_context.query_embeddings[:quarter],
+                initial_pools=initial_pools[:quarter],
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=f"{genome.id}_quarter",
+                **retriever_kwargs
+            )
+        else:
+            first_quarter_results = self.retriever.retrieve_batch(
+                queries=queries[:quarter],
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=f"{genome.id}_quarter",
+                **retriever_kwargs
             )
 
-            if tier.threshold is not None:
-                elapsed = time.time() - start_time
-                current_metrics['latency'] = elapsed / max(1, queries_evaluated)
-                current_metrics['complexity'] = float(genome.complexity())
+        # Compute metrics at quarter and check early exit
+        quarter_metrics = self._compute_metrics_cumulative(
+            first_quarter_results, ground_truth[:quarter]
+        )
+        elapsed = time.time() - start_time
+        quarter_metrics['latency'] = elapsed / max(1, quarter)
+        quarter_metrics['complexity'] = float(genome.complexity())
 
-                current_fitness = self.fitness_calc.calculate(current_metrics, genome)
+        quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
 
-                if current_fitness.quality_score < tier.threshold:
-                    exit_tier = tier.name
-                    genome.metrics = current_metrics
-                    genome.fitness = current_fitness
-                    genome.evaluated = True
+        if quarter_fitness.quality_score < self.early_exit_threshold:
+            # Early exit - this genome isn't promising
+            genome.metrics = quarter_metrics
+            genome.fitness = quarter_fitness
+            genome.evaluated = True
 
-                    if decision_tracker is not None:
-                        genome.decision_context = decision_tracker.to_summary_dict()
+            if decision_tracker is not None:
+                genome.decision_context = decision_tracker.to_summary_dict()
 
-                    return queries_evaluated, exit_tier
+            logger.debug(
+                f"  > [Early Exit] {genome.id} at quarter "
+                f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
+            )
+            return quarter, "early_exit"
+
+        # Phase 2: Evaluate remaining 3/4 for full evaluation
+        if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+            remaining_results = self.retriever.retrieve_batch_with_precomputed(
+                query_embeddings=shared_context.query_embeddings[quarter:],
+                initial_pools=initial_pools[quarter:],
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=f"{genome.id}_full",
+                **retriever_kwargs
+            )
+        else:
+            remaining_results = self.retriever.retrieve_batch(
+                queries=queries[quarter:],
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=f"{genome.id}_full",
+                **retriever_kwargs
+            )
+
+        all_results = first_quarter_results + remaining_results
 
         # Full evaluation completed
         total_latency = time.time() - start_time
-        final_metrics = self._compute_metrics_cumulative(all_results, ground_truth[:queries_evaluated])
-        final_metrics['latency'] = total_latency / max(1, queries_evaluated)
+        final_metrics = self._compute_metrics_cumulative(all_results, ground_truth)
+        final_metrics['latency'] = total_latency / max(1, n_queries)
         final_metrics['complexity'] = float(genome.complexity())
 
         genome.metrics = final_metrics
@@ -513,7 +523,7 @@ class PopulationEvaluator:
         if decision_tracker is not None:
             genome.decision_context = decision_tracker.to_summary_dict()
 
-        return queries_evaluated, exit_tier
+        return n_queries, "full"
 
     def _evaluate_single_full_with_shared(
         self,
@@ -567,23 +577,28 @@ class PopulationEvaluator:
         self,
         genomes: List[Genome],
         batched_results: BatchedRetrievalResults,
-        ground_truth_sets: List[Set[Any]]
+        ground_truth_sets: List[Set[Any]],
+        shared_context: Optional[SharedPrecomputeContext] = None
     ):
         """
         Compute metrics for all genomes in a single batched GPU call.
 
         This provides significant speedup by:
         1. Stacking all retrieval results into a single tensor
-        2. Single call to compute_all_metrics_batch_gpu_vectorized
-        3. Reshaping and assigning back to individual genomes
+        2. Using precomputed ground truth GPU tensors when available
+        3. Single call to compute_all_metrics_batch_gpu_precomputed
+        4. Reshaping and assigning back to individual genomes
         """
         from ...eval.metric_functions import MetricFunctions
 
         logger.info("  > Computing metrics across all genomes in batch...")
 
-        # Prepare flattened tensor for batch computation
+        # Prepare flattened tensor for batch computation directly on target device
         max_k = 20  # Standard max k for metrics
-        retrieved_ids, genome_query_indices = batched_results.prepare_for_batch_metrics(max_k)
+        target_device = self.device if self.device == "cuda" else "cpu"
+        retrieved_ids, genome_query_indices = batched_results.prepare_for_batch_metrics(
+            max_k, device=target_device
+        )
 
         if retrieved_ids.numel() == 0:
             logger.warning("No retrieval results to compute metrics for")
@@ -592,38 +607,65 @@ class PopulationEvaluator:
         n_total = len(genome_query_indices)
         n_queries_per_genome = len(ground_truth_sets)
 
-        # Expand ground truth sets for all genomes
-        # Each genome evaluates against the same ground truth
+        # Expand ground truth for all genomes
         n_genomes = len(genomes)
-        expanded_gt_sets = ground_truth_sets * n_genomes
 
-        # Compute metrics in batch
+        # Check if we have precomputed GPU ground truth tensors
+        has_precomputed_gt = (
+            shared_context is not None and
+            shared_context.ground_truth_tensor is not None and
+            shared_context.gt_sizes is not None
+        )
+
+        # Compute metrics in batch (retrieved_ids already on target device)
         if self.device == "cuda":
             try:
-                retrieved_ids_gpu = retrieved_ids.to(device="cuda")
-                # Use vectorized GPU computation
-                if hasattr(MetricFunctions, 'compute_all_metrics_batch_gpu_vectorized'):
-                    all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu_vectorized(
-                        retrieved_ids_gpu,
-                        expanded_gt_sets[:n_total],
+                if has_precomputed_gt:
+                    # Use fastest path with precomputed GPU tensors
+                    # Expand GT tensors for all genomes
+                    gt_tensor_expanded = shared_context.ground_truth_tensor.repeat(n_genomes, 1)
+                    gt_sizes_expanded = shared_context.gt_sizes.repeat(n_genomes)
+
+                    # Truncate to n_total (in case of partial batches)
+                    gt_tensor_expanded = gt_tensor_expanded[:n_total]
+                    gt_sizes_expanded = gt_sizes_expanded[:n_total]
+
+                    logger.debug(f"    > Using precomputed GT tensor: {gt_tensor_expanded.shape}")
+
+                    all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu_precomputed(
+                        retrieved_ids,
+                        gt_tensor_expanded,
+                        gt_sizes_expanded,
                         k_values=self.evaluator.k_values,
                         device="cuda"
                     )
                 else:
-                    all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu(
-                        retrieved_ids_gpu,
-                        expanded_gt_sets[:n_total],
-                        k_values=self.evaluator.k_values,
-                        device="cuda"
-                    )
+                    # Fallback to sets-based GPU computation
+                    expanded_gt_sets = ground_truth_sets * n_genomes
+                    if hasattr(MetricFunctions, 'compute_all_metrics_batch_gpu_vectorized'):
+                        all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu_vectorized(
+                            retrieved_ids,
+                            expanded_gt_sets[:n_total],
+                            k_values=self.evaluator.k_values,
+                            device="cuda"
+                        )
+                    else:
+                        all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu(
+                            retrieved_ids,
+                            expanded_gt_sets[:n_total],
+                            k_values=self.evaluator.k_values,
+                            device="cuda"
+                        )
             except Exception as e:
                 logger.debug(f"GPU batch metrics failed, falling back to CPU: {e}")
+                expanded_gt_sets = ground_truth_sets * n_genomes
                 all_metrics_per_query = MetricFunctions.compute_all_metrics_batch(
                     retrieved_ids,
                     expanded_gt_sets[:n_total],
                     k_values=self.evaluator.k_values
                 )
         else:
+            expanded_gt_sets = ground_truth_sets * n_genomes
             all_metrics_per_query = MetricFunctions.compute_all_metrics_batch(
                 retrieved_ids,
                 expanded_gt_sets[:n_total],
@@ -785,7 +827,7 @@ class PopulationEvaluator:
         ground_truth: List[List[Any]]
     ) -> Tuple[int, str]:
         """
-        Evaluates a single genome with progressive tier-based sampling.
+        Evaluates a single genome with single quarter checkpoint.
 
         Returns:
             Tuple of (queries_used, exit_tier_name)
@@ -797,79 +839,68 @@ class PopulationEvaluator:
         decision_tracker = self._create_decision_tracker()
 
         start_time = time.time()
-        all_results = []
-        queries_evaluated = 0
-        exit_tier = "full"
+        n_queries = len(queries)
+        quarter = n_queries // 4
 
-        for tier in self.tiers:
-            tier_end = min(tier.queries, len(queries))
-            tier_start = queries_evaluated
-
-            if tier_start >= tier_end:
-                continue
-
-            tier_queries = queries[tier_start:tier_end]
-            tier_gt = ground_truth[tier_start:tier_end]
-
-            # Evaluate this tier's queries
-            if decision_tracker is not None and tier_start == 0:
-                # Use single-query mode for first tier to capture decisions
-                tier_results = []
-                for q in tier_queries:
-                    res = self.retriever.retrieve(
-                        query=q,
-                        decision_tracker=decision_tracker,
-                        **retriever_kwargs
-                    )
-                    tier_results.append(res)
-            else:
-                # Use batch mode for speed
-                tier_results = self.retriever.retrieve_batch(
-                    queries=tier_queries,
-                    max_workers=self.max_workers_per_retrieval,
-                    genome_id=f"{genome.id}_tier_{tier.name}",
+        # Phase 1: Evaluate first quarter for early exit check
+        if decision_tracker is not None:
+            # Use single-query mode for decision tracking on first batch
+            first_quarter_results = []
+            for q in queries[:quarter]:
+                res = self.retriever.retrieve(
+                    query=q,
+                    decision_tracker=decision_tracker,
                     **retriever_kwargs
                 )
-
-            all_results.extend(tier_results)
-            queries_evaluated = tier_end
-
-            # Compute metrics so far
-            current_metrics = self._compute_metrics_cumulative(
-                all_results, ground_truth[:queries_evaluated]
+                first_quarter_results.append(res)
+        else:
+            # Use batch mode for speed
+            first_quarter_results = self.retriever.retrieve_batch(
+                queries=queries[:quarter],
+                max_workers=self.max_workers_per_retrieval,
+                genome_id=f"{genome.id}_quarter",
+                **retriever_kwargs
             )
 
-            # Check early exit threshold
-            if tier.threshold is not None:
-                # Add latency/complexity BEFORE fitness calculation so cost_score is correct
-                elapsed = time.time() - start_time
-                current_metrics['latency'] = elapsed / max(1, queries_evaluated)
-                current_metrics['complexity'] = float(genome.complexity())
+        # Compute metrics at quarter and check early exit
+        quarter_metrics = self._compute_metrics_cumulative(
+            first_quarter_results, ground_truth[:quarter]
+        )
+        elapsed = time.time() - start_time
+        quarter_metrics['latency'] = elapsed / max(1, quarter)
+        quarter_metrics['complexity'] = float(genome.complexity())
 
-                current_fitness = self.fitness_calc.calculate(current_metrics, genome)
+        quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
 
-                if current_fitness.quality_score < tier.threshold:
-                    # Early exit - this genome isn't promising
-                    exit_tier = tier.name
+        if quarter_fitness.quality_score < self.early_exit_threshold:
+            # Early exit - this genome isn't promising
+            genome.metrics = quarter_metrics
+            genome.fitness = quarter_fitness
+            genome.evaluated = True
 
-                    genome.metrics = current_metrics
-                    genome.fitness = current_fitness
-                    genome.evaluated = True
+            if decision_tracker is not None:
+                genome.decision_context = decision_tracker.to_summary_dict()
 
-                    if decision_tracker is not None:
-                        genome.decision_context = decision_tracker.to_summary_dict()
+            logger.debug(
+                f"  > [Early Exit] {genome.id} at quarter "
+                f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
+            )
+            return quarter, "early_exit"
 
-                    logger.debug(
-                        f"  > [Early Exit] {genome.id} at tier '{tier.name}' "
-                        f"(qual={current_fitness.quality_score:.4f} < {tier.threshold})"
-                    )
+        # Phase 2: Evaluate remaining 3/4 for full evaluation
+        remaining_results = self.retriever.retrieve_batch(
+            queries=queries[quarter:],
+            max_workers=self.max_workers_per_retrieval,
+            genome_id=f"{genome.id}_full",
+            **retriever_kwargs
+        )
 
-                    return queries_evaluated, exit_tier
+        all_results = first_quarter_results + remaining_results
 
         # Full evaluation completed
         total_latency = time.time() - start_time
-        final_metrics = self._compute_metrics_cumulative(all_results, ground_truth[:queries_evaluated])
-        final_metrics['latency'] = total_latency / max(1, queries_evaluated)
+        final_metrics = self._compute_metrics_cumulative(all_results, ground_truth)
+        final_metrics['latency'] = total_latency / max(1, n_queries)
         final_metrics['complexity'] = float(genome.complexity())
 
         genome.metrics = final_metrics
@@ -879,7 +910,7 @@ class PopulationEvaluator:
         if decision_tracker is not None:
             genome.decision_context = decision_tracker.to_summary_dict()
 
-        return queries_evaluated, exit_tier
+        return n_queries, "full"
 
     def _evaluate_single_full(
         self,
@@ -1083,3 +1114,156 @@ class PopulationEvaluator:
             aggregated["variance"] = aggregated.get(f"var_{fallback}", 0.0) if fallback else 0.0
 
         return aggregated
+
+
+    def _evaluate_single_with_early_exit(
+        self,
+        genome: Genome,
+        queries: List[str],
+        ground_truth: List[List[Any]],
+        shared_context: SharedPrecomputeContext
+    ) -> Tuple[int, str]:
+        """
+        Evaluate a genome with single quarter checkpoint using GPU-optimized metrics.
+
+        This optimized path:
+        1. Retrieves all queries up front
+        2. Computes metrics at quarter and full in GPU calls
+        3. Makes early-exit decision based on single threshold
+
+        Args:
+            genome: Genome to evaluate
+            queries: List of query strings
+            ground_truth: Ground truth lists
+            shared_context: Precomputed shared context
+
+        Returns:
+            Tuple of (queries_used, exit_tier_name)
+        """
+        retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
+        pool_size = retriever_kwargs.get('initial_pool_size', 30)
+        decision_tracker = self._create_decision_tracker()
+
+        start_time = time.time()
+        n_queries = len(queries)
+        quarter = n_queries // 4
+
+        # Get pre-computed initial pools
+        initial_pools = shared_context.initial_pools.get(pool_size, [])
+        if not initial_pools or not hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+            # Fallback to non-optimized path
+            return self._evaluate_single_with_shared(
+                genome, queries, ground_truth, shared_context
+            )
+
+        # Fetch all results in one batch (retrieval is the expensive part)
+        all_results = self.retriever.retrieve_batch_with_precomputed(
+            query_embeddings=shared_context.query_embeddings,
+            initial_pools=initial_pools,
+            max_workers=self.max_workers_per_retrieval,
+            genome_id=genome.id,
+            **retriever_kwargs
+        )
+
+        # Build retrieved IDs tensor on GPU
+        max_k = 20
+        retrieved_ids = torch.full(
+            (n_queries, max_k), -1, dtype=torch.long, device=self.device
+        )
+        for i, results in enumerate(all_results):
+            for j, item in enumerate(results[:max_k]):
+                if isinstance(item, dict):
+                    try:
+                        retrieved_ids[i, j] = int(item.get('id', -1))
+                    except (ValueError, TypeError):
+                        pass
+                else:
+                    try:
+                        retrieved_ids[i, j] = int(item)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Compute metrics at quarter for early exit check
+        quarter_metrics = self._compute_metrics_for_slice(
+            retrieved_ids[:quarter], shared_context, quarter
+        )
+
+        elapsed = time.time() - start_time
+        quarter_metrics['latency'] = elapsed / max(1, quarter)
+        quarter_metrics['complexity'] = float(genome.complexity())
+
+        quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
+
+        if quarter_fitness.quality_score < self.early_exit_threshold:
+            # Early exit - this genome isn't promising
+            genome.metrics = quarter_metrics
+            genome.fitness = quarter_fitness
+            genome.evaluated = True
+
+            if decision_tracker is not None:
+                genome.decision_context = decision_tracker.to_summary_dict()
+
+            logger.debug(
+                f"  > [Early Exit] {genome.id} at quarter "
+                f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
+            )
+            return quarter, "early_exit"
+
+        # Full evaluation - compute metrics for all queries
+        total_latency = time.time() - start_time
+        final_metrics = self._compute_metrics_for_slice(
+            retrieved_ids, shared_context, n_queries
+        )
+        final_metrics['latency'] = total_latency / max(1, n_queries)
+        final_metrics['complexity'] = float(genome.complexity())
+
+        genome.metrics = final_metrics
+        genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
+        genome.evaluated = True
+
+        if decision_tracker is not None:
+            genome.decision_context = decision_tracker.to_summary_dict()
+
+        return n_queries, "full"
+
+    def _compute_metrics_for_slice(
+        self,
+        retrieved_ids: torch.Tensor,
+        shared_context: SharedPrecomputeContext,
+        n_queries: int
+    ) -> Dict[str, float]:
+        """
+        Compute metrics for a slice of retrieved IDs using GPU-accelerated computation.
+
+        Args:
+            retrieved_ids: (n_queries, max_k) tensor of retrieved IDs on GPU
+            shared_context: Shared context with precomputed ground truth tensors
+            n_queries: Number of queries in this slice
+
+        Returns:
+            Dictionary of metric name -> value
+        """
+        from ...eval.metric_functions import MetricFunctions
+
+        # Use precomputed GT tensors
+        gt_tensor = shared_context.ground_truth_tensor[:n_queries]
+        gt_sizes = shared_context.gt_sizes[:n_queries]
+
+        try:
+            metrics = MetricFunctions.compute_all_metrics_batch_gpu_precomputed(
+                retrieved_ids,
+                gt_tensor,
+                gt_sizes,
+                k_values=self.evaluator.k_values,
+                device=self.device
+            )
+            return metrics
+        except Exception as e:
+            logger.debug(f"GPU metrics failed, falling back to CPU: {e}")
+            # Fallback to sets-based computation
+            gt_sets = shared_context.ground_truth_sets[:n_queries]
+            return MetricFunctions.compute_all_metrics_batch(
+                retrieved_ids.cpu(),
+                gt_sets,
+                k_values=self.evaluator.k_values
+            )

@@ -2,11 +2,14 @@
 RunManager - Unified storage management for evolution runs.
 
 Manages checkpoints, logs, and results with device-aware save/load.
+Supports async checkpointing for non-blocking I/O during evolution.
 """
 import os
 import json
 import logging
 from datetime import datetime
+from threading import Thread, Event
+from queue import Queue, Empty, Full
 from typing import List, Optional, Any, TYPE_CHECKING
 from dataclasses import asdict, is_dataclass
 
@@ -19,6 +22,149 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class AsyncCheckpointWriter:
+    """
+    Background thread for non-blocking checkpoint writes.
+
+    Queues checkpoint data for async writing to disk, allowing the
+    evolution loop to continue without waiting for I/O.
+
+    Features:
+    - Single-item queue (drops stale checkpoints if new one arrives)
+    - Atomic update of latest.pkl via temp file
+    - Automatic cleanup of old numbered checkpoints
+    - Graceful shutdown with flush support
+    """
+
+    def __init__(self, keep_n_checkpoints: int = 10):
+        """
+        Initialize the async checkpoint writer.
+
+        Args:
+            keep_n_checkpoints: Number of numbered checkpoints to keep (0 = all)
+        """
+        self._queue: Queue = Queue(maxsize=1)
+        self._shutdown = Event()
+        self._keep_n = keep_n_checkpoints
+        self._thread = Thread(target=self._writer_loop, daemon=True, name="AsyncCheckpointWriter")
+        self._thread.start()
+
+    def _writer_loop(self):
+        """Background loop that processes checkpoint writes."""
+        while not self._shutdown.is_set():
+            try:
+                item = self._queue.get(timeout=0.5)
+                if item is None:  # Shutdown signal
+                    break
+                state, gen_path, latest_path = item
+                self._write_checkpoint(state, gen_path, latest_path)
+                self._queue.task_done()
+            except Empty:
+                continue
+            except Exception as e:
+                logger.error(f"AsyncCheckpointWriter error: {e}")
+                try:
+                    self._queue.task_done()
+                except ValueError:
+                    pass  # Already marked done
+
+    def _write_checkpoint(self, state: dict, gen_path: str, latest_path: str):
+        """
+        Perform the actual checkpoint write.
+
+        Args:
+            state: Checkpoint state dictionary
+            gen_path: Path for numbered checkpoint (e.g., gen_050.pkl)
+            latest_path: Path for latest.pkl
+        """
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(gen_path), exist_ok=True)
+
+            # Save numbered checkpoint
+            torch.save(state, gen_path)
+
+            # Atomic update of latest.pkl
+            temp = latest_path + ".tmp"
+            torch.save(state, temp)
+            if os.path.exists(latest_path):
+                os.remove(latest_path)
+            os.rename(temp, latest_path)
+
+            logger.debug(f"Async checkpoint written: {gen_path}")
+
+            # Cleanup old checkpoints
+            self._cleanup_old_checkpoints(os.path.dirname(gen_path))
+
+        except Exception as e:
+            logger.error(f"Failed to write checkpoint {gen_path}: {e}")
+
+    def _cleanup_old_checkpoints(self, checkpoint_dir: str):
+        """Remove checkpoints beyond keep_n limit."""
+        if self._keep_n <= 0:
+            return  # Keep all
+
+        if not os.path.exists(checkpoint_dir):
+            return
+
+        # Find all numbered checkpoints
+        try:
+            ckpts = sorted(
+                [f for f in os.listdir(checkpoint_dir)
+                 if f.startswith("gen_") and f.endswith(".pkl")],
+                reverse=True,  # Newest first
+            )
+
+            # Remove old ones
+            for old in ckpts[self._keep_n:]:
+                old_path = os.path.join(checkpoint_dir, old)
+                try:
+                    os.remove(old_path)
+                    logger.debug(f"Removed old checkpoint: {old}")
+                except OSError as e:
+                    logger.warning(f"Failed to remove checkpoint {old}: {e}")
+        except Exception as e:
+            logger.warning(f"Checkpoint cleanup error: {e}")
+
+    def save(self, state: dict, gen_path: str, latest_path: str):
+        """
+        Queue checkpoint for async write. Drops old pending if queue full.
+
+        Args:
+            state: Checkpoint state dictionary
+            gen_path: Path for numbered checkpoint
+            latest_path: Path for latest.pkl
+        """
+        try:
+            self._queue.put_nowait((state, gen_path, latest_path))
+        except Full:
+            # Drop old pending checkpoint, queue new one
+            try:
+                self._queue.get_nowait()
+            except Empty:
+                pass
+            try:
+                self._queue.put_nowait((state, gen_path, latest_path))
+            except Full:
+                logger.warning("Failed to queue checkpoint - writing synchronously")
+                self._write_checkpoint(state, gen_path, latest_path)
+
+    def flush(self):
+        """Block until pending checkpoint is written."""
+        self._queue.join()
+
+    def shutdown(self):
+        """Stop the background thread gracefully."""
+        self._shutdown.set()
+        try:
+            self._queue.put_nowait(None)  # Wake up thread
+        except Full:
+            pass
+        self._thread.join(timeout=5.0)
+        if self._thread.is_alive():
+            logger.warning("AsyncCheckpointWriter thread did not terminate cleanly")
+
+
 class RunManager:
     """
     Manages evolution run storage - checkpoints, logs, results.
@@ -27,6 +173,11 @@ class RunManager:
     - Saves tensors with device info preserved
     - Loads tensors directly to current device (no intermediate transfers)
     - Handles CPU<->GPU transitions automatically via map_location
+
+    Async checkpointing:
+    - When enabled, checkpoint writes happen in background thread
+    - Evolution loop continues without waiting for I/O
+    - Call close() to flush pending checkpoints before exit
     """
 
     def __init__(self, config: "StorageConfig", device: torch.device = None):
@@ -46,6 +197,14 @@ class RunManager:
             self.device = torch.device(device_str)
         else:
             self.device = device
+
+        # Initialize async writer if enabled
+        self._async_writer: Optional[AsyncCheckpointWriter] = None
+        if getattr(config, 'async_checkpoints', True):
+            self._async_writer = AsyncCheckpointWriter(
+                keep_n_checkpoints=config.keep_n_checkpoints
+            )
+            logger.info("Async checkpoint writing enabled")
 
     def initialize_run(self, full_config: "EvolutionConfig" = None):
         """
@@ -74,6 +233,7 @@ class RunManager:
         Save numbered checkpoint + update latest.pkl atomically.
 
         Uses torch.save for device-aware serialization.
+        When async_checkpoints is enabled, writes happen in background thread.
 
         Args:
             population: Current population (archive contents)
@@ -103,23 +263,27 @@ class RunManager:
         if extra_state is not None:
             state.update(extra_state)
 
-        # Ensure checkpoint directory exists
-        os.makedirs(self.config.checkpoint_dir, exist_ok=True)
-
-        # Save numbered checkpoint
         gen_path = self.config.checkpoint_path_for_gen(generation)
-        torch.save(state, gen_path)
+        latest_path = self.config.latest_checkpoint_path
 
-        # Atomic update of latest
-        latest = self.config.latest_checkpoint_path
-        temp = latest + ".tmp"
-        torch.save(state, temp)
-        if os.path.exists(latest):
-            os.remove(latest)
-        os.rename(temp, latest)
+        if self._async_writer is not None:
+            # Async path: queue checkpoint and return immediately
+            self._async_writer.save(state, gen_path, latest_path)
+            logger.info(f"Checkpoint queued: {gen_path}")
+        else:
+            # Synchronous path: write immediately
+            os.makedirs(self.config.checkpoint_dir, exist_ok=True)
+            torch.save(state, gen_path)
 
-        logger.info(f"Checkpoint saved: {gen_path}")
-        self._cleanup_old_checkpoints()
+            # Atomic update of latest
+            temp = latest_path + ".tmp"
+            torch.save(state, temp)
+            if os.path.exists(latest_path):
+                os.remove(latest_path)
+            os.rename(temp, latest_path)
+
+            logger.info(f"Checkpoint saved: {gen_path}")
+            self._cleanup_old_checkpoints()
 
     def load_checkpoint(self, path: str = None) -> dict:
         """
@@ -168,6 +332,20 @@ class RunManager:
         with open(path, "w") as f:
             json.dump(metrics, f, indent=2)
         logger.info(f"Final metrics saved: {path}")
+
+    def close(self):
+        """
+        Flush pending checkpoints and shutdown async writer.
+
+        Should be called before program exit to ensure all checkpoints are written.
+        Safe to call multiple times or if async writer was not enabled.
+        """
+        if self._async_writer is not None:
+            logger.info("Flushing pending checkpoints...")
+            self._async_writer.flush()
+            self._async_writer.shutdown()
+            self._async_writer = None
+            logger.info("Async checkpoint writer shut down")
 
     def _save_config_snapshot(self, config: "EvolutionConfig"):
         """
@@ -291,4 +469,4 @@ class RunManager:
         return runs[0]["path"] if runs else None
 
 
-__all__ = ["RunManager"]
+__all__ = ["RunManager", "AsyncCheckpointWriter"]
