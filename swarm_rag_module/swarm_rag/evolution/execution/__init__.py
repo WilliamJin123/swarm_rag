@@ -5,9 +5,8 @@ Provides evaluation, genetic strategies, and utilities for the evolution engine.
 """
 from .evaluator import (
     PopulationEvaluator,
-    EvaluationTier,
     EvaluationStats,
-    DEFAULT_TIERS,
+    DEFAULT_EARLY_EXIT_THRESHOLD,
 )
 from .fitness import FitnessCalculator
 from .strategies import GeneticStrategies, GeneticRegistry
@@ -45,10 +44,9 @@ __all__ = [
     "GeneticRegistry",
     "ProgressTracker",
     "GenomeFactory",
-    # Evaluation tiers
-    "EvaluationTier",
+    # Early exit evaluation
     "EvaluationStats",
-    "DEFAULT_TIERS",
+    "DEFAULT_EARLY_EXIT_THRESHOLD",
     # Stratified sampling
     "StratifiedQuerySampler",
     "StratifiedSample",

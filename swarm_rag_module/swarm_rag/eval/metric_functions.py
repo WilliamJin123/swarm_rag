@@ -1,5 +1,5 @@
 import torch
-from typing import Callable, List, Set
+from typing import Callable, Dict, List, Set
 from collections import Counter
 
 class MetricRegistry:
@@ -621,6 +621,227 @@ class MetricFunctions:
                     idcg_k = torch.zeros(batch_size, device=device)
                     for i, n_gt in enumerate(gt_sizes):
                         n_relevant = min(int(n_gt.item()), k)
+                        if n_relevant > 0:
+                            idcg_k[i] = idcg_denoms[:n_relevant].sum()
+
+                    ndcg_k = cumulative_dcg[:, k - 1] / (idcg_k + 1e-10)
+                    results[f'NDCG@{k}'] = float(ndcg_k.mean().item())
+                else:
+                    results[f'Hit@{k}'] = 0.0
+                    results[f'Recall@{k}'] = 0.0
+                    results[f'NDCG@{k}'] = 0.0
+
+        return results
+
+    @staticmethod
+    def compute_metrics_at_tier_endpoints(
+        retrieved_ids_batch: torch.Tensor,
+        gt_tensor: torch.Tensor,
+        gt_sizes: torch.Tensor,
+        tier_endpoints: List[int],
+        k_values: List[int] = None,
+        device: str = "cuda"
+    ) -> Dict[int, dict]:
+        """
+        Compute metrics at multiple tier endpoints in a single GPU pass.
+
+        This enables early-exit tier decisions without additional GPU calls by
+        computing cumulative metrics at each tier boundary (e.g., 20, 50, 100 queries).
+
+        Args:
+            retrieved_ids_batch: (n_queries, max_k) tensor of retrieved IDs on GPU
+            gt_tensor: (n_queries, max_gt_size) pre-computed ground truth tensor on GPU
+            gt_sizes: (n_queries,) tensor of ground truth sizes on GPU
+            tier_endpoints: List of query counts to compute metrics at [20, 50, 100]
+            k_values: List of k values for Hit@K and Recall@K (default: [1, 5, 10, 20])
+            device: Device string ("cuda" or "cpu")
+
+        Returns:
+            Dictionary mapping tier_endpoint -> metrics_dict
+        """
+        if k_values is None:
+            k_values = [1, 5, 10, 20]
+
+        n_queries = retrieved_ids_batch.shape[0]
+        max_k = retrieved_ids_batch.shape[1] if retrieved_ids_batch.ndim > 1 else 1
+        max_k_val = max(k_values)
+
+        # Truncate to max_k_val for efficiency
+        if max_k > max_k_val:
+            retrieved_ids_batch = retrieved_ids_batch[:, :max_k_val]
+            max_k = max_k_val
+
+        results_by_tier = {}
+
+        with torch.no_grad():
+            # Vectorized membership testing for all queries at once
+            retrieved_expanded = retrieved_ids_batch.unsqueeze(-1)  # (N, K, 1)
+            gt_expanded = gt_tensor.unsqueeze(1)  # (N, 1, G)
+
+            relevance = (retrieved_expanded == gt_expanded).any(dim=-1)  # (N, K)
+            relevance = relevance & (retrieved_ids_batch >= 0)
+            relevance = relevance.float()
+
+            # Pre-compute log denominators for NDCG
+            log_denoms = torch.log2(torch.arange(2, max_k + 2, dtype=torch.float32, device=device))
+
+            # Cumulative metrics per query
+            cumulative_hits = torch.cumsum(relevance, dim=1)  # (N, K)
+            dcg_contributions = relevance / log_denoms[:max_k]
+            cumulative_dcg = torch.cumsum(dcg_contributions, dim=1)  # (N, K)
+
+            # MRR per query
+            first_hit_mask = relevance.cumsum(dim=1) == 1
+            first_hit_mask = first_hit_mask & (relevance > 0)
+            positions = torch.arange(1, max_k + 1, device=device, dtype=torch.float32).unsqueeze(0)
+            mrr_values = torch.where(first_hit_mask, 1.0 / positions, torch.zeros_like(positions))
+            mrr_per_query = mrr_values.sum(dim=1)  # (N,)
+
+            # IDCG denominators
+            max_gt = gt_tensor.shape[1]
+            idcg_denoms = 1.0 / torch.log2(torch.arange(1, max_gt + 1, device=device, dtype=torch.float32) + 1)
+
+            # Compute metrics at each tier endpoint
+            for tier_end in tier_endpoints:
+                if tier_end > n_queries:
+                    tier_end = n_queries
+
+                if tier_end == 0:
+                    results_by_tier[tier_end] = {}
+                    continue
+
+                # Slice to tier endpoint
+                tier_mrr = mrr_per_query[:tier_end]
+                tier_gt_sizes = gt_sizes[:tier_end]
+                tier_cumulative_hits = cumulative_hits[:tier_end]
+                tier_cumulative_dcg = cumulative_dcg[:tier_end]
+
+                tier_metrics = {
+                    'MRR': float(tier_mrr.mean().item())
+                }
+
+                for k in k_values:
+                    if k <= max_k:
+                        # Hit@K: any hit in top-k
+                        hit_k = (tier_cumulative_hits[:, k - 1] > 0).float()
+                        tier_metrics[f'Hit@{k}'] = float(hit_k.mean().item())
+
+                        # Recall@K: hits / gt_size
+                        recall_k = tier_cumulative_hits[:, k - 1] / (tier_gt_sizes + 1e-10)
+                        tier_metrics[f'Recall@{k}'] = float(recall_k.mean().item())
+
+                        # NDCG@K
+                        idcg_k = torch.zeros(tier_end, device=device)
+                        for i in range(tier_end):
+                            n_relevant = min(int(tier_gt_sizes[i].item()), k)
+                            if n_relevant > 0:
+                                idcg_k[i] = idcg_denoms[:n_relevant].sum()
+
+                        ndcg_k = tier_cumulative_dcg[:, k - 1] / (idcg_k + 1e-10)
+                        tier_metrics[f'NDCG@{k}'] = float(ndcg_k.mean().item())
+                    else:
+                        tier_metrics[f'Hit@{k}'] = 0.0
+                        tier_metrics[f'Recall@{k}'] = 0.0
+                        tier_metrics[f'NDCG@{k}'] = 0.0
+
+                results_by_tier[tier_end] = tier_metrics
+
+        return results_by_tier
+
+    @staticmethod
+    def compute_all_metrics_batch_gpu_precomputed(
+        retrieved_ids_batch: torch.Tensor,
+        gt_tensor: torch.Tensor,
+        gt_sizes: torch.Tensor,
+        k_values: List[int] = None,
+        device: str = "cuda"
+    ) -> dict:
+        """
+        GPU batch metric computation with pre-computed ground truth tensors.
+
+        This is the fastest path when ground truth has been pre-computed as GPU
+        tensors, eliminating repeated CPU-to-GPU transfers during evolution.
+
+        Args:
+            retrieved_ids_batch: (batch_size, max_k) tensor of retrieved IDs on GPU
+            gt_tensor: (batch_size, max_gt_size) pre-computed ground truth tensor on GPU
+            gt_sizes: (batch_size,) tensor of ground truth sizes on GPU
+            k_values: List of k values for Hit@K and Recall@K (default: [1, 5, 10, 20])
+            device: Device string ("cuda" or "cpu")
+
+        Returns:
+            Dictionary of metric_name -> mean_score
+        """
+        if k_values is None:
+            k_values = [1, 5, 10, 20]
+
+        # Ensure tensors are on the correct device
+        if str(retrieved_ids_batch.device) != device:
+            retrieved_ids_batch = retrieved_ids_batch.to(device)
+        if str(gt_tensor.device) != device:
+            gt_tensor = gt_tensor.to(device)
+        if str(gt_sizes.device) != device:
+            gt_sizes = gt_sizes.to(device)
+
+        batch_size = retrieved_ids_batch.shape[0]
+        max_k = retrieved_ids_batch.shape[1] if retrieved_ids_batch.ndim > 1 else 1
+        max_k_val = max(k_values)
+
+        # Truncate to max_k_val for efficiency
+        if max_k > max_k_val:
+            retrieved_ids_batch = retrieved_ids_batch[:, :max_k_val]
+            max_k = max_k_val
+
+        with torch.no_grad():
+            # Vectorized membership testing using pre-computed gt_tensor
+            # retrieved: (B, K), gt_tensor: (B, G)
+            # Expand for broadcasting: (B, K, 1) vs (B, 1, G) -> (B, K, G)
+            retrieved_expanded = retrieved_ids_batch.unsqueeze(-1)  # (B, K, 1)
+            gt_expanded = gt_tensor.unsqueeze(1)  # (B, 1, G)
+
+            # Check equality and reduce: any match across G dimension
+            relevance = (retrieved_expanded == gt_expanded).any(dim=-1)  # (B, K)
+            # Exclude padding matches
+            relevance = relevance & (retrieved_ids_batch >= 0)
+            relevance = relevance.float()
+
+            # Pre-compute log denominators for NDCG
+            log_denoms = torch.log2(torch.arange(2, max_k + 2, dtype=torch.float32, device=device))
+
+            # Cumulative metrics: (batch_size, max_k)
+            cumulative_hits = torch.cumsum(relevance, dim=1)
+            dcg_contributions = relevance / log_denoms[:max_k]
+            cumulative_dcg = torch.cumsum(dcg_contributions, dim=1)
+
+            # MRR: find first hit position
+            first_hit_mask = relevance.cumsum(dim=1) == 1
+            first_hit_mask = first_hit_mask & (relevance > 0)
+            positions = torch.arange(1, max_k + 1, device=device, dtype=torch.float32).unsqueeze(0)
+            mrr_values = torch.where(first_hit_mask, 1.0 / positions, torch.zeros_like(positions))
+            mrr_scores = mrr_values.sum(dim=1)
+
+            # Compute IDCG for each query
+            max_gt = gt_tensor.shape[1]
+            idcg_denoms = 1.0 / torch.log2(torch.arange(1, max_gt + 1, device=device, dtype=torch.float32) + 1)
+
+            results = {
+                'MRR': float(mrr_scores.mean().item())
+            }
+
+            for k in k_values:
+                if k <= max_k:
+                    # Hit@K: any hit in top-k
+                    hit_k = (cumulative_hits[:, k - 1] > 0).float()
+                    results[f'Hit@{k}'] = float(hit_k.mean().item())
+
+                    # Recall@K: hits / gt_size
+                    recall_k = cumulative_hits[:, k - 1] / (gt_sizes + 1e-10)
+                    results[f'Recall@{k}'] = float(recall_k.mean().item())
+
+                    # NDCG@K: DCG / IDCG
+                    idcg_k = torch.zeros(batch_size, device=device)
+                    for i in range(batch_size):
+                        n_relevant = min(int(gt_sizes[i].item()), k)
                         if n_relevant > 0:
                             idcg_k[i] = idcg_denoms[:n_relevant].sum()
 

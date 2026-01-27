@@ -26,7 +26,9 @@ class SharedPrecomputeContext:
     Attributes:
         query_embeddings: Pre-computed query embeddings tensor (n_queries, dim)
         initial_pools: Dict mapping pool_size -> List[List[int]] of candidate IDs per query
-        ground_truth_sets: Pre-converted ground truth as sets for fast lookup
+        ground_truth_sets: Pre-converted ground truth as sets for fast lookup (CPU fallback)
+        ground_truth_tensor: Pre-computed ground truth as GPU tensor (n_queries, max_gt_size)
+        gt_sizes: Tensor of ground truth sizes per query (n_queries,)
         queries: Original query strings (for reference)
         device: Device where tensors are stored
     """
@@ -35,6 +37,10 @@ class SharedPrecomputeContext:
     ground_truth_sets: List[Set[Any]]
     queries: List[str]
     device: str = "cpu"
+
+    # GPU-precomputed ground truth tensors (None if CPU-only)
+    ground_truth_tensor: Optional[torch.Tensor] = None  # (n_queries, max_gt_size) padded with -1
+    gt_sizes: Optional[torch.Tensor] = None  # (n_queries,) number of relevant items per query
 
     # Statistics for monitoring
     n_queries: int = 0
@@ -126,15 +132,45 @@ def prepare_shared_context(
 
         logger.debug(f"    > Pool size {pool_size}: {len(initial_pools[pool_size])} pools computed")
 
-    # 3. Convert ground truth to sets
-    logger.debug("  > Converting ground truth to sets...")
+    # 3. Convert ground truth to sets (CPU fallback) and precompute GPU tensors
+    logger.debug("  > Converting ground truth to sets and GPU tensors...")
     ground_truth_sets = []
+    gt_int_lists = []  # For GPU tensor construction
+    all_ints = True
+
     for gt in ground_truth:
         try:
-            gt_set = set(int(g) for g in gt)
+            gt_ints = [int(g) for g in gt]
+            gt_set = set(gt_ints)
+            gt_int_lists.append(gt_ints)
         except (ValueError, TypeError):
             gt_set = set(str(g) for g in gt)
+            gt_int_lists.append([])  # Can't use GPU for string IDs
+            all_ints = False
         ground_truth_sets.append(gt_set)
+
+    # 4. Pre-compute ground truth GPU tensor if on CUDA and all IDs are integers
+    ground_truth_tensor = None
+    gt_sizes = None
+
+    if device == "cuda" and all_ints and gt_int_lists:
+        logger.debug("  > Building GPU ground truth tensor...")
+        max_gt_size = max(len(gt) for gt in gt_int_lists) if gt_int_lists else 0
+        if max_gt_size > 0:
+            # Create padded tensor directly on GPU
+            ground_truth_tensor = torch.full(
+                (n_queries, max_gt_size), -1, dtype=torch.long, device=device
+            )
+            gt_sizes = torch.zeros(n_queries, dtype=torch.float32, device=device)
+
+            for i, gt_list in enumerate(gt_int_lists):
+                if gt_list:
+                    gt_sizes[i] = len(gt_list)
+                    ground_truth_tensor[i, :len(gt_list)] = torch.tensor(
+                        gt_list, dtype=torch.long, device=device
+                    )
+
+            logger.debug(f"    > GT tensor shape: {ground_truth_tensor.shape}")
 
     precompute_time = time.time() - start_time
     logger.info(f"  > Pre-computation complete in {precompute_time:.2f}s")
@@ -145,6 +181,8 @@ def prepare_shared_context(
         ground_truth_sets=ground_truth_sets,
         queries=queries,
         device=device,
+        ground_truth_tensor=ground_truth_tensor,
+        gt_sizes=gt_sizes,
         n_queries=n_queries,
         n_pool_sizes=len(unique_pool_sizes),
         precompute_time_sec=precompute_time
@@ -241,39 +279,51 @@ class BatchedRetrievalResults:
         """Add results for a single genome."""
         self.results_by_genome[genome_id] = results
 
-    def prepare_for_batch_metrics(self, max_k: int = 20) -> Tuple[torch.Tensor, List[Tuple[str, int]]]:
+    def prepare_for_batch_metrics(
+        self, max_k: int = 20, device: str = "cpu"
+    ) -> Tuple[torch.Tensor, List[Tuple[str, int]]]:
         """
         Prepare flattened tensors for batch metric computation.
 
+        Creates tensors directly on the target device to avoid GPU-CPU handoffs.
+
         Args:
             max_k: Maximum number of retrieved items to consider
+            device: Target device for tensors ("cpu" or "cuda")
 
         Returns:
             Tuple of (retrieved_ids tensor, index mapping)
         """
-        all_rows = []
-        indices = []
+        # Count total rows for pre-allocation
+        total_rows = sum(len(results_list) for results_list in self.results_by_genome.values())
 
+        if total_rows == 0:
+            self.all_retrieved_ids = torch.tensor([], device=device, dtype=torch.long)
+            self.genome_query_indices = []
+            return self.all_retrieved_ids, self.genome_query_indices
+
+        # Pre-allocate full tensor on target device
+        self.all_retrieved_ids = torch.full(
+            (total_rows, max_k), -1, dtype=torch.long, device=device
+        )
+        self.genome_query_indices = []
+
+        row_idx = 0
         for genome_id, results_list in self.results_by_genome.items():
             for query_idx, results in enumerate(results_list):
-                # Extract IDs from results, pad to max_k
-                row = torch.full((max_k,), -1, dtype=torch.long)
+                # Extract IDs from results directly into pre-allocated tensor
                 for j, item in enumerate(results[:max_k]):
                     if isinstance(item, dict):
-                        row[j] = int(item.get('id', -1))
-                    else:
                         try:
-                            row[j] = int(item)
+                            self.all_retrieved_ids[row_idx, j] = int(item.get('id', -1))
                         except (ValueError, TypeError):
                             pass
-                all_rows.append(row)
-                indices.append((genome_id, query_idx))
-
-        if all_rows:
-            self.all_retrieved_ids = torch.stack(all_rows)
-            self.genome_query_indices = indices
-        else:
-            self.all_retrieved_ids = torch.tensor([])
-            self.genome_query_indices = []
+                    else:
+                        try:
+                            self.all_retrieved_ids[row_idx, j] = int(item)
+                        except (ValueError, TypeError):
+                            pass
+                self.genome_query_indices.append((genome_id, query_idx))
+                row_idx += 1
 
         return self.all_retrieved_ids, self.genome_query_indices

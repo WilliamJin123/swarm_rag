@@ -154,6 +154,7 @@ class EvolutionEngine:
             max_workers_per_retrieval=self.evo_config.resources.max_workers_per_retrieval,
             track_decisions=llm_enabled,  # Auto-enable when LLM is used
             decision_sample_rate=1.0,  # 100% sampling for full LLM context
+            early_exit_threshold=self.evo_config.resources.early_exit_threshold,
             device=device,  # Pass device for GPU-accelerated evaluation
             enable_shared_precompute=self.evo_config.resources.enable_shared_precompute,
             enable_cross_genome_metric_batch=self.evo_config.resources.enable_cross_genome_metric_batch,

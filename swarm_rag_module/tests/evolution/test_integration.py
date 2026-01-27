@@ -12,8 +12,9 @@ from swarm_rag.evolution.types.config import (
     EvolutionContext,
     GeneticConfig,
     MapElitesConfig,
+    ResourceConfig,
 )
-from swarm_rag.evolution.execution.evaluator import DEFAULT_TIERS
+from swarm_rag.evolution.execution.evaluator import DEFAULT_EARLY_EXIT_THRESHOLD
 from swarm_rag.evolution.seed_genomes import SEED_GENOMES, get_all_seed_genomes
 from swarm_rag.evolution.focused_mutation import (
     identify_weakest_metric,
@@ -69,18 +70,18 @@ class TestEvolutionImprovementsIntegration:
         assert mutation_fn is not None
         assert callable(mutation_fn)
 
-    def test_aggressive_early_stopping_tiers_progressive(self):
-        """Early stopping tiers should have progressive thresholds."""
-        prev_threshold = 0.0
-        prev_queries = 0
+    def test_early_exit_threshold_configured(self):
+        """Early exit threshold should be properly configured."""
+        # Default threshold should be 0.30
+        assert DEFAULT_EARLY_EXIT_THRESHOLD == 0.30
 
-        for tier in DEFAULT_TIERS:
-            assert tier.queries > prev_queries, "Query counts must increase"
-            prev_queries = tier.queries
+        # ResourceConfig should have the threshold
+        config = ResourceConfig()
+        assert config.early_exit_threshold == 0.30
 
-            if tier.threshold is not None:
-                assert tier.threshold > prev_threshold, "Thresholds must increase"
-                prev_threshold = tier.threshold
+        # Should be customizable
+        config_custom = ResourceConfig(early_exit_threshold=0.45)
+        assert config_custom.early_exit_threshold == 0.45
 
     def test_parallel_mutation_config_in_genetic_config(self):
         """GeneticConfig should have parallel_mutation_workers."""
@@ -162,9 +163,8 @@ class TestEvolutionImprovementsIntegration:
         mutation_fn = GeneticRegistry.get_mutation(GeneticKey.FOCUSED_MUTATION)
         assert mutation_fn is not None
 
-        # 5. Verify early stopping tiers are aggressive
-        assert DEFAULT_TIERS[0].queries == 3
-        assert DEFAULT_TIERS[0].threshold == 0.15
+        # 5. Verify early exit threshold is configured
+        assert DEFAULT_EARLY_EXIT_THRESHOLD == 0.30
 
         # 6. Verify convergence detection is available
         assert callable(should_continue_stepping)

@@ -313,11 +313,15 @@ class WeightedSumMutator:
         return genome
 
     def _mutate_weights(self, genome: Genome, sigmas: MutationSigmas):
-        """Perturb weight values with Gaussian noise."""
+        """Perturb weight values with Gaussian noise.
+
+        Uses torch.randn_like which automatically creates noise on the same
+        device as the input tensor, avoiding GPU-CPU handoffs.
+        """
         wt = genome.weight_tensors
         sigma = sigmas.weight_sigma
 
-        # Movement weights
+        # Movement weights (randn_like preserves device)
         noise = torch.randn_like(wt.movement_weights) * sigma
         wt.movement_weights = wt.movement_weights + noise
 
@@ -330,11 +334,15 @@ class WeightedSumMutator:
         wt.ranking_weights = wt.ranking_weights + noise
 
     def _mutate_biases(self, genome: Genome, sigmas: MutationSigmas):
-        """Perturb bias values with Gaussian noise."""
+        """Perturb bias values with Gaussian noise.
+
+        Uses torch.randn_like which automatically creates noise on the same
+        device as the input tensor, avoiding GPU-CPU handoffs.
+        """
         wt = genome.weight_tensors
         sigma = sigmas.bias_sigma
 
-        # Movement biases
+        # Movement biases (randn_like preserves device)
         noise = torch.randn_like(wt.movement_biases) * sigma
         wt.movement_biases = wt.movement_biases + noise
 
@@ -342,7 +350,7 @@ class WeightedSumMutator:
         noise = torch.randn_like(wt.deposit_biases) * sigma
         wt.deposit_biases = wt.deposit_biases + noise
 
-        # Ranking bias
+        # Ranking bias (scalar, stays on CPU)
         wt.ranking_bias += random.gauss(0, sigma)
 
     def _mutate_ratios(self, genome: Genome, sigmas: MutationSigmas):
@@ -402,11 +410,14 @@ class WeightedSumMutator:
         wt = genome.weight_tensors
         n_groups = wt.n_groups
 
-        # Duplicate last group with small perturbation
-        new_mov = wt.movement_weights[-1:] + torch.randn(1, wt.movement_weights.shape[1]) * 0.1
-        new_mov_bias = wt.movement_biases[-1:] + torch.randn(1) * 0.05
-        new_dep = wt.deposit_weights[-1:] + torch.randn(1, wt.deposit_weights.shape[1]) * 0.1
-        new_dep_bias = wt.deposit_biases[-1:] + torch.randn(1) * 0.05
+        # Get device from existing tensors to avoid GPU-CPU handoffs
+        device = wt.movement_weights.device
+
+        # Duplicate last group with small perturbation (create on same device)
+        new_mov = wt.movement_weights[-1:] + torch.randn(1, wt.movement_weights.shape[1], device=device) * 0.1
+        new_mov_bias = wt.movement_biases[-1:] + torch.randn(1, device=device) * 0.05
+        new_dep = wt.deposit_weights[-1:] + torch.randn(1, wt.deposit_weights.shape[1], device=device) * 0.1
+        new_dep_bias = wt.deposit_biases[-1:] + torch.randn(1, device=device) * 0.05
 
         wt.movement_weights = torch.cat([wt.movement_weights, new_mov], dim=0)
         wt.movement_biases = torch.cat([wt.movement_biases, new_mov_bias], dim=0)
@@ -627,28 +638,37 @@ class WeightedSumSeeder:
         }
         return self._config_to_genome(config, genome_id)
 
-    def _config_to_genome(self, config: Dict, genome_id: str) -> Genome:
-        """Convert a config dictionary to a Genome object."""
-        # Build weight tensors
+    def _config_to_genome(self, config: Dict, genome_id: str, device: str = "cpu") -> Genome:
+        """Convert a config dictionary to a Genome object.
+
+        Args:
+            config: Configuration dictionary with weights and hyperparameters
+            genome_id: Unique identifier for the genome
+            device: Target device for tensors ("cpu" or "cuda")
+        """
+        # Build weight tensors directly on target device
         movement_weights = self._weights_dict_to_tensor(
             config.get("movement_weights", {}),
             self.feature_config.movement,
+            device=device,
         )
         deposit_weights = self._weights_dict_to_tensor(
             config.get("deposit_weights", {}),
             self.feature_config.deposit,
+            device=device,
         )
         ranking_weights = self._weights_dict_to_tensor(
             config.get("ranking_weights", {}),
             self.feature_config.ranking,
+            device=device,
         )
 
-        # Single group by default
+        # Single group by default (create biases on same device)
         weight_tensors = WeightTensors(
             movement_weights=movement_weights.unsqueeze(0),  # (1, n_features)
-            movement_biases=torch.zeros(1),
+            movement_biases=torch.zeros(1, device=device),
             deposit_weights=deposit_weights.unsqueeze(0),
-            deposit_biases=torch.zeros(1),
+            deposit_biases=torch.zeros(1, device=device),
             ranking_weights=ranking_weights,
             ranking_bias=0.0,
         )
@@ -674,13 +694,22 @@ class WeightedSumSeeder:
         )
 
     def _weights_dict_to_tensor(
-        self, weights_dict: Dict[str, float], feature_names: List[str]
+        self, weights_dict: Dict[str, float], feature_names: List[str], device: str = "cpu"
     ) -> torch.Tensor:
-        """Convert weights dictionary to tensor in correct feature order."""
+        """Convert weights dictionary to tensor in correct feature order.
+
+        Args:
+            weights_dict: Dictionary mapping feature names to weights
+            feature_names: Ordered list of feature names
+            device: Target device for the tensor
+
+        Returns:
+            Tensor of weights in feature order, on specified device
+        """
         weights = []
         for name in feature_names:
             weights.append(weights_dict.get(name, 0.0))
-        return torch.tensor(weights, dtype=torch.float32)
+        return torch.tensor(weights, dtype=torch.float32, device=device)
 
     def _deep_merge(self, base: Dict, override: Dict) -> Dict:
         """Deep merge override into base dictionary."""
