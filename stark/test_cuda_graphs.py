@@ -153,7 +153,7 @@ def main():
     print("-" * 60)
     for name, lat in results:
         delta = lat - 20
-        status = "✓ ACHIEVED" if lat <= 20 else f"+{delta:.1f}ms"
+        status = "ACHIEVED" if lat <= 20 else f"+{delta:.1f}ms"
         print(f"{name:<30} {lat:>6.2f} ms/query  {status}")
     print("=" * 60)
 

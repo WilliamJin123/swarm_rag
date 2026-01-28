@@ -16,12 +16,13 @@ import math
 import uuid
 import torch
 
-from ..types.genome import Genome, FIXED_PARAMS, EVOLVABLE_PARAM_RANGES
+from ..types.genome import Genome, FIXED_PARAMS
 from ..types.config import (
     WeightTensors,
     MutationSigmas,
     HeuristicFeatureConfig,
     EvolutionContext,
+    SwarmParamRanges,
 )
 from ..types.fitness_results import FitnessResult
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
@@ -368,6 +369,7 @@ class WeightedSumMutator:
     def _mutate_hyperparams(self, genome: Genome, sigmas: MutationSigmas, ctx: EvolutionContext):
         """Mutate swarm hyperparameters."""
         sigma = sigmas.hyperparam_sigma
+        evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
 
         for key, val in genome.params.items():
             # Skip fixed parameters
@@ -379,15 +381,15 @@ class WeightedSumMutator:
                 if isinstance(val, int):
                     delta = int(round(random.gauss(0, sigma * 5)))
                     new_val = max(1, val + delta)
-                    if key in EVOLVABLE_PARAM_RANGES:
-                        min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                    if key in evolvable_ranges:
+                        min_v, max_v = evolvable_ranges[key]
                         new_val = max(int(min_v), min(int(max_v), new_val))
                     genome.params[key] = new_val
                 elif isinstance(val, float):
                     factor = 1.0 + random.gauss(0, sigma)
                     new_val = val * factor
-                    if key in EVOLVABLE_PARAM_RANGES:
-                        min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                    if key in evolvable_ranges:
+                        min_v, max_v = evolvable_ranges[key]
                         new_val = max(min_v, min(max_v, new_val))
                     else:
                         new_val = max(0.001, min(0.999, new_val))

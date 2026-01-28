@@ -4,7 +4,6 @@ import pytest
 from swarm_rag.evolution.types.genome import (
     Genome,
     FIXED_PARAMS,
-    EVOLVABLE_PARAM_RANGES,
     create_random_genome,
 )
 from swarm_rag.evolution.types.config import (
@@ -13,6 +12,7 @@ from swarm_rag.evolution.types.config import (
     GeneticConfig,
     MapElitesConfig,
     ResourceConfig,
+    SwarmParamRanges,
 )
 from swarm_rag.evolution.execution.evaluator import DEFAULT_EARLY_EXIT_THRESHOLD
 from swarm_rag.evolution.seed_genomes import SEED_GENOMES, get_all_seed_genomes
@@ -54,8 +54,9 @@ class TestEvolutionImprovementsIntegration:
 
     def test_seed_genomes_within_evolvable_ranges(self):
         """Seed genomes should have evolvable params within tightened ranges."""
+        evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
         for seed_genome in get_all_seed_genomes():
-            for param, (low, high) in EVOLVABLE_PARAM_RANGES.items():
+            for param, (low, high) in evolvable_ranges.items():
                 if param in seed_genome.params:
                     val = seed_genome.params[param]
                     assert low <= val <= high, (
@@ -106,6 +107,7 @@ class TestEvolutionImprovementsIntegration:
 
     def test_create_random_genome_respects_constraints(self):
         """create_random_genome should respect fixed and evolvable ranges."""
+        evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
         for _ in range(10):
             genome = create_random_genome()
 
@@ -114,7 +116,7 @@ class TestEvolutionImprovementsIntegration:
                 assert genome.params[param] == value
 
             # Evolvable params should be within ranges
-            for param, (low, high) in EVOLVABLE_PARAM_RANGES.items():
+            for param, (low, high) in evolvable_ranges.items():
                 val = genome.params[param]
                 assert low <= val <= high
 

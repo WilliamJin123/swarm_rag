@@ -214,12 +214,14 @@ def _batch_initial_search(
     # Check if vector store supports batch search
     if hasattr(retriever, 'vector_store') and hasattr(retriever.vector_store, 'search_batch'):
         try:
-            results = retriever.vector_store.search_batch(query_embeddings, pool_size)
+            ids_batch, scores_batch = retriever.vector_store.search_batch(query_embeddings, pool_size)
+            # ids_batch: (n_queries, pool_size) tensor of candidate IDs
             pools = []
-            for res in results:
+            for i in range(ids_batch.shape[0]):
+                ids = ids_batch[i].tolist()
                 valid_ids = [
-                    r['id'] for r in res
-                    if retriever.graph_store.contains(r['id'])
+                    int(nid) for nid in ids
+                    if nid >= 0 and retriever.graph_store.contains(int(nid))
                 ]
                 pools.append(valid_ids)
             return pools
@@ -229,10 +231,11 @@ def _batch_initial_search(
     # Fallback: sequential search
     pools = []
     for vec in query_embeddings:
-        search_res = retriever.vector_store.search(vec, limit=pool_size)
+        ids, scores = retriever.vector_store.search(vec, limit=pool_size)
+        # ids: (pool_size,) tensor of candidate IDs
         valid_ids = [
-            r['id'] for r in search_res
-            if retriever.graph_store.contains(r['id'])
+            int(nid) for nid in ids.tolist()
+            if nid >= 0 and retriever.graph_store.contains(int(nid))
         ]
         pools.append(valid_ids)
 

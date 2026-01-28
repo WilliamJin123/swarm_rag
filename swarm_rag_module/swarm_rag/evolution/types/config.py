@@ -324,13 +324,26 @@ class MapElitesConfig:
 
 @dataclass
 class SwarmParamRanges:
-    """Valid ranges for SwarmRAG parameters."""
-    n_agents: Tuple[int, int] = (5, 30)
-    steps: Tuple[int, int] = (4, 12)
-    decay: Tuple[float, float] = (0.85, 0.99)
-    initial_pool_size: Tuple[int, int] = (10, 50)
-    start_subset: Tuple[int, int] = (5, 15)
-    drop_zone_inc: Tuple[float, float] = (0.05, 0.2)
+    """Valid ranges for SwarmRAG parameters.
+
+    These are the authoritative ranges for all evolvable parameters.
+    Values are tightened based on empirical analysis of effective configurations.
+    """
+    n_agents: Tuple[int, int] = (15, 50)           # Was (5, 30) - fewer agents = faster, too many = redundant
+    steps: Tuple[int, int] = (3, 7)                 # Was (4, 12) - most signal captured in 3-6 steps
+    decay: Tuple[float, float] = (0.3, 0.8)         # Was (0.85, 0.99) - keep dynamic, tightened range
+    initial_pool_size: Tuple[int, int] = (20, 60)   # Was (10, 50) - tight range around optimal
+    start_subset: Tuple[int, int] = (5, 15)         # Keep unchanged
+    drop_zone_inc: Tuple[float, float] = (0.05, 0.2)  # Keep unchanged
+
+    def to_evolvable_dict(self) -> Dict[str, Tuple[float, float]]:
+        """Return evolvable parameters as dict (excludes fixed params like start_subset, drop_zone_inc)."""
+        return {
+            "n_agents": self.n_agents,
+            "steps": self.steps,
+            "decay": self.decay,
+            "initial_pool_size": self.initial_pool_size,
+        }
 
 
 
@@ -608,6 +621,15 @@ class EvolutionContext:
     creative_success_count: int = 0        # Successful creative mutations
     creative_failure_count: int = 0        # Failed creative mutations
 
+    # Resolved device (computed on init)
+    resolved_device: str = field(default="", init=False)
+
+    def __post_init__(self):
+        """Initialize computed fields."""
+        if not self.resolved_device:
+            from ...utils.device import resolve_device
+            self.resolved_device = resolve_device(self.config.storage.device)
+
     def reset_creative_gen_count(self):
         """Reset the per-generation creative mutation counter."""
         self.creative_mutations_this_gen = 0
@@ -622,13 +644,12 @@ class EvolutionContext:
     @property
     def device(self) -> str:
         """
-        Get resolved device string from storage config.
+        Get resolved device string.
 
         Returns:
             Device string: "cuda", "mps", or "cpu"
         """
-        from ...utils.device import resolve_device
-        return resolve_device(self.config.storage.device)
+        return self.resolved_device
 
 
 # =============================================================================

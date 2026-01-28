@@ -4,15 +4,16 @@ import pytest
 from swarm_rag.evolution.types.genome import (
     Genome,
     FIXED_PARAMS,
-    EVOLVABLE_PARAM_RANGES,
     create_random_genome
 )
+from swarm_rag.evolution.types.config import SwarmParamRanges
 
 
 def test_fixed_params_not_in_evolvable_ranges():
     """Fixed parameters should not be in evolvable ranges."""
+    evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
     for param in FIXED_PARAMS:
-        assert param not in EVOLVABLE_PARAM_RANGES, f"{param} should not be evolvable"
+        assert param not in evolvable_ranges, f"{param} should not be evolvable"
 
 
 def test_fixed_params_have_default_values():
@@ -25,10 +26,11 @@ def test_fixed_params_have_default_values():
 
 def test_evolvable_ranges_are_tightened():
     """Evolvable parameter ranges should be tightened per brainstorm."""
-    assert EVOLVABLE_PARAM_RANGES["n_agents"] == (15, 50)
-    assert EVOLVABLE_PARAM_RANGES["steps"] == (3, 7)
-    assert EVOLVABLE_PARAM_RANGES["decay"] == (0.3, 0.8)
-    assert EVOLVABLE_PARAM_RANGES["initial_pool_size"] == (20, 60)
+    ranges = SwarmParamRanges()
+    assert ranges.n_agents == (15, 50)
+    assert ranges.steps == (3, 7)
+    assert ranges.decay == (0.3, 0.8)
+    assert ranges.initial_pool_size == (20, 60)
 
 
 def test_create_random_genome_uses_fixed_params():
@@ -41,15 +43,9 @@ def test_create_random_genome_uses_fixed_params():
 def test_create_random_genome_respects_evolvable_ranges():
     """New genomes should have evolvable params within tightened ranges."""
     genome = create_random_genome()
+    ranges = SwarmParamRanges()
 
-    n_agents_range = EVOLVABLE_PARAM_RANGES["n_agents"]
-    assert n_agents_range[0] <= genome.params["n_agents"] <= n_agents_range[1]
-
-    steps_range = EVOLVABLE_PARAM_RANGES["steps"]
-    assert steps_range[0] <= genome.params["steps"] <= steps_range[1]
-
-    decay_range = EVOLVABLE_PARAM_RANGES["decay"]
-    assert decay_range[0] <= genome.params["decay"] <= decay_range[1]
-
-    pool_range = EVOLVABLE_PARAM_RANGES["initial_pool_size"]
-    assert pool_range[0] <= genome.params["initial_pool_size"] <= pool_range[1]
+    assert ranges.n_agents[0] <= genome.params["n_agents"] <= ranges.n_agents[1]
+    assert ranges.steps[0] <= genome.params["steps"] <= ranges.steps[1]
+    assert ranges.decay[0] <= genome.params["decay"] <= ranges.decay[1]
+    assert ranges.initial_pool_size[0] <= genome.params["initial_pool_size"] <= ranges.initial_pool_size[1]

@@ -54,7 +54,6 @@ class BaseOrchestrator(ABC):
             val_ground_truth: Validation ground truth
         """
         self.context = context
-        self.evo_config = context.config
         self.evaluator = evaluator
         self.fitness_strategy = fitness_strategy
         self.tracker = tracker
@@ -116,8 +115,8 @@ class BaseOrchestrator(ABC):
         Returns:
             Validation stats dict if validation was run, else None
         """
-        n_gen = self.evo_config.n_generations
-        val_freq = self.evo_config.storage.validation_frequency
+        n_gen = self.context.config.n_generations
+        val_freq = self.context.config.storage.validation_frequency
 
         if (generation % val_freq == 0) or (generation == n_gen - 1):
             # Create a copy to not mess up training metrics

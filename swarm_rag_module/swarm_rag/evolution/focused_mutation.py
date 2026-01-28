@@ -13,9 +13,9 @@ The key insight is that different parameters affect different metrics:
 import random
 from typing import Dict, List, Any, Optional
 
-from .types.genome import Genome, EVOLVABLE_PARAM_RANGES, FIXED_PARAMS
+from .types.genome import Genome, FIXED_PARAMS
 from .types.fitness_results import FitnessResult
-from .types.config import EvolutionContext
+from .types.config import EvolutionContext, SwarmParamRanges
 
 
 # =============================================================================
@@ -136,13 +136,14 @@ def apply_focused_mutation(
         Mutated genome (modified in place)
     """
     # Determine mutation focus
+    evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
     if fitness is not None:
         focus = get_mutation_focus(fitness)
         target_params = focus["params"]
         direction = focus["direction"]
     else:
         # Fallback: random selection from evolvable params
-        target_params = list(EVOLVABLE_PARAM_RANGES.keys())
+        target_params = list(evolvable_ranges.keys())
         direction = "tune"
 
     # Apply mutations to target parameters
@@ -179,10 +180,11 @@ def _mutate_param_focused(
     Returns:
         New parameter value, clamped to valid range
     """
-    if param not in EVOLVABLE_PARAM_RANGES:
+    evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
+    if param not in evolvable_ranges:
         return current_value
 
-    min_val, max_val = EVOLVABLE_PARAM_RANGES[param]
+    min_val, max_val = evolvable_ranges[param]
     is_int = isinstance(min_val, int) and isinstance(max_val, int)
 
     if direction == "increase":

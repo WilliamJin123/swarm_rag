@@ -1,4 +1,4 @@
-Hit@1 > 50%
+Hit@1 > 60%
 Hit@5 > 75%
 Recall@20 > 80%
 MRR > 75%
@@ -14,3 +14,5 @@ The evolution loop should be able to run 500 gens in 3 hours or less with a popu
 The current query speed is 50ms per query for stark prime. 
 
 Hopeful goal: have these latency goals still met for not only the weighted sum based evolution, but also the expression trees.
+
+Memory should no exceed a few gbs of VRAM for gpu evolution runs (even for amazon and mag, which are ~10x bigger than prime)

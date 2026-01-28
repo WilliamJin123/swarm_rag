@@ -28,15 +28,6 @@ FIXED_PARAMS: Dict[str, Any] = {
     "start_subset": 10,     # 10 starting nodes is usually sufficient
 }
 
-# Tightened ranges for evolvable parameters
-# Based on empirical analysis of effective configurations
-EVOLVABLE_PARAM_RANGES: Dict[str, Tuple[float, float]] = {
-    "n_agents": (15, 50),        # Fewer agents = faster, too many = redundant
-    "steps": (3, 7),             # Most signal captured in 3-6 steps
-    "decay": (0.3, 0.8),         # Keep dynamic, tighten range
-    "initial_pool_size": (20, 60),  # Tight range around optimal
-}
-
 
 class CompiledStrategies(TypedDict, total=False):
     """
@@ -478,7 +469,7 @@ def create_random_genome(genome_id: str = None) -> Genome:
     Create a new genome with random evolvable params and fixed params.
 
     Uses FIXED_PARAMS for parameters that are removed from evolution,
-    and samples evolvable parameters from EVOLVABLE_PARAM_RANGES.
+    and samples evolvable parameters from SwarmParamRanges (the single source of truth).
 
     Args:
         genome_id: Optional ID for the genome (auto-generated if None)
@@ -487,12 +478,14 @@ def create_random_genome(genome_id: str = None) -> Genome:
         Newly created Genome with randomized evolvable params
     """
     import uuid
+    from .config import SwarmParamRanges
 
     # Start with fixed values
     params = dict(FIXED_PARAMS)
 
-    # Add evolvable params sampled from tightened ranges
-    for name, (low, high) in EVOLVABLE_PARAM_RANGES.items():
+    # Add evolvable params sampled from SwarmParamRanges (single source of truth)
+    ranges = SwarmParamRanges()
+    for name, (low, high) in ranges.to_evolvable_dict().items():
         if isinstance(low, int) and isinstance(high, int):
             params[name] = random.randint(low, high)
         else:

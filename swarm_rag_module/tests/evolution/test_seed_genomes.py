@@ -46,11 +46,12 @@ def test_seed_genomes_use_fixed_params():
 
 def test_seed_genomes_have_valid_evolvable_params():
     """Seed genomes should have evolvable params within valid ranges."""
-    from swarm_rag.evolution.types.genome import EVOLVABLE_PARAM_RANGES
+    from swarm_rag.evolution.types.config import SwarmParamRanges
 
+    evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
     for seed_config in SEED_GENOMES:
         genome = create_seed_genome(seed_config)
-        for key, (low, high) in EVOLVABLE_PARAM_RANGES.items():
+        for key, (low, high) in evolvable_ranges.items():
             if key in genome.params:
                 val = genome.params[key]
                 assert low <= val <= high, f"Seed '{seed_config.get('name')}' param {key}={val} out of range [{low}, {high}]"

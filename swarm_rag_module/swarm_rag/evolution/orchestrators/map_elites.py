@@ -108,12 +108,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         # Initialize population
         population = initial_population
         if not population:
-            initial_fill = self.evo_config.map_elites.initial_fill
+            initial_fill = self.context.config.map_elites.initial_fill
             self.logger.info(f"Generating initial population of {initial_fill}...")
             population = self.genome_factory.create_population(initial_fill)
 
         best_genome = self.restored_best_genome
-        n_gen = self.evo_config.n_generations
+        n_gen = self.context.config.n_generations
         start_gen = self.context.generation
 
         if start_gen > 0:
@@ -230,7 +230,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
 
             # CHECKPOINTING
             with self._profiler.section("checkpoint"):
-                ckpt_freq = self.evo_config.storage.checkpoint_frequency
+                ckpt_freq = self.context.config.storage.checkpoint_frequency
                 if gen % ckpt_freq == 0:
                     self.save_checkpoint(
                         population=self.archive.as_population(),
@@ -262,7 +262,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         )
         self.tracker.plot(
             save_path=self.run_manager.config.plot_path,
-            title=self.evo_config.storage.plot_title,
+            title=self.context.config.storage.plot_title,
         )
 
         # Save best genome as JSON

@@ -4,11 +4,11 @@ import random
 import math
 import torch
 
-from ..types.config import EvolutionContext
+from ..types.config import EvolutionContext, SwarmParamRanges
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ...interfaces.registry import _MutationRegistry, _CrossoverRegistry, _SelectionRegistry, _CreationRegistry
 from ...interfaces.enums import GeneticKey
-from ..types.genome import Genome, DEFAULT_PARAMS, SwarmParams, FIXED_PARAMS, EVOLVABLE_PARAM_RANGES
+from ..types.genome import Genome, DEFAULT_PARAMS, SwarmParams, FIXED_PARAMS
 from ..seed_genomes import get_all_seed_genomes
 from ..focused_mutation import apply_focused_mutation
 
@@ -111,8 +111,9 @@ class GeneticStrategies:
         """Standard parameter mutation (Smart Jitter).
 
         Skips fixed parameters (FIXED_PARAMS) and uses tightened ranges
-        (EVOLVABLE_PARAM_RANGES) for evolvable parameters.
+        from SwarmParamRanges (single source of truth) for evolvable parameters.
         """
+        evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
         for key, val in genome.params.items():
             # Skip fixed parameters - they should never be mutated
             if key in FIXED_PARAMS:
@@ -127,8 +128,8 @@ class GeneticStrategies:
                         delta = int(round(random.gauss(0, 1.5)))  # +/- 1 or 2 usually
                         new_val = max(1, val + delta)
                         # Clamp to evolvable range if defined
-                        if key in EVOLVABLE_PARAM_RANGES:
-                            min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                        if key in evolvable_ranges:
+                            min_v, max_v = evolvable_ranges[key]
                             new_val = max(min_v, min(max_v, new_val))
                         genome.params[key] = new_val
                     elif isinstance(val, float):
@@ -136,8 +137,8 @@ class GeneticStrategies:
                         factor = random.gauss(1.0, 0.1)
                         new_val = val * factor
                         # Clamp to evolvable range if defined
-                        if key in EVOLVABLE_PARAM_RANGES:
-                            min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                        if key in evolvable_ranges:
+                            min_v, max_v = evolvable_ranges[key]
                             new_val = max(min_v, min(max_v, new_val))
                         else:
                             new_val = max(0.001, min(0.999, new_val))
@@ -145,9 +146,9 @@ class GeneticStrategies:
 
                 # 20% chance: Exploration (Re-sample from range)
                 else:
-                    # Prefer EVOLVABLE_PARAM_RANGES, fallback to config ranges
-                    if key in EVOLVABLE_PARAM_RANGES:
-                        min_v, max_v = EVOLVABLE_PARAM_RANGES[key]
+                    # Prefer SwarmParamRanges, fallback to config ranges
+                    if key in evolvable_ranges:
+                        min_v, max_v = evolvable_ranges[key]
                         if isinstance(min_v, int):
                             genome.params[key] = random.randint(min_v, max_v)
                         else:
@@ -173,8 +174,8 @@ class GeneticStrategies:
     def _randomize_all_params(ctx: EvolutionContext) -> SwarmParams:
         """Helper to fully randomize evolvable parameters within tightened ranges.
 
-        Uses FIXED_PARAMS for fixed parameters and EVOLVABLE_PARAM_RANGES
-        for evolvable parameters. Falls back to ctx.config.genetic.param_ranges
+        Uses FIXED_PARAMS for fixed parameters and SwarmParamRanges (single source
+        of truth) for evolvable parameters. Falls back to ctx.config.genetic.param_ranges
         for parameters not defined in either.
         """
         # Start with default params
@@ -183,17 +184,18 @@ class GeneticStrategies:
         # Apply fixed parameters (never randomized)
         params.update(FIXED_PARAMS)
 
-        # Randomize evolvable parameters from tightened ranges
-        for key, (min_v, max_v) in EVOLVABLE_PARAM_RANGES.items():
+        # Randomize evolvable parameters from SwarmParamRanges (single source of truth)
+        evolvable_ranges = SwarmParamRanges().to_evolvable_dict()
+        for key, (min_v, max_v) in evolvable_ranges.items():
             if isinstance(min_v, int):
                 params[key] = random.randint(min_v, max_v)
             else:
                 params[key] = random.uniform(min_v, max_v)
 
-        # Fallback for any params not in EVOLVABLE_PARAM_RANGES or FIXED_PARAMS
+        # Fallback for any params not in evolvable_ranges or FIXED_PARAMS
         ranges = ctx.config.genetic.param_ranges
         for key in params.keys():
-            if key not in FIXED_PARAMS and key not in EVOLVABLE_PARAM_RANGES:
+            if key not in FIXED_PARAMS and key not in evolvable_ranges:
                 if hasattr(ranges, key):
                     min_v, max_v = getattr(ranges, key)
                     if isinstance(min_v, int):
