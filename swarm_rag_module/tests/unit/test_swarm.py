@@ -98,7 +98,7 @@ class DegreeView:
 class DummyGraphStore(GraphStore):
     def __init__(self, num_nodes=1000, avg_degree=5, device: str = "cpu"):
         self.num_nodes = num_nodes
-        self.n_nodes = num_nodes  # Required by SwarmRetriever for pheromone tensor
+        self._n_nodes = num_nodes  # Required by SwarmRetriever for pheromone tensor
         self._avg_degree = avg_degree
         self._device = device
         # Create a simple graph structure
@@ -166,6 +166,17 @@ class DummyGraphStore(GraphStore):
     def get_degree(self, node_id: Any) -> int:
         """Get degree of a single node"""
         return len(self.graph.get(node_id, set()))
+
+    def get_degrees_batch(self, node_ids: torch.Tensor) -> torch.Tensor:
+        """Batch degree lookup for multiple nodes."""
+        if isinstance(node_ids, torch.Tensor):
+            node_ids = node_ids.tolist()
+        degrees = [self.get_degree(nid) for nid in node_ids]
+        return torch.tensor(degrees, dtype=torch.long, device=self._device)
+
+    @property
+    def n_nodes(self) -> int:
+        return self._n_nodes
 
 class DummyEmbeddingProvider(EmbeddingProvider):
     def __init__(self, embedding_dim=128):
@@ -361,7 +372,159 @@ def test_swarm_retriever_groups():
     assert len(batch_results) == 2
     print("  ✓ Batch retrieval passed")
 
+def test_adapter_with_new_api():
+    """Test SwarmRetrieverAdapter with use_new_api=True."""
+    from swarm_rag.evolution.adapters.swarm_adapter import SwarmRetrieverAdapter
+
+    print("=" * 60)
+    print("SWARM RETRIEVER: ADAPTER NEW API TEST")
+    print("=" * 60)
+
+    # Initialize components
+    test_device = "cpu"
+    vector_store = DummyVectorStore(num_nodes=1000, embedding_dim=128, device=test_device)
+    graph_store = DummyGraphStore(num_nodes=1000, avg_degree=5, device=test_device)
+    embedder = DummyEmbeddingProvider(embedding_dim=128)
+
+    retriever = SwarmRetriever(
+        vector_store=vector_store,
+        graph_store=graph_store,
+        embedding_provider=embedder,
+        cache_neighbors=True,
+        cache_vectors=True,
+        device=test_device
+    )
+
+    # Test adapter with new API
+    adapter = SwarmRetrieverAdapter(retriever, use_new_api=True)
+
+    compiled = {
+        "n_agents": 10,
+        "steps": 5,  # Must be within bounds [4, 12]
+        "decay": 0.9,
+        "initial_pool_size": 20,
+        "start_subset": 10,  # Must be within bounds [5, 15]
+        "top_k": 5,
+    }
+
+    # Test single query
+    print("\n  1. Testing adapter.retrieve with new API...")
+    results = adapter.retrieve("test query", compiled)
+    assert isinstance(results, list)
+    assert len(results) <= 5
+    assert all("id" in r and "score" in r for r in results)
+    print(f"    ✓ Single query returned {len(results)} results")
+
+    # Test batch query
+    print("\n  2. Testing adapter.retrieve_batch with new API...")
+    batch_results = adapter.retrieve_batch(["q1", "q2", "q3"], compiled, max_workers=1)
+    assert isinstance(batch_results, list)
+    assert len(batch_results) == 3
+    for r in batch_results:
+        assert isinstance(r, list)
+    print(f"    ✓ Batch query returned {len(batch_results)} query results")
+
+    print("\n" + "=" * 60)
+    print("ADAPTER NEW API TEST COMPLETED SUCCESSFULLY")
+    print("=" * 60)
+
+
+def test_new_builder_api():
+    """Test the new builder pattern API: retriever.query(...).run()"""
+    from swarm_rag.interfaces.retriever_types import SingleResult, BatchResult, RetrievalConfig, RunConfig
+
+    print("=" * 60)
+    print("SWARM RETRIEVER: NEW BUILDER API TEST")
+    print("=" * 60)
+
+    # Initialize components
+    test_device = "cpu"
+    vector_store = DummyVectorStore(num_nodes=1000, embedding_dim=128, device=test_device)
+    graph_store = DummyGraphStore(num_nodes=1000, avg_degree=5, device=test_device)
+    embedder = DummyEmbeddingProvider(embedding_dim=128)
+
+    retriever = SwarmRetriever(
+        vector_store=vector_store,
+        graph_store=graph_store,
+        embedding_provider=embedder,
+        cache_neighbors=True,
+        cache_vectors=True,
+        device=test_device
+    )
+
+    # Test 1: Single string query
+    print("\n  1. Testing single string query...")
+    result = retriever.query("What is quantum computing?").run()
+    assert isinstance(result, SingleResult), f"Expected SingleResult, got {type(result)}"
+    assert result.node_ids.dim() == 1, f"node_ids should be 1D for single query, got {result.node_ids.dim()}D"
+    assert result.scores.dim() == 1, f"scores should be 1D for single query, got {result.scores.dim()}D"
+    print(f"    ✓ Single query returned {result.node_ids.shape[0]} results")
+
+    # Test 2: Batch string queries
+    print("\n  2. Testing batch string queries...")
+    queries = ["query 1", "query 2", "query 3"]
+    result = retriever.query(queries).run()
+    assert isinstance(result, BatchResult), f"Expected BatchResult, got {type(result)}"
+    assert result.node_ids.dim() == 2, f"node_ids should be 2D for batch, got {result.node_ids.dim()}D"
+    assert result.node_ids.shape[0] == 3, f"Expected 3 queries, got {result.node_ids.shape[0]}"
+    print(f"    ✓ Batch query returned shape {result.node_ids.shape}")
+
+    # Test 3: Config overrides
+    print("\n  3. Testing config overrides...")
+    result = retriever.query("test").run(
+        config=RetrievalConfig(n_agents=10, steps=2, top_k=5)
+    )
+    assert isinstance(result, SingleResult)
+    assert result.node_ids.shape[0] <= 5, f"top_k=5 but got {result.node_ids.shape[0]} results"
+    print(f"    ✓ Config override (top_k=5) returned {result.node_ids.shape[0]} results")
+
+    # Test 4: Run config for batch size
+    print("\n  4. Testing run config (batch_size)...")
+    queries = [f"query {i}" for i in range(10)]
+    result = retriever.query(queries).run(
+        run=RunConfig(mode="batched", batch_size=3)
+    )
+    assert isinstance(result, BatchResult)
+    assert result.node_ids.shape[0] == 10, f"Expected 10 queries, got {result.node_ids.shape[0]}"
+    print(f"    ✓ Batch with batch_size=3 processed all 10 queries")
+
+    # Test 5: Sequential mode
+    print("\n  5. Testing sequential mode...")
+    result = retriever.query(["q1", "q2"]).run(
+        run=RunConfig(mode="sequential")
+    )
+    assert isinstance(result, BatchResult)
+    assert result.node_ids.shape[0] == 2
+    print(f"    ✓ Sequential mode processed 2 queries")
+
+    # Test 6: Precomputed embedding (tensor input)
+    print("\n  6. Testing precomputed embedding (tensor input)...")
+    embedding = torch.randn(128, dtype=torch.float32)
+    result = retriever.query(embedding).run()
+    assert isinstance(result, SingleResult)
+    print(f"    ✓ Precomputed 1D tensor returned {result.node_ids.shape[0]} results")
+
+    # Test 7: Batch of precomputed embeddings
+    print("\n  7. Testing batch of precomputed embeddings...")
+    embeddings = torch.randn(5, 128, dtype=torch.float32)
+    result = retriever.query(embeddings).run()
+    assert isinstance(result, BatchResult)
+    assert result.node_ids.shape[0] == 5
+    print(f"    ✓ Precomputed 2D tensor (5 queries) returned shape {result.node_ids.shape}")
+
+    # Test 8: Device override
+    print("\n  8. Testing device override...")
+    result = retriever.query("test").on("cpu").run()
+    assert isinstance(result, SingleResult)
+    print(f"    ✓ Device override to 'cpu' works")
+
+    print("\n" + "=" * 60)
+    print("NEW BUILDER API TEST COMPLETED SUCCESSFULLY")
+    print("=" * 60)
+
+
 if __name__ == "__main__":
     test_swarm_retriever()
     # test_swarm_retriever_groups()
-    print("SWARM TESTS PASSED")
+    test_new_builder_api()
+    print("ALL SWARM TESTS PASSED")

@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple, Union, Sequence, Any
 import torch
 
 from ..utils.device import get_device
-from ..interfaces.shared_types import TorchDeviceStr
+from ..interfaces.types import TorchDeviceStr
 from ..interfaces.abstract_classes import VectorStore, Matrix
 
 import logging

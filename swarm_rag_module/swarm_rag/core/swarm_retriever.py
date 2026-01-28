@@ -50,6 +50,14 @@ class StepProfiler:
 
 from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
+from ..interfaces.retriever_types import (
+    SingleResult,
+    BatchResult,
+    RetrievalConfig,
+    RunConfig,
+    TraversalState,
+    QueryBuilder,
+)
 
 class AgentGroupConfig(TypedDict):
     """
@@ -1509,6 +1517,534 @@ class SwarmRetriever:
     def is_gpu_enabled(self) -> bool:
         """Check if GPU acceleration is active."""
         return self._use_gpu
+
+    # =========================================================================
+    # New Builder API
+    # =========================================================================
+
+    def query(
+        self,
+        input_data: Union[str, int, torch.Tensor, List],
+        pool: Optional[torch.Tensor] = None,
+    ) -> QueryBuilder:
+        """
+        Create a query builder for flexible retrieval.
+
+        This is the primary entry point for the new simplified API.
+        Supports single queries, batch queries, and precomputed embeddings.
+
+        Args:
+            input_data: Query input - can be:
+                - str: Text query to embed
+                - int: Node ID to look up embedding
+                - Tensor (1D): Single precomputed embedding
+                - Tensor (2D): Batch of precomputed embeddings
+                - List[str]: Batch of text queries
+                - List[int]: Batch of node IDs
+            pool: Optional precomputed initial pool (skips similarity search)
+
+        Returns:
+            QueryBuilder for method chaining
+
+        Examples:
+            # Simple single query
+            result = retriever.query("what is X?").run()
+
+            # Batch queries
+            result = retriever.query(["q1", "q2", "q3"]).run()
+
+            # With config overrides
+            result = retriever.query(queries).run(
+                config=RetrievalConfig(n_agents=50, steps=10)
+            )
+
+            # Precomputed embedding
+            result = retriever.query(embedding_tensor, pool=initial_pool).run()
+        """
+        return QueryBuilder(self, input_data, pool)
+
+    def _merge_config(self, config: Optional[RetrievalConfig]) -> Dict:
+        """Merge user config with defaults."""
+        resolved = self._DEFAULT_PARAMS.copy()
+        if config is not None:
+            # Only override non-None values from config
+            for key, value in config.items():
+                if value is not None:
+                    resolved[key] = value
+        return resolved
+
+    def _resolve_input(
+        self,
+        input_data: Union[str, int, torch.Tensor, List],
+        pool: Optional[torch.Tensor],
+        device: str,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], bool]:
+        """
+        Normalize any input type to (embeddings, pools, is_batch).
+
+        Args:
+            input_data: Query input - str, int, Tensor, or List
+            pool: Optional precomputed initial pool
+            device: Target device for tensors
+
+        Returns:
+            Tuple of:
+                - embeddings: Tensor of shape (n_queries, embed_dim)
+                - pools: Optional Tensor of shape (n_queries, pool_size) or None
+                - is_batch: Whether this is a batch query
+
+        Input type handling:
+            - str: Embed the text → (1, embed_dim)
+            - int: Look up query ID embedding → (1, embed_dim)
+            - Tensor (1D): Single embedding → (1, embed_dim)
+            - Tensor (2D): Batch of embeddings → (n, embed_dim)
+            - List[str]: Batch embed texts → (n, embed_dim)
+            - List[int]: Batch lookup IDs → (n, embed_dim)
+            - List[Tensor]: Stack embeddings → (n, embed_dim)
+        """
+        import torch.nn.functional as F
+
+        is_batch = isinstance(input_data, list) or (
+            isinstance(input_data, torch.Tensor) and input_data.dim() == 2
+        )
+
+        # Handle tensor inputs directly
+        if isinstance(input_data, torch.Tensor):
+            if input_data.dim() == 1:
+                embeddings = input_data.unsqueeze(0)  # (1, dim)
+            else:
+                embeddings = input_data  # Already (n, dim)
+            embeddings = embeddings.to(device=device, dtype=torch.float32)
+        elif isinstance(input_data, list):
+            if len(input_data) == 0:
+                raise ValueError("Empty query list")
+
+            first = input_data[0]
+            if isinstance(first, str):
+                # Batch embed strings
+                embeddings = self._get_cached_query_embeddings_batch(input_data)
+            elif isinstance(first, int):
+                # Batch lookup by ID
+                emb_list = []
+                for node_id in input_data:
+                    emb = self.embed_fn.embed_query(node_id)
+                    if not isinstance(emb, torch.Tensor):
+                        emb = torch.as_tensor(emb, dtype=torch.float32)
+                    emb_list.append(emb)
+                embeddings = torch.stack(emb_list)
+            elif isinstance(first, torch.Tensor):
+                # Stack tensors
+                embeddings = torch.stack(input_data)
+            else:
+                raise TypeError(f"Unsupported list element type: {type(first)}")
+            embeddings = embeddings.to(device=device, dtype=torch.float32)
+        elif isinstance(input_data, str):
+            # Single string query
+            emb = self._get_cached_query_vector(input_data)
+            embeddings = emb.unsqueeze(0)  # (1, dim)
+            embeddings = embeddings.to(device=device, dtype=torch.float32)
+        elif isinstance(input_data, int):
+            # Single ID lookup
+            emb = self.embed_fn.embed_query(input_data)
+            if not isinstance(emb, torch.Tensor):
+                emb = torch.as_tensor(emb, dtype=torch.float32)
+            embeddings = emb.unsqueeze(0).to(device=device)
+        else:
+            raise TypeError(f"Unsupported input type: {type(input_data)}")
+
+        # Normalize embeddings
+        embeddings = F.normalize(embeddings, p=2, dim=-1)
+
+        # Handle pool input
+        pools = None
+        if pool is not None:
+            if isinstance(pool, torch.Tensor):
+                pools = pool.to(device=device, dtype=torch.long)
+                # Ensure 2D: (n_queries, pool_size)
+                if pools.dim() == 1:
+                    pools = pools.unsqueeze(0)
+
+        return embeddings, pools, is_batch
+
+    def _traverse(
+        self,
+        query_embeddings: torch.Tensor,
+        initial_pools: Optional[torch.Tensor],
+        config: Dict,
+        run_config: RunConfig,
+        device: str,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Unified traversal for all execution modes.
+
+        Processes queries in chunks of batch_size.
+        When batch_size=1, this is "sequential" mode.
+        When batch_size>1, this is "batched" mode (default).
+
+        Args:
+            query_embeddings: (n_queries, embed_dim) on device
+            initial_pools: (n_queries, pool_size) or None
+            config: Merged retrieval config dict
+            run_config: Execution config (mode, batch_size)
+            device: Target device
+
+        Returns:
+            Tuple of (node_ids, scores) tensors:
+                - node_ids: (n_queries, top_k)
+                - scores: (n_queries, top_k)
+        """
+        n_queries = query_embeddings.shape[0]
+        batch_size = run_config.get("batch_size", 64)
+        mode = run_config.get("mode", "batched")
+
+        # Sequential mode = batch_size of 1
+        if mode == "sequential":
+            batch_size = 1
+
+        top_k = config["top_k"]
+        all_node_ids = []
+        all_scores = []
+
+        # Process queries in chunks
+        for chunk_start in range(0, n_queries, batch_size):
+            chunk_end = min(chunk_start + batch_size, n_queries)
+            chunk_embeddings = query_embeddings[chunk_start:chunk_end]
+
+            chunk_pools = None
+            if initial_pools is not None:
+                chunk_pools = initial_pools[chunk_start:chunk_end]
+
+            # Initialize state for this chunk
+            state = self._init_traversal_state(
+                chunk_embeddings, chunk_pools, config, device
+            )
+
+            # Run traversal steps
+            steps = config["steps"]
+            for step_idx in range(steps):
+                state = self._traverse_step(state, config)
+
+            # Rank and collect results for this chunk
+            chunk_ids, chunk_scores = self._rank_traversal_results(state, config)
+            all_node_ids.append(chunk_ids)
+            all_scores.append(chunk_scores)
+
+        # Concatenate all chunks
+        result_ids = torch.cat(all_node_ids, dim=0)  # (n_queries, top_k)
+        result_scores = torch.cat(all_scores, dim=0)  # (n_queries, top_k)
+
+        return result_ids, result_scores
+
+    def _init_traversal_state(
+        self,
+        query_embeddings: torch.Tensor,
+        initial_pools: Optional[torch.Tensor],
+        config: Dict,
+        device: str,
+    ) -> TraversalState:
+        """
+        Initialize traversal state for a batch of queries.
+
+        Args:
+            query_embeddings: (batch, embed_dim) normalized embeddings
+            initial_pools: (batch, pool_size) or None
+            config: Retrieval config
+            device: Target device
+
+        Returns:
+            Initialized TraversalState
+        """
+        batch_size = query_embeddings.shape[0]
+        n_agents = config["n_agents"]
+        steps = config["steps"]
+        initial_pool_size = config["initial_pool_size"]
+        start_subset = config["start_subset"]
+        drop_zone_inc = config["drop_zone_inc"]
+
+        # Get initial pools if not provided
+        if initial_pools is None:
+            # Search for initial candidates
+            search_ids, search_scores = self.vector_store.search_batch(
+                query_embeddings, limit=initial_pool_size
+            )
+            # Filter to valid nodes
+            valid_mask = (search_ids >= 0) & (search_ids < self._max_node_id)
+            initial_pools = search_ids  # (batch, initial_pool_size)
+        else:
+            valid_mask = (initial_pools >= 0) & (initial_pools < self._max_node_id)
+
+        # Select drop zone (first start_subset valid nodes per query)
+        # For simplicity, take first start_subset columns
+        dz_size = min(start_subset, initial_pools.shape[1])
+        drop_zones = initial_pools[:, :dz_size]  # (batch, dz_size)
+
+        # Spawn agents using weighted sampling
+        # Earlier nodes (lower index) get higher weights
+        weights = torch.arange(dz_size, 0, -1, device=device, dtype=torch.float32)
+        weights = weights * drop_zone_inc + 1.0
+        weights = weights / weights.sum()  # (dz_size,)
+
+        # Sample agent starting positions for each query
+        # weights is shared across all queries
+        agent_indices = torch.multinomial(
+            weights.unsqueeze(0).expand(batch_size, -1),
+            n_agents,
+            replacement=True,
+        )  # (batch, n_agents)
+
+        # Gather starting positions
+        agent_positions = torch.gather(
+            drop_zones, dim=1, index=agent_indices
+        )  # (batch, n_agents)
+
+        # Initialize visit history
+        visit_history = torch.full(
+            (batch_size, n_agents, steps + 1),
+            -1,
+            device=device,
+            dtype=torch.long,
+        )
+        visit_history[:, :, 0] = agent_positions
+
+        # Initialize pheromones
+        pheromones = torch.zeros(
+            batch_size, self._pheromone_buffer_size, device=device, dtype=torch.float32
+        )
+
+        return TraversalState(
+            query_embeddings=query_embeddings,
+            agent_positions=agent_positions,
+            visit_history=visit_history,
+            pheromones=pheromones,
+            step=0,
+            device=device,
+        )
+
+    def _traverse_step(self, state: TraversalState, config: Dict) -> TraversalState:
+        """
+        Execute one traversal step for all queries × all agents.
+
+        Fully batched tensor operations:
+        1. Get neighbors for all agent positions
+        2. Compute similarities for all neighbors
+        3. Score all neighbors (semantic + centrality + repulsion)
+        4. Sample next positions via multinomial
+        5. Update pheromones
+        6. Apply decay
+
+        Args:
+            state: Current traversal state
+            config: Retrieval config
+
+        Returns:
+            Updated TraversalState
+        """
+        batch_size = state.batch_size
+        n_agents = state.n_agents
+        device = state.device
+        decay = config["decay"]
+
+        # Flatten positions for batch neighbor lookup
+        flat_positions = state.agent_positions.view(-1)  # (batch * n_agents,)
+
+        # Get neighbors for all positions
+        all_neighbors, neighbor_mask = self.graph_store.get_neighbors_batch(
+            flat_positions
+        )
+        # all_neighbors: (batch * n_agents, max_degree)
+        # neighbor_mask: (batch * n_agents, max_degree)
+
+        if all_neighbors is None:
+            # No valid neighbors - return unchanged state
+            state.step += 1
+            return state
+
+        max_degree = all_neighbors.shape[1]
+
+        # Reshape to (batch, n_agents, max_degree)
+        all_neighbors = all_neighbors.view(batch_size, n_agents, max_degree)
+        neighbor_mask = neighbor_mask.view(batch_size, n_agents, max_degree)
+
+        # Get neighbor embeddings
+        flat_neighbors = all_neighbors.view(-1)  # (batch * n_agents * max_degree,)
+        unique_neighbors = torch.unique(flat_neighbors)
+        unique_neighbors = unique_neighbors[unique_neighbors >= 0]
+
+        if unique_neighbors.numel() == 0:
+            state.step += 1
+            return state
+
+        # Fetch embeddings for unique neighbors
+        neighbor_embeddings, valid_ids = self._fetch_embeddings(unique_neighbors)
+        # neighbor_embeddings: (n_unique, embed_dim)
+
+        # Create embedding lookup table
+        embed_dim = neighbor_embeddings.shape[1]
+        embedding_table = torch.zeros(
+            self._max_node_id + 1, embed_dim, device=device, dtype=torch.float32
+        )
+        embedding_table[valid_ids] = neighbor_embeddings
+
+        # Look up embeddings for all neighbors
+        clamped_neighbors = all_neighbors.clamp(0, self._max_node_id)
+        neighbor_embeds = embedding_table[clamped_neighbors]
+        # neighbor_embeds: (batch, n_agents, max_degree, embed_dim)
+
+        # Compute similarities: query @ neighbor embeddings
+        # query_embeddings: (batch, embed_dim)
+        # neighbor_embeds: (batch, n_agents, max_degree, embed_dim)
+        similarities = torch.einsum(
+            "bd,bnad->bna", state.query_embeddings, neighbor_embeds
+        )
+        # similarities: (batch, n_agents, max_degree)
+
+        # Get degrees for centrality scoring
+        degrees = self.graph_store.get_degrees_batch(flat_neighbors.clamp(0, self._max_node_id - 1))
+        degrees = degrees.view(batch_size, n_agents, max_degree).float()
+
+        # Get pheromone values for neighbors
+        clamped_for_pheromone = clamped_neighbors.clamp(0, self._pheromone_buffer_size - 1)
+        # Index pheromones: (batch, buffer_size) -> (batch, n_agents, max_degree)
+        neighbor_pheromones = torch.gather(
+            state.pheromones.unsqueeze(1).expand(-1, n_agents, -1).reshape(
+                batch_size * n_agents, -1
+            ),
+            dim=1,
+            index=clamped_for_pheromone.view(batch_size * n_agents, max_degree),
+        ).view(batch_size, n_agents, max_degree)
+
+        # Compute scores
+        max_pheromone = state.pheromones.max().clamp(min=1.0)
+
+        # Semantic: scale to [0, 1]
+        semantic_scores = (similarities + 1.0) / 2.0
+
+        # Centrality: log degree normalized
+        log_degrees = torch.log(1.0 + degrees)
+        centrality_scores = log_degrees / (log_degrees + self._avg_log_degree + 1e-8)
+
+        # Repulsion: inverse pheromone
+        normalized_pheromones = neighbor_pheromones / (max_pheromone + 1e-8)
+        repulsion_scores = 1.0 - normalized_pheromones
+
+        # Combine with default weights (TODO: make configurable via strategies)
+        total_scores = (
+            0.3 * semantic_scores + 0.4 * centrality_scores + 0.3 * repulsion_scores
+        )
+
+        # Apply mask
+        total_scores = total_scores.masked_fill(~neighbor_mask, 0.0)
+        total_scores = total_scores.clamp(min=0.001)
+
+        # Normalize to probabilities per agent
+        probs = total_scores / total_scores.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        # Sample next positions
+        flat_probs = probs.view(batch_size * n_agents, max_degree)
+        sampled_idx = torch.multinomial(flat_probs, 1).view(batch_size, n_agents)
+
+        # Gather new positions
+        new_positions = torch.gather(
+            all_neighbors, dim=2, index=sampled_idx.unsqueeze(-1)
+        ).squeeze(-1)
+        # new_positions: (batch, n_agents)
+
+        # Compute deposits (flat deposit = 1.0 for now)
+        deposit_vals = torch.ones(batch_size, n_agents, device=device, dtype=torch.float32)
+
+        # Scatter add deposits to pheromones
+        clamped_new = new_positions.clamp(0, self._pheromone_buffer_size - 1)
+        state.pheromones.scatter_add_(
+            dim=1,
+            index=clamped_new,
+            src=deposit_vals,
+        )
+
+        # Apply decay
+        state.pheromones *= decay
+
+        # Update state
+        state.agent_positions = new_positions
+        state.visit_history[:, :, state.step + 1] = new_positions
+        state.step += 1
+
+        return state
+
+    def _rank_traversal_results(
+        self, state: TraversalState, config: Dict
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Rank visited nodes and return top-k results for each query.
+
+        Args:
+            state: Final traversal state
+            config: Retrieval config
+
+        Returns:
+            Tuple of (node_ids, scores) with shape (batch, top_k)
+        """
+        batch_size = state.batch_size
+        n_agents = state.n_agents
+        top_k = config["top_k"]
+        device = state.device
+
+        # Flatten visit history to unique visited nodes per query
+        # visit_history: (batch, n_agents, steps+1)
+        visited = state.visit_history.view(batch_size, -1)  # (batch, n_agents * (steps+1))
+
+        # Get unique nodes per query by processing each query
+        all_ids = []
+        all_scores = []
+
+        for q_idx in range(batch_size):
+            q_visited = visited[q_idx]
+            q_visited = q_visited[q_visited >= 0]  # Remove -1 padding
+            unique_visited = torch.unique(q_visited)
+
+            if unique_visited.numel() == 0:
+                # No valid visits - return zeros
+                all_ids.append(torch.zeros(top_k, device=device, dtype=torch.long))
+                all_scores.append(torch.zeros(top_k, device=device, dtype=torch.float32))
+                continue
+
+            # Fetch embeddings for visited nodes
+            node_embeddings, valid_ids = self._fetch_embeddings(unique_visited)
+
+            if valid_ids.numel() == 0:
+                all_ids.append(torch.zeros(top_k, device=device, dtype=torch.long))
+                all_scores.append(torch.zeros(top_k, device=device, dtype=torch.float32))
+                continue
+
+            # Compute similarities
+            query_emb = state.query_embeddings[q_idx]  # (embed_dim,)
+            similarities = torch.mv(node_embeddings, query_emb)  # (n_unique,)
+
+            # Get top-k
+            k = min(top_k, similarities.numel())
+            top_scores, top_indices = torch.topk(similarities, k)
+
+            # Pad if needed
+            if k < top_k:
+                pad_size = top_k - k
+                top_scores = torch.cat(
+                    [top_scores, torch.zeros(pad_size, device=device)]
+                )
+                top_indices = torch.cat(
+                    [top_indices, torch.zeros(pad_size, device=device, dtype=torch.long)]
+                )
+                top_ids = torch.cat(
+                    [valid_ids[top_indices[:k]], torch.zeros(pad_size, device=device, dtype=torch.long)]
+                )
+            else:
+                top_ids = valid_ids[top_indices]
+
+            all_ids.append(top_ids)
+            all_scores.append(top_scores)
+
+        result_ids = torch.stack(all_ids, dim=0)  # (batch, top_k)
+        result_scores = torch.stack(all_scores, dim=0)  # (batch, top_k)
+
+        return result_ids, result_scores
 
     def retrieve_with_precomputed(
         self,

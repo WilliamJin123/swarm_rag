@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import scipy.sparse as sp
 import torch
 
-from ..interfaces.shared_types import TorchDeviceStr
+from ..interfaces.types import TorchDeviceStr
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
 from ..interfaces.enums import HeuristicKey
 from ..utils import fail_on_missing_imports, get_device

@@ -26,7 +26,7 @@ from ..types.config import (
 )
 from ..types.fitness_results import FitnessResult
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
-from ...interfaces.shared_types import AgentGroupConfig
+from ...interfaces.types import AgentGroupConfig
 
 
 # =============================================================================

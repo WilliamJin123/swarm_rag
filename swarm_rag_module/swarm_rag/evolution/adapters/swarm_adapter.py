@@ -10,6 +10,11 @@ Benefits:
 2. SwarmRetriever signature changes are isolated to this adapter
 3. Testing evolution with mock retrievers becomes easier
 4. Validation happens in one place
+
+Migration Note:
+    The adapter now supports both old and new SwarmRetriever APIs.
+    Set use_new_api=True to use the builder pattern:
+        retriever.query(...).run(config=...)
 """
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -32,16 +37,22 @@ class SwarmRetrieverAdapter:
     3. Ensures parameter bounds are respected
     4. Provides error messages for invalid configurations
 
-    Usage:
+    Usage (old API):
         adapter = SwarmRetrieverAdapter(retriever)
         kwargs = adapter.from_genome(compiled_genome)
         results = adapter.retrieve(query, **kwargs)
+
+    Usage (new API):
+        adapter = SwarmRetrieverAdapter(retriever, use_new_api=True)
+        results = adapter.retrieve(query, compiled_genome)
+        # Internally uses: retriever.query(query).run(config=...)
     """
 
     def __init__(
         self,
         retriever: Any = None,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        use_new_api: bool = False,
     ):
         """
         Initialize adapter.
@@ -49,9 +60,11 @@ class SwarmRetrieverAdapter:
         Args:
             retriever: Optional SwarmRetriever instance
             param_bounds: Optional parameter bounds for validation
+            use_new_api: If True, use the new builder pattern API
         """
         self.retriever = retriever
         self.param_bounds = param_bounds or self._default_bounds()
+        self.use_new_api = use_new_api
 
     def _default_bounds(self) -> Dict[str, Tuple[float, float]]:
         """Default parameter bounds for SwarmRetriever."""
@@ -147,13 +160,21 @@ class SwarmRetrieverAdapter:
             decision_tracker: Optional decision tracker
 
         Returns:
-            List of retrieved results
+            List of retrieved results (old API) or SingleResult (new API)
         """
         if self.retriever is None:
             raise RuntimeError("No retriever configured for adapter")
 
         kwargs = self.from_genome(compiled)
 
+        if self.use_new_api:
+            # New builder pattern API
+            config = self._kwargs_to_config(kwargs)
+            result = self.retriever.query(query).run(config=config)
+            # Convert to list format for backward compatibility
+            return self._result_to_list(result)
+
+        # Old API
         if decision_tracker is not None:
             return self.retriever.retrieve(
                 query=query,
@@ -187,12 +208,60 @@ class SwarmRetrieverAdapter:
 
         kwargs = self.from_genome(compiled)
 
+        if self.use_new_api:
+            # New builder pattern API
+            config = self._kwargs_to_config(kwargs)
+            # Determine batch_size based on max_workers hint
+            batch_size = 64 if max_workers > 1 else 1
+            run_config = {
+                "mode": "batched" if max_workers > 1 else "sequential",
+                "batch_size": batch_size,
+            }
+            result = self.retriever.query(queries).run(config=config, run=run_config)
+            # Convert to list of lists format for backward compatibility
+            return self._batch_result_to_lists(result)
+
+        # Old API
         return self.retriever.retrieve_batch(
             queries=queries,
             max_workers=max_workers,
             genome_id=genome_id,
             **kwargs
         )
+
+    def _kwargs_to_config(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert legacy kwargs to RetrievalConfig format."""
+        # Filter to only config-relevant keys
+        config_keys = {
+            "n_agents", "steps", "decay", "initial_pool_size",
+            "start_subset", "top_k", "drop_zone_inc",
+            "movement_strategies", "deposit_strategies", "ranking_strategies",
+        }
+        return {k: v for k, v in kwargs.items() if k in config_keys}
+
+    def _result_to_list(self, result) -> List[Dict]:
+        """Convert SingleResult to list of dicts for backward compatibility."""
+        results = []
+        for i in range(result.node_ids.shape[0]):
+            results.append({
+                "id": int(result.node_ids[i].item()),
+                "score": float(result.scores[i].item()),
+            })
+        return results
+
+    def _batch_result_to_lists(self, result) -> List[List[Dict]]:
+        """Convert BatchResult to list of list of dicts for backward compatibility."""
+        all_results = []
+        n_queries = result.node_ids.shape[0]
+        for q_idx in range(n_queries):
+            query_results = []
+            for i in range(result.node_ids.shape[1]):
+                query_results.append({
+                    "id": int(result.node_ids[q_idx, i].item()),
+                    "score": float(result.scores[q_idx, i].item()),
+                })
+            all_results.append(query_results)
+        return all_results
 
 
 def parse_strategy_key(key: str) -> Tuple[Optional[str], Optional[str]]:

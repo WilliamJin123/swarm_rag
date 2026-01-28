@@ -20,57 +20,122 @@ retriever = SwarmRetriever(
     vector_store=vs,
     graph_store=gs,
     embedding_provider=ep,
-    # Auto-detects: cuda > mps > cpu
-    default_config={
-        "n_agents": 25,
-        "steps": 5,
-        "decay": 0.5,
-        "initial_pool_size": 30,
-        "start_subset": 10,
-        "top_k": 20,
-        "movement_strategies": {...},
-        "deposit_strategies": {...},
-        "ranking_strategies": {...},
-    }
+    # Auto-detects device: cuda > mps > cpu
+    default_config=RetrievalConfig(
+        n_agents=25,
+        steps=5,
+        decay=0.5,
+        initial_pool_size=30,
+        start_subset=10,
+        top_k=20,
+        movement_strategies={...},
+        deposit_strategies={...},
+        ranking_strategies={...},
+    )
 )
 ```
+
+The `default_config` is a `RetrievalConfig` TypedDict. All parameters in `run(config=...)` merge with (and override) these defaults.
 
 ### Builder Pattern
 
 ```python
-# Simple single query
-results = retriever.query("what is X?").run()
+# Simple single query → SingleResult
+result: SingleResult = retriever.query("what is X?").run()
+# result.node_ids: Tensor (top_k,)
+# result.scores: Tensor (top_k,)
 
-# Batch of queries (auto-detected from list input)
-results = retriever.query(["q1", "q2", "q3"]).run()
+# Batch of queries (auto-detected from list input) → BatchResult
+result: BatchResult = retriever.query(["q1", "q2", "q3"]).run()
+# result.node_ids: Matrix (3, top_k)
+# result.scores: Matrix (3, top_k)
 
 # Query by ID (int input)
-results = retriever.query(42).run()
+result: SingleResult = retriever.query(42).run()
 
 # Precomputed embedding (Tensor input)
-results = retriever.query(embedding_tensor).run()
+result: SingleResult = retriever.query(embedding_tensor).run()
 
 # Precomputed embedding + initial pool (skips embedding AND initial search)
-results = retriever.query(embedding_tensor, pool=initial_pool).run()
+result: SingleResult = retriever.query(embedding_tensor, pool=initial_pool).run()
 
 # Device override
-results = retriever.query(queries).on("cpu").run()
+result = retriever.query(queries).on("cpu").run()
 
-# Execution mode override (default: sequential)
-results = retriever.query(queries).run(mode="batched", batch_size=32)
+# Execution mode override (default: batched, batch_size=64)
+result = retriever.query(queries).run(run=RunConfig(mode="sequential"))  # force sequential
 
 # Config overrides
-results = retriever.query(queries).run(n_agents=50, steps=10)
+result = retriever.query(queries).run(config=RetrievalConfig(n_agents=50, steps=10))
 
-# Evolution genome evaluation - compiled dict unpacks directly
-compiled = genome_compiler.compile(genome)
-results = retriever.query(queries).run(**compiled, mode="batched", batch_size=64)
+# Evolution genome evaluation - compiled returns RetrievalConfig
+compiled: RetrievalConfig = genome_compiler.compile(genome)
+result: BatchResult = retriever.query(queries).run(
+    config=compiled,
+    run=RunConfig(mode="batched", batch_size=64)
+)
 ```
 
-### Return Type
+### Return Types
 
-- Single query input → `List[Dict]` (list of retrieved documents)
-- List query input → `List[List[Dict]]` (list of results per query)
+Always tensors, with distinct types for single vs batch:
+
+```python
+from typing import NamedTuple
+from swarm_rag.interfaces.abstract_classes import Matrix  # TypeAlias for torch.Tensor
+
+class SingleResult(NamedTuple):
+    """Result for a single query."""
+    node_ids: Tensor   # (top_k,)
+    scores: Tensor     # (top_k,)
+
+class BatchResult(NamedTuple):
+    """Result for a batch of queries."""
+    node_ids: Matrix   # (n_queries, top_k)
+    scores: Matrix     # (n_queries, top_k)
+```
+
+- Single query input → `SingleResult`
+- List/batch query input → `BatchResult`
+
+### Config Types
+
+Separate TypedDicts for retrieval parameters vs execution parameters:
+
+```python
+class RetrievalConfig(TypedDict, total=False):
+    """Parameters that affect retrieval behavior (evolvable by genome)."""
+    n_agents: int
+    steps: int
+    decay: float
+    initial_pool_size: int
+    start_subset: int
+    top_k: int
+    movement_strategies: Dict[str, Tuple[Callable, float]]
+    deposit_strategies: Dict[str, Tuple[Callable, float]]
+    ranking_strategies: Dict[str, Tuple[Callable, float]]
+
+class RunConfig(TypedDict, total=False):
+    """Execution parameters (not evolvable)."""
+    mode: Literal["sequential", "batched"]  # default: "batched"
+    batch_size: int  # default: 64
+```
+
+Usage:
+```python
+# Explicit configs
+results = retriever.query(queries).run(
+    config=RetrievalConfig(n_agents=25, steps=5),
+    run=RunConfig(mode="batched", batch_size=32)
+)
+
+# Evolution - genome compiles to RetrievalConfig
+compiled: RetrievalConfig = genome_compiler.compile(genome)
+results = retriever.query(queries).run(
+    config=compiled,
+    run=RunConfig(mode="batched")
+)
+```
 
 ## Internal Architecture
 
@@ -80,12 +145,12 @@ All execution paths use the same tensor-based implementation:
 
 | Mode | Device | Implementation |
 |------|--------|----------------|
-| batched | cuda | Tensors on CUDA, batch_size=64 (configurable) |
-| batched | cpu | Tensors on CPU, batch_size=64 (configurable) |
+| batched (default) | cuda | Tensors on CUDA, batch_size=64 |
+| batched (default) | cpu | Tensors on CPU, batch_size=64 |
 | sequential | cuda | Tensors on CUDA, batch_size=1 |
 | sequential | cpu | Tensors on CPU, batch_size=1 |
 
-**Key insight**: "Sequential" is just `batch_size=1`. No separate code path needed.
+**Key insight**: "Sequential" is just `batch_size=1`. No separate code path needed. Default is batched with batch_size=64.
 
 ### Core Components
 
@@ -93,17 +158,24 @@ All execution paths use the same tensor-based implementation:
 SwarmRetriever
 ├── query(input, pool=None) → QueryBuilder
 ├── _resolve_input(input, pool) → (embeddings: Tensor, pools: Optional[Tensor], is_batch: bool)
-├── _traverse(embeddings, pools, config, device, batch_size) → results
-└── default_config: Dict
+├── _traverse(embeddings, pools, config, run_config) → Union[SingleResult, BatchResult]
+├── default_config: RetrievalConfig
+└── device: str  # auto-detected at init
 
 QueryBuilder
 ├── _retriever: SwarmRetriever
 ├── _input: Union[str, int, Tensor, List]
 ├── _pool: Optional[Tensor]
-├── _device: Optional[str]  # None = auto-detect
+├── _device_override: Optional[str]  # None = use retriever's device
+├── _is_batch: bool  # determined by input type
 ├── on(device) → self
-└── run(mode="sequential", batch_size=64, **overrides) → results
+└── run(config: RetrievalConfig = None, run: RunConfig = None) → Union[SingleResult, BatchResult]
 ```
+
+The `run()` method:
+- Merges `config` with `retriever.default_config` (config overrides defaults)
+- Uses `run` for execution params (defaults: mode="batched", batch_size=64)
+- Returns `SingleResult` if `_is_batch=False`, else `BatchResult`
 
 ### Single Traversal Function
 
@@ -112,17 +184,16 @@ def _traverse(
     self,
     query_embeddings: Tensor,  # (n_queries, embed_dim)
     initial_pools: Optional[Tensor],  # (n_queries, pool_size) or None
-    config: Dict,
-    device: str,
-    batch_size: int,  # 1 for sequential, 64+ for batched
-) -> List[List[Dict]]:
+    config: RetrievalConfig,
+    run_config: RunConfig,  # mode and batch_size
+) -> Union[SingleResult, BatchResult]:
     """
     Unified traversal for all execution modes.
 
-    Processes queries in chunks of batch_size.
+    Processes queries in chunks of batch_size (default 64).
     When batch_size=1, this is "sequential" mode.
-    When batch_size>1, this is "batched" mode.
-    Device determines where tensors live (cuda/mps/cpu).
+    When batch_size>1, this is "batched" mode (default).
+    Device is determined by self.device (auto-detected at init).
     """
     n_queries = query_embeddings.shape[0]
     all_results = []
@@ -261,26 +332,28 @@ def _resolve_input(
 ### Old API → New API
 
 ```python
-# Old: Single query
+# Old: Single query → List[Dict]
 results = retriever.retrieve(query="what is X?", n_agents=25, steps=5)
-# New:
-results = retriever.query("what is X?").run(n_agents=25, steps=5)
+# New: → SingleResult (node_ids: Tensor, scores: Tensor)
+result = retriever.query("what is X?").run(config=RetrievalConfig(n_agents=25, steps=5))
 
-# Old: Batch queries
+# Old: Batch queries → List[List[Dict]]
 results = retriever.retrieve_batch(queries=["q1", "q2"], max_workers=4)
-# New:
-results = retriever.query(["q1", "q2"]).run(mode="batched")
+# New: → BatchResult (node_ids: Matrix, scores: Matrix)
+result = retriever.query(["q1", "q2"]).run(run=RunConfig(mode="batched"))
 
 # Old: Precomputed single
 results = retriever.retrieve_with_precomputed(embedding, initial_pool, n_agents=25)
 # New:
-results = retriever.query(embedding, pool=initial_pool).run(n_agents=25)
+result = retriever.query(embedding, pool=initial_pool).run(config=RetrievalConfig(n_agents=25))
 
 # Old: Precomputed batch
 results = retriever.retrieve_batch_with_precomputed(embeddings, pools, batch_size=32)
 # New:
-results = retriever.query(embeddings, pool=pools).run(mode="batched", batch_size=32)
+result = retriever.query(embeddings, pool=pools).run(run=RunConfig(mode="batched", batch_size=32))
 ```
+
+**Note on return type change**: Old API returned `List[Dict]` with `node_id` and `score` keys. New API returns `SingleResult`/`BatchResult` NamedTuples with tensor fields. Downstream code that unpacked dicts needs to use tensor indexing instead.
 
 ### Evolution Integration
 
@@ -290,12 +363,19 @@ adapter = SwarmRetrieverAdapter(retriever)
 compiled = genome_compiler.compile(genome)
 results = adapter.retrieve_batch(queries, compiled, max_workers=4)
 
-# New (direct)
-compiled = genome_compiler.compile(genome)
-results = retriever.query(queries).run(**compiled, mode="batched")
+# New (direct) - genome compiles to RetrievalConfig
+compiled: RetrievalConfig = genome_compiler.compile(genome)
+result: BatchResult = retriever.query(queries).run(
+    config=compiled,
+    run=RunConfig(mode="batched", batch_size=64)
+)
+# result.node_ids is Matrix (n_queries, top_k)
+# result.scores is Matrix (n_queries, top_k)
 ```
 
 The `SwarmRetrieverAdapter` can be simplified to a thin compatibility layer or deprecated entirely.
+
+**GenomeCompiler change**: The compiler should return a `RetrievalConfig` TypedDict instead of a generic dict. This provides type safety throughout the evolution pipeline.
 
 ## Files to Modify
 

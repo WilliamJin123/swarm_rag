@@ -14,7 +14,7 @@ from .config import WeightTensors, MutationSigmas
 from .expressions import ExpressionNode
 
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
-from ...interfaces.shared_types import AgentGroupConfig
+from ...interfaces.types import AgentGroupConfig
 
 
 # =============================================================================

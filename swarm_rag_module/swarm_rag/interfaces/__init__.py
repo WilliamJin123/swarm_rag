@@ -1,7 +1,7 @@
 from .abstract_classes import VectorStore, GraphStore, EmbeddingProvider
 from .protocols import RetrievalBackend
 from .evaluable import EvaluableRetriever
-from .shared_types import (
+from .types import (
     AgentGroupConfig,
     StrategyConfig,
     RetrievalConfig,
@@ -9,6 +9,14 @@ from .shared_types import (
     FitnessMetrics,
     ExpressionNodeDict,
     HeuristicInfo,
+)
+from .retriever_types import (
+    SingleResult,
+    BatchResult,
+    RetrievalConfig,
+    RunConfig,
+    TraversalState,
+    QueryBuilder,
 )
 
 __all__ = [
@@ -27,4 +35,11 @@ __all__ = [
     "FitnessMetrics",
     "ExpressionNodeDict",
     "HeuristicInfo",
+
+    "SingleResult",
+    "BatchResult",
+    "RetrievalConfig",
+    "RunConfig",
+    "TraversalState",
+    "QueryBuilder",
 ]

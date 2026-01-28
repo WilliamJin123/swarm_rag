@@ -16,7 +16,7 @@ import scipy.sparse as sp
 
 # Assuming these exist in your project structure
 from ..interfaces.abstract_classes import GraphStore
-from ..interfaces.shared_types import TorchDeviceStr
+from ..interfaces.types import TorchDeviceStr
 from ..utils.device import get_device
 
 import logging
