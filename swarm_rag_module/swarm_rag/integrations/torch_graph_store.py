@@ -1,3 +1,4 @@
+
 """
 PyTorch-Native Graph Store
 
@@ -13,13 +14,13 @@ from typing import Dict, List, Optional, Tuple, Union, Sequence
 import torch
 import scipy.sparse as sp
 
-
+# Assuming these exist in your project structure
 from ..interfaces.abstract_classes import GraphStore
 from ..interfaces.shared_types import TorchDeviceStr
-
 from ..utils.device import get_device
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,9 +70,7 @@ class TorchGraphStore(GraphStore):
 
         # Store CSR components on device
         self._crow_indices = crow_indices.to(device=self._device, dtype=torch.long)
-
         self._col_indices = col_indices.to(device=self._device, dtype=torch.long)
-
         self._degrees = degree_tensor.to(device=self._device, dtype=torch.int32)
 
         self._max_degree = int(self._degrees.max().item()) if n_nodes > 0 else 0
@@ -81,13 +80,15 @@ class TorchGraphStore(GraphStore):
         col_mem = self._col_indices.numel() * self._col_indices.element_size()
         deg_mem = self._degrees.numel() * self._degrees.element_size()
         total_mem = crow_mem + col_mem + deg_mem
-        dense_mem = n_nodes * self._max_degree * 8
+        dense_mem = n_nodes * self._max_degree * 8 if self._max_degree > 0 else 0
+
+        savings = 100 * (1 - total_mem / dense_mem) if dense_mem > 0 else 0.0
 
         logger.info(
             f"TorchGraphStore (CSR) initialized: {n_nodes} nodes, {self._col_indices.numel()} edges, "
             f"max_degree={self._max_degree}, avg_degree={avg_degree:.1f}, device={self._device}, "
             f"memory={total_mem / 1024 / 1024:.1f}MB (vs {dense_mem / 1024 / 1024:.0f}MB dense, "
-            f"{100 * (1 - total_mem / dense_mem):.1f}% savings)"
+            f"{savings:.1f}% savings)"
         )
 
     @classmethod
@@ -110,29 +111,30 @@ class TorchGraphStore(GraphStore):
         """
         if not adj_dict:
             raise ValueError("Cannot create store from empty adjacency dict")
-        
+
         target_device = device or get_device()
 
+        # Ensure nodes are handled even if not contiguous in keys (0 to max_id)
         nodes = sorted(adj_dict.keys())
         n_nodes = max(nodes) + 1 if nodes else 0
 
         indptr = [0] * (n_nodes + 1)
         total_edges = 0
 
+        # Build indptr (crow_indices)
         for node_id in range(n_nodes):
             neighbors = adj_dict.get(node_id, [])
             deg = len(neighbors)
             indptr[node_id + 1] = indptr[node_id] + deg
             total_edges += deg
 
+        # Build indices (col_indices)
         indices = [0] * total_edges
-
         for node_id in range(n_nodes):
             neighbors = adj_dict.get(node_id, [])
             if neighbors:
                 start = indptr[node_id]
-                for i, neighbor in enumerate(neighbors):
-                    indices[start + i] = neighbor
+                indices[start:start + len(neighbors)] = neighbors
 
         degrees = [indptr[i + 1] - indptr[i] for i in range(n_nodes)]
 
@@ -167,7 +169,6 @@ class TorchGraphStore(GraphStore):
         Returns:
             TorchGraphStore instance
         """
-
         n_nodes = csr_matrix.shape[0]
         target_device = device or get_device()
 
@@ -219,7 +220,6 @@ class TorchGraphStore(GraphStore):
                   True where valid neighbors exist
         """
         ids = node_ids.to(device=self._device, dtype=torch.long)
-
         batch_size = ids.shape[0]
 
         if batch_size == 0:
@@ -229,13 +229,18 @@ class TorchGraphStore(GraphStore):
             )
 
         valid_mask = (ids >= 0) & (ids < self.n_nodes)
+        # Clamp IDs to prevent index errors during lookup, zeroed out later via mask
         clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
 
+        # Get start/end indices and lengths for all nodes in batch
         starts = self._crow_indices[clamped_ids]
         ends = self._crow_indices[clamped_ids + 1]
         lengths = ends - starts
+        
+        # Apply valid mask to lengths (invalid nodes have length 0)
         lengths = torch.where(valid_mask, lengths, torch.zeros_like(lengths))
 
+        total_neighbors = lengths.sum().item()
         batch_max_degree = int(lengths.max().item()) if batch_size > 0 else 0
 
         if batch_max_degree == 0:
@@ -244,6 +249,14 @@ class TorchGraphStore(GraphStore):
                 torch.zeros((batch_size, 1), device=self._device, dtype=torch.bool)
             )
 
+        if total_neighbors == 0:
+             # Edge case: batch_size > 0 but no valid neighbors found
+            return (
+                torch.full((batch_size, 1), -1, device=self._device, dtype=torch.long),
+                torch.zeros((batch_size, 1), device=self._device, dtype=torch.bool)
+            )
+
+        # Initialize output tensors
         neighbors = torch.full(
             (batch_size, batch_max_degree), -1,
             device=self._device, dtype=torch.long
@@ -253,38 +266,45 @@ class TorchGraphStore(GraphStore):
             device=self._device, dtype=torch.bool
         )
 
-        total_neighbors = lengths.sum().item()
+        # Vectorized neighbor gathering
+        lengths_int = lengths.int()
 
-        if total_neighbors > 0:
-            lengths_int = lengths.int()
+        # 1. Determine which row (node ID) each neighbor belongs to in the flat list
+        #    e.g. lengths=[2, 1] -> row_indices=[0, 0, 1]
+        row_indices = torch.repeat_interleave(
+            torch.arange(batch_size, device=self._device),
+            lengths_int
+        )
 
-            row_indices = torch.repeat_interleave(
-                torch.arange(batch_size, device=self._device),
-                lengths_int
-            )
+        # 2. Calculate the start offset for each node in the flat index space
+        #    e.g. lengths=[2, 1] -> cumsum=[2, 3] -> group_starts=[0, 2]
+        group_starts = torch.cumsum(lengths, dim=0) - lengths
+        
+        # 3. Repeat these start offsets to match the size of the flat neighbor list
+        #    e.g. group_starts=[0, 2] -> repeated=[0, 0, 2]
+        start_offsets_flat = torch.repeat_interleave(group_starts, lengths_int)
 
-            offsets = torch.zeros(total_neighbors, device=self._device, dtype=torch.long)
-            cumsum = torch.cumsum(lengths, dim=0)
-            if batch_size > 1:
-                valid_offset_mask = cumsum[:-1] < total_neighbors
-                if valid_offset_mask.any():
-                    valid_cumsum_indices = cumsum[:-1][valid_offset_mask]
-                    valid_lengths = lengths[:-1][valid_offset_mask]
-                    offsets[valid_cumsum_indices] = valid_lengths
-            col_positions = torch.arange(total_neighbors, device=self._device) - torch.cumsum(offsets, dim=0)
+        # 4. Generate the column positions (0 to degree-1) for each node
+        #    flat_idx = [0, 1, 2]
+        #    col_pos = flat_idx - start_offsets = [0-0, 1-0, 2-2] = [0, 1, 0]
+        flat_idx = torch.arange(total_neighbors, device=self._device)
+        col_positions = flat_idx - start_offsets_flat
 
-            flat_starts = torch.repeat_interleave(starts, lengths_int)
-            flat_indices = flat_starts + col_positions
+        # 5. Gather actual neighbor indices from CSR col_indices
+        #    Calculate flat indices into self._col_indices
+        #    flat_starts = [start_0, start_0, start_1]
+        flat_starts = torch.repeat_interleave(starts, lengths_int)
+        flat_indices = flat_starts + col_positions
 
-            max_col_idx = self._col_indices.shape[0] - 1
-            flat_indices = torch.clamp(flat_indices, 0, max_col_idx)
+        # Safety clamp for indices (shouldn't be necessary if logic is correct, but defensive)
+        max_col_idx = self._col_indices.shape[0] - 1
+        flat_indices = torch.clamp(flat_indices, 0, max_col_idx)
 
-            flat_neighbors = self._col_indices[flat_indices]
+        flat_neighbors = self._col_indices[flat_indices]
 
-            col_positions = torch.clamp(col_positions, 0, batch_max_degree - 1)
-
-            neighbors[row_indices, col_positions] = flat_neighbors
-            mask[row_indices, col_positions] = True
+        # 6. Scatter back into the dense batch tensor
+        neighbors[row_indices, col_positions] = flat_neighbors
+        mask[row_indices, col_positions] = True
 
         return neighbors, mask
 

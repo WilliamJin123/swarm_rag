@@ -14,6 +14,11 @@ Also provides tiered context builders for the three-tier architecture:
 """
 from typing import Any, Dict, TypedDict, Optional, List
 import logging
+
+from ...evolution.llm.strategic_oracle import StrategicContext
+from ...evolution.llm.tactical_advisor import TacticalContext
+from ...evolution.llm.intents import StrategicDirective
+
 from ..types.genome import Genome, SwarmParams
 from .parsers import ExpressionParser
 

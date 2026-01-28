@@ -1,6 +1,7 @@
 
 from typing import Callable, ClassVar, Dict, List, Union
 import random
+import math
 import torch
 
 from ..types.config import EvolutionContext
@@ -87,6 +88,7 @@ class GeneticRegistry:
             **cls.mutation.all(),
             **cls.creation.all(),
         }
+
 class GeneticStrategies:
     """
     Standard library of genetic operators.
@@ -267,6 +269,8 @@ class GeneticStrategies:
         - Adapt T based on population diversity:
             * Low diversity -> Increase T (Heat up to explore)
             * High diversity -> Decrease T (Cool down to exploit)
+        
+        Optimized to use torch.softmax and float32 for faster computation.
         """
         boltzmann_cfg = ctx.config.genetic.boltzmann
 
@@ -274,20 +278,19 @@ class GeneticStrategies:
         if ctx.generation == 0 and ctx.current_temperature == 1.0:
             ctx.current_temperature = boltzmann_cfg.temperature
 
-        # Prepare Scores
-        # Use quality_score which is the aggregated fitness
-        scores = torch.as_tensor([g.fitness.quality_score for g in ctx.population])
+        # Prepare Scores as float32 tensor for speed (sufficient precision)
+        scores = torch.tensor([g.fitness.quality_score for g in ctx.population], dtype=torch.float32)
 
-        # Numerical Stability: subtract max to avoid overflow in exp
         # T controls the "pressure".
         # T -> inf: Uniform random
         # T -> 0: Deterministic max
         T = ctx.current_temperature
         T = max(1e-4, T)
 
-        # Exp scaled by T
-        exp_values = torch.exp((scores - torch.max(scores)) / T)
-        probs = exp_values / torch.sum(exp_values)
+        # Use torch.softmax for numerical stability and vectorization
+        # softmax(x) = exp(x - max(x)) / sum(exp(x - max(x)))
+        # Here we want exp(scores / T) / sum(exp(scores / T))
+        probs = torch.softmax(scores / T, dim=0)
 
         # Select
         selection_indices = torch.multinomial(probs, num_samples=k, replacement=True)
@@ -295,27 +298,31 @@ class GeneticStrategies:
 
         # Update Temperature (Adaptive)
         if boltzmann_cfg.adaptive:
-            mean_score = torch.mean(scores).item()
-            if len(scores) > 1 and mean_score > 1e-6:
-                diversity_cv = torch.std(scores).item() / mean_score
+            mean_score = scores.mean().item()
+            # Calculate Coefficient of Variation (CV) = std / mean
+            # Using tensor operations for speed
+            if mean_score > 1e-6:
+                diversity_cv = (scores.std() / mean_score).item()
             else:
                 diversity_cv = 0.0
+
             cooling_factor = boltzmann_cfg.alpha
             heating_factor = 1.0 / cooling_factor
 
             min_T = boltzmann_cfg.min_temp
             max_T = boltzmann_cfg.max_temp
-            # Use a relative threshold for diversity
             diversity_threshold = boltzmann_cfg.diversity_threshold
+
             # Heuristic: If relative diversity is low, we are stagnating -> Heat up
             if diversity_cv < diversity_threshold:
-                ctx.current_temperature = ctx.current_temperature * heating_factor
+                ctx.current_temperature *= heating_factor
             else:
                 # Otherwise -> Cool down (Annealing)
-                ctx.current_temperature = ctx.current_temperature * cooling_factor
+                ctx.current_temperature *= cooling_factor
 
-            # Clamp temperature within bounds
-            ctx.current_temperature = float(torch.clamp(torch.tensor(ctx.current_temperature), min_T, max_T).item())
+            # Clamp temperature within bounds using standard python math for scalar clamping
+            # (faster than wrapping in tensor for a single scalar value)
+            ctx.current_temperature = max(min_T, min(max_T, ctx.current_temperature))
 
         return selected
 
@@ -812,7 +819,9 @@ class GeneticStrategies:
     @GeneticRegistry.register_mutation(GeneticKey.EXPRESSION_TREE_MUTATION)
     def expression_tree_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
         tau = 0.2
-        genome.mutation_rate = genome.mutation_rate * torch.exp(torch.tensor(tau * torch.randn(1).item())).item()
+        # Optimized: Use python math/random for scalar operations instead of torch to avoid kernel launch overhead
+        log_mutation_factor = tau * random.gauss(0, 1)
+        genome.mutation_rate *= math.exp(log_mutation_factor)
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
@@ -931,7 +940,8 @@ class GeneticStrategies:
         - pheromone_repulsion
         """
         tau = 0.2
-        genome.mutation_rate = genome.mutation_rate * torch.exp(torch.tensor(tau * torch.randn(1).item())).item()
+        # Optimized: Use python math/random for scalar operations instead of torch
+        genome.mutation_rate *= math.exp(tau * random.gauss(0, 1))
         genome.mutation_rate = max(0.01, min(0.5, genome.mutation_rate))
         rate = genome.mutation_rate * ctx.global_mutation_multiplier
 
@@ -1085,4 +1095,3 @@ class GeneticStrategies:
 
         genome.clear_cache()
         return genome
-

@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List, Optional, Union, Callable, Literal
 import torch
 import math
@@ -13,16 +14,15 @@ def _dot_product(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return torch.matmul(a, b)
 
 
-
 class HeuristicRegistry:
     """
     Public API that mirrors the original three-registry design but re-uses
     the generic implementation from '_BaseRegistry'.
     """
-    # expose the three concrete registries as class attributes
+    # Expose the three concrete registries as class attributes
     movement = _MovementRegistry
-    ranking  = _RankingRegistry
-    deposit  = _DepositRegistry
+    ranking = _RankingRegistry
+    deposit = _DepositRegistry
 
     _REGISTRY_MAP = {
         "movement": _MovementRegistry,
@@ -40,17 +40,14 @@ class HeuristicRegistry:
 
     @classmethod
     def register_movement(cls, name: "HeuristicKey"):
-        """Decorator (or direct call) for a movement heuristic."""
         return cls.movement.register(name)
 
     @classmethod
     def register_ranking(cls, name: "HeuristicKey"):
-        """Decorator (or direct call) for a ranking heuristic."""
         return cls.ranking.register(name)
 
     @classmethod
     def register_deposit(cls, name: "HeuristicKey"):
-        """Decorator (or direct call) for a deposit heuristic."""
         return cls.deposit.register(name)
 
     @classmethod
@@ -67,7 +64,6 @@ class HeuristicRegistry:
 
     @classmethod
     def get_by_type(cls, strategy_type: Literal["movement", "ranking", "deposit"], name: Union["HeuristicKey", str]) -> Callable:
-        """Type-specific lookup."""
         registry = cls._REGISTRY_MAP.get(strategy_type)
         if not registry:
             raise ValueError(f"Unknown strategy type: {strategy_type}")
@@ -75,16 +71,11 @@ class HeuristicRegistry:
 
     @classmethod
     def get(cls, name: Union["HeuristicKey", str]) -> Callable:
-        """
-        Search all registries (movement, ranking, deposit) for name and
-        return the first matching heuristic.
-        """
         for registry in cls._REGISTRY_MAP.values():
             try:
                 return registry.get(name)
             except KeyError:
                 continue
-        
         raise KeyError(f"Heuristic '{name}' is not registered "
                        f"in movement, ranking, or deposit registries.")
 
@@ -102,7 +93,6 @@ class HeuristicRegistry:
 
     @classmethod
     def all(cls):
-        """Merge the three dictionaries into one view."""
         res = {}
         for registry in cls._REGISTRY_MAP.values():
             res.update(registry.all())
@@ -112,12 +102,11 @@ class HeuristicRegistry:
 class HeuristicContext:
     """
     A shared dataclass to hold context for heuristic functions.
-
     All tensor fields are PyTorch tensors for GPU acceleration.
     """
     query_vec: torch.Tensor  # Shape: (D,)
     target_vecs: Optional[torch.Tensor] = None
-    target_ids: Optional[torch.Tensor] = None  # Always tensor for batched operations
+    target_ids: Optional[torch.Tensor] = None
 
     pheromone_values: torch.Tensor = field(default_factory=lambda: torch.empty(0))
     node_degrees: torch.Tensor = field(default_factory=lambda: torch.empty(0))
@@ -127,7 +116,7 @@ class HeuristicContext:
     avg_degree: float = 1.0
     step_index: int = 0
     agent_index: int = 0
-    votes: Optional[torch.Tensor] = None  # Tensor for batched ranking (visit counts)
+    votes: Optional[torch.Tensor] = None
     total_agents: int = 0
 
     extra_data: Dict[str, Any] = field(default_factory=dict)
@@ -135,23 +124,26 @@ class HeuristicContext:
     @property
     def is_gpu(self) -> bool:
         """Check if context is using GPU tensors."""
+        # .is_cuda is efficient and doesn't trigger synchronization for checks
         if isinstance(self.target_vecs, torch.Tensor):
             return self.target_vecs.is_cuda
         return False
 
     @property
-    def device(self) -> str:
-        """Get the device of the tensors."""
+    def device(self) -> torch.device:
+        """
+        Get the device of the tensors.
+        Returns torch.device object for direct use in tensor creation, avoiding string parsing.
+        """
         if isinstance(self.target_vecs, torch.Tensor):
-            return str(self.target_vecs.device)
-        return "cpu"
+            return self.target_vecs.device
+        return torch.device("cpu")
 
 class Heuristics:
     """
     A library of preset heuristics.
-    Each function takes a `HeuristicContext` object and returns a float score, normalized to [0,1].
-
-    All heuristics use PyTorch tensors for GPU acceleration.
+    Each function takes a `HeuristicContext` object and returns a float score/tensor.
+    Optimized to avoid memory allocations and run efficiently on GPU/CPU.
     """
 
     # --- MOVEMENT HEURISTICS ---
@@ -161,33 +153,28 @@ class Heuristics:
     def semantic_similarity(ctx: HeuristicContext) -> torch.Tensor:
         """
         NORMALIZED Cosine Similarity: Maps [-1, 1] to [0, 1].
-        - 0.0 = completely opposite direction (cosine = -1)
-        - 0.5 = orthogonal/unrelated (cosine = 0)
-        - 1.0 = perfect match (cosine = 1)
+        Uses broadcasting for scalar addition/multiplication.
         """
         scores = _dot_product(ctx.target_vecs, ctx.query_vec)
-        # Normalize from [-1, 1] to [0, 1]
-        return (scores + 1.0) / 2.0
+        # Broadcasting: (1.0) is implicitly handled by PyTorch
+        return (scores + 1.0) * 0.5
 
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.SEMANTIC_SIMILARITY_UNNORMALIZED)
     def semantic_similarity_unnormalized(ctx: HeuristicContext) -> torch.Tensor:
-        """
-        RAW Cosine Similarity in [-1, 1] for ranking where negative scores are meaningful.
-        """
+        """RAW Cosine Similarity in [-1, 1]."""
         return _dot_product(ctx.target_vecs, ctx.query_vec)
 
     @staticmethod
     @HeuristicRegistry.register_movement(HeuristicKey.NODE_CENTRALITY)
     def node_centrality(ctx: HeuristicContext) -> torch.Tensor:
         """
-        Normalized centrality that works with any GraphStore.
-        Requires ctx.graph.degree and ctx.graph.avg_degree
-
-        Range: [0, 1] (sigmoid normalization)
+        Normalized centrality.
+        Range: [0, 1]
         """
-        log_degree = torch.log(1 + ctx.node_degrees.float())
-        log_avg = math.log(1 + ctx.avg_degree)
+        # Ensure float calculation to avoid integer division truncation
+        log_degree = torch.log(1.0 + ctx.node_degrees.float())
+        log_avg = math.log(1.0 + ctx.avg_degree)
         return log_degree / (log_degree + log_avg + 1e-8)
 
     @staticmethod
@@ -195,9 +182,9 @@ class Heuristics:
     def pheromone_repulsion(ctx: HeuristicContext) -> torch.Tensor:
         """
         Inverse Pheromone frequency.
-        Returns 1.0 if no one has been there, approaches 0.0 as traffic increases.
         """
-        max_p = max(ctx.max_pheromone, 0.0001)
+        max_p = max(ctx.max_pheromone, 1e-4)
+        # Scalar division is broadcasted
         return 1.0 - (ctx.pheromone_values / max_p)
 
     @staticmethod
@@ -205,31 +192,41 @@ class Heuristics:
     def random_jitter(ctx: HeuristicContext) -> torch.Tensor:
         """
         Adds pure chaos to break loops.
+        Uses the context device directly to ensure GPU compatibility without device transfers.
         """
-        # Use target_vecs shape instead of target_ids length (tensor-native)
-        count = ctx.target_vecs.shape[0] if ctx.target_vecs is not None else 1
-        device = ctx.target_vecs.device if isinstance(ctx.target_vecs, torch.Tensor) else "cpu"
-        return torch.rand(count, device=device)
+        # Determine batch size. If target_vecs is None, assume scalar or single element.
+        if ctx.target_vecs is not None:
+            count = ctx.target_vecs.shape[0]
+        elif ctx.target_ids is not None:
+            count = ctx.target_ids.shape[0]
+        else:
+            count = 1
+            
+        return torch.rand(count, device=ctx.device)
 
-    # --- RANKING HEURISTICS (Final Consensus) ---
+    # --- RANKING HEURISTICS ---
 
     @staticmethod
     @HeuristicRegistry.register_ranking(HeuristicKey.PERCENTAGE_VISITED)
     def percentage_visited(ctx: HeuristicContext) -> torch.Tensor:
-        """Percentage of total agents that visited this node. Returns tensor for batched ranking."""
+        """
+        Percentage of total agents that visited this node.
+        OPTIMIZATION: Returns a zero-tensor matching shape if agents is 0, 
+        preventing shape mismatch errors during aggregation.
+        """
         if ctx.total_agents == 0:
             if ctx.votes is not None:
+                # Returns zeros of same shape/device as votes, explicitly float
                 return torch.zeros_like(ctx.votes, dtype=torch.float32)
+            # Fallback for scalar case
             return torch.tensor(0.0)
+        
         return ctx.votes.float() / ctx.total_agents
 
     @staticmethod
     @HeuristicRegistry.register_ranking(HeuristicKey.SEMANTIC_RANK)
     def semantic_rank(ctx: HeuristicContext) -> torch.Tensor:
-        """
-        RAW semantic similarity for final ranking. Returns tensor for batched operations.
-        Uses full [-1, 1] range since we want to distinguish good from bad.
-        """
+        """RAW semantic similarity for final ranking."""
         return Heuristics.semantic_similarity_unnormalized(ctx)
 
     # --- DEPOSIT HEURISTICS ---
@@ -238,6 +235,7 @@ class Heuristics:
     @HeuristicRegistry.register_deposit(HeuristicKey.FLAT)
     def deposit_flat(ctx: HeuristicContext) -> torch.Tensor:
         """Returns tensor of 1.0s matching input size."""
+        # ones_like preserves shape and device
         return torch.ones_like(ctx.pheromone_values)
 
     @staticmethod
@@ -251,9 +249,10 @@ class Heuristics:
     def deposit_semantic(ctx: HeuristicContext) -> torch.Tensor:
         """
         Semantic-weighted deposit using NORMALIZED similarity.
-        Only deposits on positive matches (similarity > 0.5 in normalized space) with range 0-1.
+        Only deposits on positive matches (similarity > 0.5 in normalized space).
         """
         normalized_sim = Heuristics.semantic_similarity(ctx)
+        # Broadcasting 0.5 and 2.0
         return torch.where(normalized_sim > 0.5, (normalized_sim - 0.5) * 2.0,
                            torch.zeros_like(normalized_sim))
 
@@ -261,12 +260,10 @@ class Heuristics:
     @HeuristicRegistry.register_deposit(HeuristicKey.SEMANTIC_UNNORMALIZED)
     def deposit_semantic_unnormalized(ctx: HeuristicContext) -> torch.Tensor:
         """
-        Alternative: Uses unnormalized similarity and clamps to [0, 1].
-        Deposits on any positive match.
-
-        Range: [0, 1]
+        Uses unnormalized similarity and clamps to [0, 1].
         """
         sim = Heuristics.semantic_similarity_unnormalized(ctx)
+        # Optimized clamp using float scalar
         return torch.clamp(sim, min=0.0)
 
     @staticmethod
@@ -279,18 +276,16 @@ class Heuristics:
     ) -> torch.Tensor:
         """
         Encourages visiting new nodes (Exploration).
-
-        Args:
-            base_deposit: Base amount to deposit
-            fresh_multiplier: Multiplier for completely unvisited nodes (default 2.0)
-            high_traffic_multiplier: Multiplier for maximally visited nodes (default 0.5)
-
-        Range: [base_deposit * high_traffic_multiplier, base_deposit * fresh_multiplier]
+        Uses pure Python math for scalars, broadcasting for tensors.
         """
-        max_p = max(ctx.max_pheromone, 0.0001)
+        max_p = max(ctx.max_pheromone, 1e-4)
         traffic_ratio = ctx.pheromone_values / max_p
         traffic_ratio = torch.clamp(traffic_ratio, 0.0, 1.0)
-        multiplier = fresh_multiplier - (fresh_multiplier - high_traffic_multiplier) * traffic_ratio
+        
+        # Scalar arithmetic outside of tensor ops where possible
+        delta_multiplier = fresh_multiplier - high_traffic_multiplier
+        multiplier = fresh_multiplier - (delta_multiplier * traffic_ratio)
+        
         return base_deposit * multiplier
 
     @staticmethod
@@ -303,8 +298,8 @@ class Heuristics:
     ) -> torch.Tensor:
         """
         The more pheromone already present, the larger the new deposit (Exploitation).
-        This creates a "rich get richer" effect.
         """
         multiplier = 1.0 + (amplification_factor * ctx.pheromone_values)
-        return base_deposit * torch.minimum(multiplier, torch.tensor(max_multiplier, device=multiplier.device))
-    
+        # Optimized: Broadcasts max_multiplier float directly, no tensor creation
+        clamped_multiplier = torch.clamp(multiplier, max=max_multiplier)
+        return base_deposit * clamped_multiplier
