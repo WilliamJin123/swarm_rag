@@ -1922,6 +1922,80 @@ class SwarmRetriever:
 
         return all_neighbors, neighbor_mask
 
+    def _compute_similarities_multi_query(
+        self,
+        query_vecs: torch.Tensor,       # (batch_size, dim)
+        all_neighbors: torch.Tensor,    # (batch_size, n_agents, max_degree)
+        neighbor_mask: torch.Tensor,    # (batch_size, n_agents, max_degree)
+    ) -> torch.Tensor:
+        """
+        Compute query-neighbor similarities for all queries simultaneously.
+
+        Returns:
+            similarities: (batch_size, n_agents, max_degree) similarity scores
+        """
+        batch_size, n_agents, max_degree = all_neighbors.shape
+        device = query_vecs.device
+
+        # Initialize output
+        similarities = torch.full(
+            (batch_size, n_agents, max_degree), 0.0,
+            device=device, dtype=torch.float32
+        )
+
+        # Get unique neighbor IDs across all queries
+        valid_neighbors = all_neighbors[neighbor_mask]
+        if valid_neighbors.numel() == 0:
+            return similarities
+
+        unique_ids = torch.unique(valid_neighbors[valid_neighbors >= 0])
+        if unique_ids.numel() == 0:
+            return similarities
+
+        # Fetch embeddings for unique IDs
+        valid_embs, valid_ids = self._fetch_embeddings(unique_ids)
+
+        if valid_ids.numel() == 0:
+            return similarities
+
+        # Normalize query vectors and embeddings
+        query_vecs_norm = torch.nn.functional.normalize(query_vecs, p=2, dim=1)
+        valid_embs_norm = torch.nn.functional.normalize(valid_embs, p=2, dim=1)
+
+        # Compute all query-embedding similarities: (batch_size, n_unique)
+        all_sims = torch.mm(query_vecs_norm, valid_embs_norm.t())
+
+        # Build ID-to-index mapping
+        max_id = self._max_node_id + 1
+        id_to_idx = torch.full((max_id,), -1, device=device, dtype=torch.long)
+        id_to_idx[valid_ids] = torch.arange(valid_ids.numel(), device=device)
+
+        # Map neighbor IDs to embedding indices
+        clamped_neighbors = all_neighbors.clamp(0, max_id - 1)
+        emb_indices = id_to_idx[clamped_neighbors]  # (batch, agents, degree)
+
+        # Scatter similarities into output
+        # For each (q, a, n), if emb_indices[q,a,n] >= 0:
+        #   similarities[q,a,n] = all_sims[q, emb_indices[q,a,n]]
+        valid_emb_mask = (emb_indices >= 0) & neighbor_mask
+
+        # Use advanced indexing: need batch indices for all_sims
+        batch_idx = torch.arange(batch_size, device=device)[:, None, None].expand_as(emb_indices)
+
+        # Gather similarities
+        # all_sims is (batch, n_unique), we need sims for each (batch, agent, degree)
+        flat_emb_idx = emb_indices[valid_emb_mask]
+        flat_batch_idx = batch_idx[valid_emb_mask]
+        gathered_sims = all_sims[flat_batch_idx, flat_emb_idx]
+
+        similarities[valid_emb_mask] = gathered_sims
+
+        # Scale to [0, 1]
+        similarities = (similarities + 1.0) / 2.0
+        similarities = torch.where(neighbor_mask, similarities, torch.zeros_like(similarities))
+
+        return similarities
+
     def _retrieve_with_pool_internal(
         self,
         query_vec: torch.Tensor,

@@ -123,3 +123,20 @@ class TestMultiQueryBatching:
         assert all_neighbors.shape[0] == batch_size
         assert all_neighbors.shape[1] == n_agents
         assert neighbor_mask.shape == all_neighbors.shape
+
+    def test_batched_similarity_computation(self, mock_retriever):
+        """Verify batched similarity returns correct shapes."""
+        batch_size = 4
+        n_agents = 5
+        max_degree = 10
+        dim = 64
+
+        query_vecs = torch.randn(batch_size, dim, device=mock_retriever._device)
+        all_neighbors = torch.randint(0, 100, (batch_size, n_agents, max_degree), device=mock_retriever._device)
+        neighbor_mask = torch.ones_like(all_neighbors, dtype=torch.bool)
+
+        sims = mock_retriever._compute_similarities_multi_query(
+            query_vecs, all_neighbors, neighbor_mask
+        )
+
+        assert sims.shape == (batch_size, n_agents, max_degree)
