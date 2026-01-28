@@ -59,10 +59,6 @@ class QueryEmbeddingCache:
         batch_embedding_fn: Callable[[List[str]], torch.Tensor] = None,
         device: str = None,
         batch_size: int = 32,
-        # Deprecated parameters for backward compatibility
-        use_gpu: bool = None,
-        store_on_gpu: bool = None,
-        storage_device: str = None,
     ):
         """
         Initialize embedding cache.
@@ -70,40 +66,24 @@ class QueryEmbeddingCache:
         Args:
             embedding_fn: Function to embed a single query
             batch_embedding_fn: Optional function to embed multiple queries at once
-            device: Device for storing embeddings ("cuda" or "cpu", auto-detected if None)
+            device: Device for storing embeddings ("cuda", "mps", or "cpu", auto-detected if None)
             batch_size: Batch size for GPU embedding
-            use_gpu: Deprecated - use device parameter
-            store_on_gpu: Deprecated - use device parameter
-            storage_device: Deprecated - use device parameter
         """
         self.embedding_fn = embedding_fn
         self.batch_embedding_fn = batch_embedding_fn
         self.batch_size = batch_size
 
-        # Resolve device - prioritize new 'device' parameter, fall back to legacy
+        # Resolve device
         if device is not None:
             self._device = device
-        elif storage_device is not None and storage_device != "auto":
-            # Legacy storage_device parameter
-            self._device = storage_device if storage_device != "numpy" else "cpu"
-        elif store_on_gpu is True:
-            # Legacy store_on_gpu parameter
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        elif use_gpu is False:
-            self._device = "cpu"
         else:
-            # Auto-detect
             self._device = get_device()
 
         # Validate device
         if self._device == "cuda" and not torch.cuda.is_available():
-            logger.warning("CUDA requested but not available, falling back to CPU")
-            self._device = "cpu"
-
-        # Legacy compatibility aliases
-        self._storage_device = self._device
-        self.store_on_gpu = self._device == "cuda"
-        self.use_gpu = self._device == "cuda"
+            raise RuntimeError("CUDA requested but not available")
+        if self._device == "mps" and not (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()):
+            raise RuntimeError("MPS requested but not available")
 
         self._cache: Dict[str, Any] = {}  # Stores torch.Tensor
         self._embedding_dim: Optional[int] = None
@@ -278,7 +258,7 @@ class QueryEmbeddingCache:
         emb = self.get(query)
         if emb is None:
             return None
-        if self._device == "cuda":
+        if self._device != "cpu":
             return emb.cpu()
         return emb
 
@@ -370,8 +350,8 @@ class QueryEmbeddingCache:
         Returns:
             torch.Tensor of shape (len(queries), embedding_dim)
         """
-        # If storing on GPU and requesting tensor, stack directly on GPU
-        if self.store_on_gpu and as_tensor:
+        # If storing on accelerated device and requesting tensor, stack directly on device
+        if self._device != "cpu" and as_tensor:
             gpu_embeddings = []
             for q in queries:
                 emb = self._cache.get(q)
@@ -379,11 +359,11 @@ class QueryEmbeddingCache:
                     if isinstance(emb, torch.Tensor):
                         gpu_embeddings.append(emb)
                     else:
-                        gpu_embeddings.append(torch.as_tensor(emb, device="cuda", dtype=torch.float32))
+                        gpu_embeddings.append(torch.as_tensor(emb, device=self._device, dtype=torch.float32))
                 else:
                     # Return zero vector for missing
                     if self._embedding_dim:
-                        gpu_embeddings.append(torch.zeros(self._embedding_dim, device="cuda", dtype=torch.float32))
+                        gpu_embeddings.append(torch.zeros(self._embedding_dim, device=self._device, dtype=torch.float32))
                     else:
                         raise ValueError(f"Cannot get embedding for '{q}' and dimension unknown")
             return torch.stack(gpu_embeddings)

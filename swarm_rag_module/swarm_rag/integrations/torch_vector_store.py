@@ -63,7 +63,8 @@ class TorchVectorStore(VectorStore):
         embeddings: torch.Tensor,
         ids: torch.Tensor,
         device: Optional[TorchDeviceStr] = None,
-        normalize: bool = True
+        normalize: bool = True,
+        dense: bool = False
     ):
         """
         Initialize vector store with pre-loaded embeddings.
@@ -73,12 +74,14 @@ class TorchVectorStore(VectorStore):
             ids: Tensor of shape (N,) containing document IDs. Must be a torch.Tensor.
             device: Target device ("cuda" or "cpu"), auto-detected if None
             normalize: Whether to L2-normalize embeddings for cosine similarity
+            dense: If True, use dense O(1) indexing (trades memory for speed)
         """
         if not isinstance(ids, torch.Tensor):
             raise TypeError(f"ids must be a torch.Tensor, got {type(ids)}")
 
         self._device = device if device is not None else get_device()
         self._dtype = torch.float32
+        self._dense = dense
 
         # Ensure embeddings are 2D float32
         if embeddings.dim() == 1:
@@ -95,30 +98,55 @@ class TorchVectorStore(VectorStore):
                 f"Mismatch in length: embeddings ({len(embeddings)}) vs ids ({len(ids)})"
             )
 
-        # Sort embeddings by IDs to enable efficient searchsorted lookups
-        sorted_indices = torch.argsort(ids)
-        self._ids = ids[sorted_indices].to(device=self._device)
-        self._embeddings = embeddings[sorted_indices].to(device=self._device)
+        self.n_docs = len(ids)
+        self.dim = embeddings.shape[1]
 
         # Normalize for cosine similarity
         if normalize:
-            self._embeddings = torch.nn.functional.normalize(
-                self._embeddings, p=2, dim=1
+            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+
+        if dense:
+            # Dense mode: embeddings[node_id] gives embedding directly (O(1) lookup)
+            max_id = int(ids.max().item()) + 1
+            self._dense_embeddings = torch.zeros(
+                (max_id, self.dim), dtype=self._dtype, device=self._device
             )
+            self._valid_mask = torch.zeros(max_id, dtype=torch.bool, device=self._device)
 
-        self.n_docs = len(self._ids)
-        self.dim = self._embeddings.shape[1]
+            # Scatter embeddings into dense tensor
+            ids_device = ids.to(device=self._device)
+            self._dense_embeddings[ids_device] = embeddings.to(device=self._device)
+            self._valid_mask[ids_device] = True
 
-        logger.debug(
-            f"TorchVectorStore initialized: {self.n_docs} docs, dim={self.dim}, "
-            f"device={self._device}"
-        )
+            # For search(), we still need the sparse representation
+            sorted_indices = torch.argsort(ids)
+            self._ids = ids[sorted_indices].to(device=self._device)
+            self._embeddings = embeddings[sorted_indices].to(device=self._device)
+
+            dense_mb = max_id * self.dim * 4 / 1024 / 1024
+            logger.info(
+                f"TorchVectorStore (DENSE): {self.n_docs} docs, dim={self.dim}, "
+                f"max_id={max_id}, memory={dense_mb:.0f}MB, device={self._device}"
+            )
+        else:
+            # Sparse mode: searchsorted lookup (O(log N))
+            sorted_indices = torch.argsort(ids)
+            self._ids = ids[sorted_indices].to(device=self._device)
+            self._embeddings = embeddings[sorted_indices].to(device=self._device)
+            self._dense_embeddings = None
+            self._valid_mask = None
+
+            logger.debug(
+                f"TorchVectorStore (sparse): {self.n_docs} docs, dim={self.dim}, "
+                f"device={self._device}"
+            )
 
     @classmethod
     def from_dict(
         cls,
         doc_embs: Dict[int, Union[list, torch.Tensor]],
-        device: Optional[TorchDeviceStr] = None
+        device: Optional[TorchDeviceStr] = None,
+        dense: bool = False
     ) -> "TorchVectorStore":
         """
         Create TorchVectorStore from a dictionary of embeddings.
@@ -126,6 +154,7 @@ class TorchVectorStore(VectorStore):
         Args:
             doc_embs: Dictionary mapping doc_id -> embedding vector
             device: Target device
+            dense: If True, use dense storage for O(1) lookup (trades memory for speed)
 
         Returns:
             TorchVectorStore instance
@@ -137,7 +166,7 @@ class TorchVectorStore(VectorStore):
 
         # Sort keys for deterministic ordering
         sorted_ids = sorted(doc_embs.keys())
-        
+
         # Convert IDs to tensor immediately as per strict requirements
         ids = torch.tensor(sorted_ids, dtype=torch.long)
 
@@ -152,7 +181,7 @@ class TorchVectorStore(VectorStore):
                 vec = vec.detach().cpu()
             else:
                 vec = torch.as_tensor(vec)
-            
+
             # Ensure 1D vector
             if vec.dim() > 1:
                 vec = vec.squeeze()
@@ -160,7 +189,7 @@ class TorchVectorStore(VectorStore):
 
         embeddings = torch.stack(emb_list)
 
-        return cls(embeddings=embeddings, ids=ids, device=device)
+        return cls(embeddings=embeddings, ids=ids, device=device, dense=dense)
 
     def search(
         self,
@@ -243,7 +272,10 @@ class TorchVectorStore(VectorStore):
 
     def fetch_batch(self, node_ids: Union[List[int], torch.Tensor]) -> Tuple[Matrix, torch.Tensor]:
         """
-        Fetch embeddings for multiple documents using binary search.
+        Fetch embeddings for multiple documents.
+
+        Uses O(1) direct indexing if dense mode is enabled,
+        otherwise falls back to O(log N) binary search.
 
         Args:
             node_ids: List or tensor of node IDs
@@ -261,26 +293,110 @@ class TorchVectorStore(VectorStore):
             node_ids = node_ids.to(device=self._device, dtype=torch.long)
 
         n = len(node_ids)
+        if n == 0:
+            return torch.empty((0, self.dim), device=self._device), torch.zeros(0, dtype=torch.bool, device=self._device)
+
+        # Dense mode: O(1) direct indexing
+        if self._dense and self._dense_embeddings is not None:
+            max_id = self._dense_embeddings.shape[0]
+            # Clamp IDs to valid range
+            clamped_ids = node_ids.clamp(0, max_id - 1)
+            # Direct index lookup
+            result = self._dense_embeddings[clamped_ids]
+            # Check validity: in range AND has embedding
+            in_range = (node_ids >= 0) & (node_ids < max_id)
+            valid_mask = in_range & self._valid_mask[clamped_ids]
+            # Set invalid entries to NaN
+            result = torch.where(valid_mask.unsqueeze(1), result, torch.full_like(result, float('nan')))
+            return result, valid_mask
+
+        # Sparse mode: O(log N) binary search
         result = torch.full((n, self.dim), float('nan'), dtype=self._dtype, device=self._device)
         valid_mask = torch.zeros(n, dtype=torch.bool, device=self._device)
 
-        if n == 0:
-            return result, valid_mask
-
         # Find insertion points
         indices = torch.searchsorted(self._ids, node_ids)
-        
+
         # Clamp indices to be safe for indexing (handle IDs > max_id)
         clamped_indices = torch.clamp(indices, 0, self.n_docs - 1)
-        
+
         # Check if the ID at the found index actually matches the query ID
         found_ids = self._ids[clamped_indices]
         valid_mask = (found_ids == node_ids)
-        
+
         if valid_mask.any():
             result[valid_mask] = self._embeddings[clamped_indices[valid_mask]]
 
         return result, valid_mask
+
+    def compute_neighbor_similarities(
+        self,
+        query_vec: torch.Tensor,
+        neighbor_ids: torch.Tensor,
+        neighbor_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute similarities for all neighbors in one fused operation.
+
+        FAST PATH: Skips unique→fetch→scatter pipeline by directly indexing
+        dense embeddings and computing similarities in-place.
+
+        Args:
+            query_vec: Query embedding (D,) or (1, D)
+            neighbor_ids: Neighbor IDs tensor (n_agents, max_degree)
+            neighbor_mask: Valid neighbor mask (n_agents, max_degree)
+
+        Returns:
+            Similarities tensor (n_agents, max_degree), -inf for invalid neighbors
+        """
+        if not self._dense or self._dense_embeddings is None:
+            # Fall back to None to signal caller should use old path
+            return None
+
+        n_agents, max_degree = neighbor_ids.shape
+        device = self._device
+
+        # Initialize similarities to -inf (invalid)
+        similarities = torch.full(
+            (n_agents, max_degree), -float('inf'),
+            device=device, dtype=torch.float32
+        )
+
+        if not neighbor_mask.any():
+            return similarities
+
+        # Prepare query vector
+        query = query_vec.to(device=device, dtype=torch.float32)
+        if query.dim() == 1:
+            query = query.unsqueeze(0)
+        query = torch.nn.functional.normalize(query, p=2, dim=1)  # (1, D)
+
+        # Get valid neighbor IDs
+        valid_ids = neighbor_ids[neighbor_mask]  # (N_valid,)
+
+        # Clamp to valid embedding range
+        max_id = self._dense_embeddings.shape[0]
+        clamped_ids = valid_ids.clamp(0, max_id - 1)
+
+        # Direct dense lookup - O(1) per ID, no unique needed!
+        valid_embs = self._dense_embeddings[clamped_ids]  # (N_valid, D)
+
+        # Check which embeddings are actually valid
+        in_range = (valid_ids >= 0) & (valid_ids < max_id)
+        has_emb = self._valid_mask[clamped_ids]
+        emb_valid = in_range & has_emb
+
+        # Compute similarities for valid embeddings
+        # (N_valid, D) @ (D, 1) -> (N_valid, 1) -> (N_valid,)
+        valid_sims = torch.mm(valid_embs, query.t()).squeeze(1)
+
+        # Zero out invalid embeddings
+        valid_sims = torch.where(emb_valid, valid_sims, torch.full_like(valid_sims, -float('inf')))
+
+        # Scatter back to 2D tensor
+        similarities[neighbor_mask] = valid_sims
+
+        return similarities
 
     def search_tensor_result(
         self,
@@ -333,8 +449,8 @@ class TorchVectorStore(VectorStore):
 
     @property
     def is_gpu(self) -> bool:
-        """Check if using GPU."""
-        return self._device == "cuda"
+        """Check if using GPU (cuda or mps)."""
+        return self._device != "cpu"
 
     @property
     def embeddings(self) -> torch.Tensor:
@@ -357,7 +473,13 @@ class TorchVectorStore(VectorStore):
         if hasattr(self, '_ids') and self._ids is not None:
             del self._ids
             self._ids = None
-            
+        if hasattr(self, '_dense_embeddings') and self._dense_embeddings is not None:
+            del self._dense_embeddings
+            self._dense_embeddings = None
+        if hasattr(self, '_valid_mask') and self._valid_mask is not None:
+            del self._valid_mask
+            self._valid_mask = None
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         logger.debug("TorchVectorStore resources released")

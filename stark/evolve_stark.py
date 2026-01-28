@@ -15,6 +15,9 @@ import os
 import random
 import sys
 
+from dotenv import load_dotenv
+load_dotenv(override=True)  
+
 from swarm_rag.core import SwarmRetriever
 from swarm_rag.evolution.engine import EvolutionEngine
 from swarm_rag.evolution.execution.fitness import create_fitness_calculator
@@ -84,7 +87,7 @@ def run_evolution(args):
         base_dir=os.path.join(BASE_DIR, "runs"),
         dataset=args.dataset,
         run_id=args.run_id,
-        use_gpu="auto",
+        device=args.device,
         checkpoint_frequency=25 if args.mode == "weighted_sum" else 20,
         validation_frequency=10,
     )
@@ -110,12 +113,18 @@ def run_evolution(args):
     adj_dict = precompute_stark_adjacency(skb, args.dataset)
     query_embs, doc_embs = load_and_download_embeddings(args.dataset)
 
-    # Initialize components
-    vector_store = StarkVectorStore(doc_embs)  # use_gpu=True by default
+    # Resolve device once and pass to all components
+    from swarm_rag.utils.device import resolve_device
+    resolved_device = resolve_device(args.device)
+    print(f"Using device: {resolved_device}")
+
+    # Initialize components with resolved device
+    vector_store = StarkVectorStore(doc_embs, device=resolved_device)
     graph_store = StarkGraphAdapter(
         skb, args.dataset,
         adjacency_dict=adj_dict,
-        cache_path=os.path.join(BASE_DIR, "adjacency_cache", f"graph_{args.dataset}.npz")
+        cache_path=os.path.join(BASE_DIR, "adjacency_cache", f"graph_{args.dataset}.npz"),
+        device=resolved_device,
     )
     embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
 
@@ -125,7 +134,7 @@ def run_evolution(args):
         embedding_provider=embedding_provider,
         cache_neighbors=False,
         cache_vectors=True,
-        use_gpu=True,
+        device=resolved_device,
     )
 
     # Prepare queries
@@ -245,6 +254,9 @@ if __name__ == "__main__":
     parser.add_argument("--run-id", help="Custom run ID (auto-generated if not provided)")
     parser.add_argument("--resume", help="Path to run directory to resume")
     parser.add_argument("--list-runs", action="store_true", help="List existing runs and exit")
+    parser.add_argument("--device", default="auto",
+                        choices=["auto", "cuda", "mps", "cpu"],
+                        help="Device: auto (detect best), cuda, mps, or cpu")
 
     args = parser.parse_args()
 

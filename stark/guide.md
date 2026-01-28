@@ -479,7 +479,7 @@ StorageConfig(
     base_dir="runs",
     dataset="prime",
     run_id=None,                # Auto-generated if None
-    use_gpu="auto",             # "auto", "always", "never"
+    device="auto",              # "auto", "cuda", "mps", "cpu"
     checkpoint_frequency=5,
     validation_frequency=5,
     keep_n_checkpoints=10,      # 0 = keep all
@@ -584,7 +584,7 @@ The fitness function uses equal weights for key retrieval metrics:
 - Reduce sample sizes for faster iterations
 
 ### Slow Progress
-- Ensure GPU is enabled (`use_gpu: "auto"` or `"always"`)
+- Ensure GPU is enabled (`device: "auto"` or `"cuda"`)
 - Increase `concurrent_evals` if memory allows
 - Reduce sample sizes for faster iterations
 

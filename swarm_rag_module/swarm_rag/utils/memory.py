@@ -175,7 +175,7 @@ class MemoryProfiler:
             track_gpu: Whether to track GPU memory
         """
         self.track_cpu = track_cpu and _PSUTIL_AVAILABLE
-        self.track_gpu = track_gpu and get_device() == "cuda"
+        self.track_gpu = track_gpu and get_device() != "cpu"
 
         self.snapshots: List[MemorySnapshot] = []
         self.deltas: List[MemoryDelta] = []
@@ -343,7 +343,7 @@ def get_gpu_memory_info() -> Dict[str, float]:
     Returns:
         Dictionary with memory stats in MB
     """
-    if get_device() != "cuda":
+    if get_device() == "cpu":
         return {}
 
     try:
@@ -360,7 +360,7 @@ def get_gpu_memory_info() -> Dict[str, float]:
 
 def clear_gpu_cache():
     """Clear GPU memory cache."""
-    if get_device() == "cuda":
+    if get_device() != "cpu":
         torch.cuda.empty_cache()
         gc.collect()
 

@@ -369,14 +369,14 @@ class PopulationEvaluator:
 
         # Check if we can use the optimized GPU path with precomputed GT
         use_gpu_optimized = (
-            self.device == "cuda" and
+            self.device != "cpu" and
             self.enable_adaptive and
             shared_context.ground_truth_tensor is not None and
             shared_context.gt_sizes is not None
         )
 
         # GPU mode: sequential evaluation
-        if self.device == "cuda":
+        if self.device != "cpu":
             for genome in batch:
                 if use_gpu_optimized:
                     # Use optimized path with single checkpoint
@@ -595,7 +595,7 @@ class PopulationEvaluator:
 
         # Prepare flattened tensor for batch computation directly on target device
         max_k = 20  # Standard max k for metrics
-        target_device = self.device if self.device == "cuda" else "cpu"
+        target_device = self.device
         retrieved_ids, genome_query_indices = batched_results.prepare_for_batch_metrics(
             max_k, device=target_device
         )
@@ -618,7 +618,7 @@ class PopulationEvaluator:
         )
 
         # Compute metrics in batch (retrieved_ids already on target device)
-        if self.device == "cuda":
+        if self.device != "cpu":
             try:
                 if has_precomputed_gt:
                     # Use fastest path with precomputed GPU tensors
@@ -768,8 +768,8 @@ class PopulationEvaluator:
         total_queries_used = 0
         completed_count = 0
 
-        # GPU mode: sequential evaluation (CUDA context is thread-local)
-        if self.device == "cuda":
+        # GPU mode: sequential evaluation (GPU context is thread-local)
+        if self.device != "cpu":
             for genome in batch:
                 queries_used, exit_tier = self._evaluate_single(genome, queries, ground_truth)
                 total_queries_used += queries_used
@@ -1010,7 +1010,7 @@ class PopulationEvaluator:
             return {}
 
         # Extract IDs as tensor on target device, padding with -1 for missing values
-        target_device = self.device if self.device == "cuda" else "cpu"
+        target_device = self.device
         retrieved_ids = torch.full(
             (n_queries, max_retrieved), -1, dtype=torch.long, device=target_device
         )
@@ -1033,8 +1033,8 @@ class PopulationEvaluator:
             except (ValueError, TypeError):
                 gt_sets.append(set(str(g) for g in gt))
 
-        # Use GPU-accelerated batch metric computation if on CUDA
-        if self.device == "cuda":
+        # Use GPU-accelerated batch metric computation if on accelerated device
+        if self.device != "cpu":
             try:
                 metrics = MetricFunctions.compute_all_metrics_batch_gpu(
                     retrieved_ids,

@@ -452,7 +452,7 @@ class StorageConfig:
     base_dir: str = "runs"
     dataset: str = "prime"
     run_id: Optional[str] = None  # Auto-generated if None
-    use_gpu: str = "auto"  # "auto", "always", "never"
+    device: str = "auto"  # "auto", "cuda", "mps", "cpu"
 
     checkpoint_frequency: int = 5
     validation_frequency: int = 5
@@ -625,15 +625,10 @@ class EvolutionContext:
         Get resolved device string from storage config.
 
         Returns:
-            Device string: "cuda" or "cpu"
+            Device string: "cuda", "mps", or "cpu"
         """
-        from ...utils.device import get_device
-        use_gpu = self.config.storage.use_gpu
-        if use_gpu == "never":
-            return "cpu"
-        elif use_gpu == "always":
-            return "cuda"
-        return get_device()  # auto-detect
+        from ...utils.device import resolve_device
+        return resolve_device(self.config.storage.device)
 
 
 # =============================================================================

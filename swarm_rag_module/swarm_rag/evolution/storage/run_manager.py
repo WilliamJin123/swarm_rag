@@ -192,8 +192,8 @@ class RunManager:
 
         # Auto-detect device if not specified
         if device is None:
-            from ...utils.device import get_device
-            device_str = get_device(force_cpu=(config.use_gpu == "never"))
+            from ...utils.device import resolve_device
+            device_str = resolve_device(config.device)
             self.device = torch.device(device_str)
         else:
             self.device = device

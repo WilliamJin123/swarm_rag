@@ -349,8 +349,8 @@ class TorchGraphStore(GraphStore):
 
     @property
     def is_gpu(self) -> bool:
-        """Check if using GPU."""
-        return self._device == "cuda"
+        """Check if using GPU (cuda or mps)."""
+        return self._device != "cpu"
 
     def to(self, device: Optional[TorchDeviceStr]) -> "TorchGraphStore":
         """Move store to different device. Deprecated: set device at construction."""

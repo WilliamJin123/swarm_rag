@@ -100,7 +100,7 @@ class Benchmarker:
 
     def _sync_if_needed(self, device: str):
         """Synchronize CUDA if needed for accurate timing."""
-        if self.sync_cuda and device == "cuda":
+        if self.sync_cuda and device != "cpu":
             torch.cuda.synchronize()
 
     def run(
@@ -355,7 +355,7 @@ def run_all_benchmarks(
     verbose: bool = True
 ) -> Dict[str, Union[ComparisonResult, List[ComparisonResult]]]:
     device = get_device()
-    if device != "cuda":
+    if device == "cpu":
         logger.warning("GPU not available, skipping GPU benchmarks")
         return {}
 

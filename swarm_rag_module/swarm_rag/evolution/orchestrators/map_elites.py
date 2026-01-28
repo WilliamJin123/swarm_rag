@@ -6,6 +6,7 @@ Enhanced with three-tier LLM-guided evolution:
 - Strategic Oracle integration for periodic steering
 - Mutation outcome tracking for learning loops
 """
+import os
 from typing import List, Optional, Any
 
 from tqdm.auto import tqdm
@@ -20,6 +21,7 @@ from ..execution.factory import GenomeFactory
 from ..execution.evaluator import PopulationEvaluator
 from ..execution.tracker import ProgressTracker
 from ..execution.fitness_strategies import FitnessStrategy
+from ..execution.profiler import GenerationProfiler
 from ..llm.evolution_journal import EvolutionJournal
 
 
@@ -88,6 +90,9 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         # Attach journal to context for access by mutation strategies
         self.context.evolution_journal = self.evolution_journal
 
+        # Initialize generation profiler (enable with EVOLUTION_PROFILE=1)
+        self._profiler = GenerationProfiler.from_env()
+
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
         """
         Run MAP-Elites optimization.
@@ -136,53 +141,62 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         for gen in pbar:
             # Set generation (single source of truth)
             self.context.generation = gen
+            self._profiler.start_generation(gen)
 
             # STRATEGIC ORACLE: Update directive if needed
-            self.me_loop.update_strategic_directive(self.archive)
+            with self._profiler.section("strategic_oracle"):
+                self.me_loop.update_strategic_directive(self.archive)
 
             # BREED: Generate offspring from archive
-            offspring = self.me_loop.step(self.archive)
+            with self._profiler.section("breeding"):
+                offspring = self.me_loop.step(self.archive)
 
             if not offspring:
                 self.logger.warning("Archive empty or no offspring produced. Stopping.")
                 break
 
             # EVALUATE offspring
-            self.evaluator.evaluate(offspring)
-            self.fitness_strategy.assign_fitness(offspring, generation=gen)
+            with self._profiler.section("evaluation"):
+                self.evaluator.evaluate(offspring)
+
+            with self._profiler.section("fitness_assign"):
+                self.fitness_strategy.assign_fitness(offspring, generation=gen)
 
             # ARCHIVE INSERTION + JOURNAL OUTCOME TRACKING
-            added_count = 0
-            for child in offspring:
-                added = self.archive.add(child)
-                if added:
-                    added_count += 1
+            with self._profiler.section("archive_insert"):
+                added_count = 0
+                for child in offspring:
+                    added = self.archive.add(child)
+                    if added:
+                        added_count += 1
 
-                # Update mutation record in journal with outcome
-                mutation_record = getattr(child, '_mutation_record', None)
-                if mutation_record is not None:
-                    self.evolution_journal.update_outcome(
-                        record=mutation_record,
-                        fitness_after=child.fitness.quality_score,
-                        added_to_archive=added,
-                        replaced_existing=added,  # If added, it replaced or filled
-                    )
+                    # Update mutation record in journal with outcome
+                    mutation_record = getattr(child, '_mutation_record', None)
+                    if mutation_record is not None:
+                        self.evolution_journal.update_outcome(
+                            record=mutation_record,
+                            fitness_after=child.fitness.quality_score,
+                            added_to_archive=added,
+                            replaced_existing=added,  # If added, it replaced or filled
+                        )
 
-                if best_genome is None or child.fitness > best_genome.fitness:
-                    best_genome = child.copy()
-                    self.logger.info(
-                        f"Gen {gen}: New Global Best! {best_genome.fitness.quality_score:.4f}"
-                    )
+                    if best_genome is None or child.fitness > best_genome.fitness:
+                        best_genome = child.copy()
+                        self.logger.info(
+                            f"Gen {gen}: New Global Best! {best_genome.fitness.quality_score:.4f}"
+                        )
 
             # STATS & LOGGING
-            stats = self.archive.stats()
+            with self._profiler.section("stats"):
+                stats = self.archive.stats()
 
             # FINALIZE JOURNAL GENERATION
-            self.evolution_journal.finalize_generation(
-                generation=gen,
-                qd_score=stats["qd_score"],
-                coverage=stats["coverage"],
-            )
+            with self._profiler.section("journal"):
+                self.evolution_journal.finalize_generation(
+                    generation=gen,
+                    qd_score=stats["qd_score"],
+                    coverage=stats["coverage"],
+                )
 
             pbar.set_postfix(
                 {
@@ -203,28 +217,42 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             }
 
             # VALIDATION (periodically)
-            val_stats = None
-            if best_genome:
-                val_stats = self.run_validation(best_genome, gen)
-                if val_stats:
-                    self.logger.info(
-                        f"--> Validation Gen {gen}: Recall {val_stats.get('recall', 0):.4f}"
-                    )
+            with self._profiler.section("validation"):
+                val_stats = None
+                if best_genome:
+                    val_stats = self.run_validation(best_genome, gen)
+                    if val_stats:
+                        self.logger.info(
+                            f"--> Validation Gen {gen}: Recall {val_stats.get('recall', 0):.4f}"
+                        )
 
             self.tracker.log(gen, log_stats, val_stats)
 
             # CHECKPOINTING
-            ckpt_freq = self.evo_config.storage.checkpoint_frequency
-            if gen % ckpt_freq == 0:
-                self.save_checkpoint(
-                    population=self.archive.as_population(),
-                    best_genome=best_genome,
-                    generation=gen,
-                    extra_state=self._serialize_archive_state(),
-                )
+            with self._profiler.section("checkpoint"):
+                ckpt_freq = self.evo_config.storage.checkpoint_frequency
+                if gen % ckpt_freq == 0:
+                    self.save_checkpoint(
+                        population=self.archive.as_population(),
+                        best_genome=best_genome,
+                        generation=gen,
+                        extra_state=self._serialize_archive_state(),
+                    )
+
+            # Live profiler output
+            if self._profiler.enabled:
+                self.logger.info(f"Gen {gen}: {self._profiler.end_generation()}")
 
         # Cleanup
         pbar.close()
+
+        # Print profiler summary and save data
+        if self._profiler.enabled:
+            self.logger.info(self._profiler.summary())
+            profiler_path = os.path.join(self._run_manager.config.log_dir, "profiler_data.json")
+            self._profiler.save(profiler_path)
+            self.logger.info(f"Profiler data saved to {profiler_path}")
+
         self.cleanup_logging()
         self.save_checkpoint(
             population=self.archive.as_population(),

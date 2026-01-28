@@ -140,8 +140,8 @@ class EvolutionEngine:
         llm_enabled = mutation_strategy == GeneticKey.LLM_MUTATION or self.evo_config.llm.enabled
 
         # Get device from storage config
-        from ..utils.device import get_device_from_mode
-        device = get_device_from_mode(self.evo_config.storage.use_gpu)
+        from ..utils.device import resolve_device
+        device = resolve_device(self.evo_config.storage.device)
 
         # Initialize population evaluator with decision tracking if LLM enabled
         self.population_evaluator = PopulationEvaluator(

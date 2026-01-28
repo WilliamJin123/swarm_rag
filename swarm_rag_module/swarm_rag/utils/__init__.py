@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 from .device import (
     get_device, ensure_tensor,
     clear_device_cache, get_gpu_memory_info,
-    get_device_from_mode, to_device,
+    resolve_device, is_accelerated_device, to_device,
     smart_convert, move_to_device, tensor_like,
     is_tensor, supports_gpu
 )
@@ -112,7 +112,8 @@ __all__ = [
     'ensure_tensor',
     'clear_device_cache',
     'get_gpu_memory_info',
-    'get_device_from_mode',
+    'resolve_device',
+    'is_accelerated_device',
     'to_device',
     'smart_convert',
     'move_to_device',

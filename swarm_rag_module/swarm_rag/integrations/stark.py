@@ -177,12 +177,14 @@ class StarkVectorStore(VectorStore):
         store = StarkVectorStore(doc_embs)  # Auto-detect device
         store = StarkVectorStore(doc_embs, device="cuda")  # Force GPU
         store = StarkVectorStore(doc_embs, device="cpu")  # Force CPU
+        store = StarkVectorStore(doc_embs, dense=True)  # O(1) lookup (more memory)
     """
 
     def __init__(
         self,
         doc_embs: Dict[int, torch.Tensor],
-        device: Optional[TorchDeviceStr] = None
+        device: Optional[TorchDeviceStr] = None,
+        dense: bool = False
     ):
         """
         Initialize vector store.
@@ -190,9 +192,10 @@ class StarkVectorStore(VectorStore):
         Args:
             doc_embs: Dictionary mapping doc_id -> embedding tensor
             device: Target device ("cuda" or "cpu"), auto-detected if None
+            dense: If True, use dense O(1) lookup (trades ~4GB memory for speed)
         """
         self._device = device or get_device()
-        self._store = TorchVectorStore.from_dict(doc_embs, device=self._device)
+        self._store = TorchVectorStore.from_dict(doc_embs, device=self._device, dense=dense)
 
     # Delegate all VectorStore methods to underlying TorchVectorStore
     def search(self, query_vec: torch.Tensor, limit: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -213,6 +216,17 @@ class StarkVectorStore(VectorStore):
         candidate_ids: Union[List[int], torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return self._store.compute_similarities(query_vec, candidate_ids)
+
+    def compute_neighbor_similarities(
+        self,
+        query_vec: torch.Tensor,
+        neighbor_ids: torch.Tensor,
+        neighbor_mask: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        """Fused neighbor similarity computation - returns None if not supported."""
+        if hasattr(self._store, 'compute_neighbor_similarities'):
+            return self._store.compute_neighbor_similarities(query_vec, neighbor_ids, neighbor_mask)
+        return None
 
     @property
     def n_docs(self) -> int:

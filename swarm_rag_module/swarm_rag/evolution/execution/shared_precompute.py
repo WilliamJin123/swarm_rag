@@ -153,7 +153,7 @@ def prepare_shared_context(
     ground_truth_tensor = None
     gt_sizes = None
 
-    if device == "cuda" and all_ints and gt_int_lists:
+    if device != "cpu" and all_ints and gt_int_lists:
         logger.debug("  > Building GPU ground truth tensor...")
         max_gt_size = max(len(gt) for gt in gt_int_lists) if gt_int_lists else 0
         if max_gt_size > 0:

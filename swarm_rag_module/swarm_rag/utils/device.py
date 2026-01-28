@@ -23,12 +23,13 @@ def get_device(force_cpu: bool = False) -> str:
         - "auto" (default): Auto-detect GPU availability
         - "cpu": Force CPU mode
         - "cuda": Force CUDA (will fail if unavailable)
+        - "mps": Force MPS (will fail if unavailable)
 
     Args:
         force_cpu: If True, always return "cpu" regardless of env/GPU availability
 
     Returns:
-        Device string: "cuda" or "cpu"
+        Device string: "cuda", "mps", or "cpu"
     """
     if force_cpu:
         logger.debug("Device: CPU (forced)")
@@ -49,13 +50,25 @@ def get_device(force_cpu: bool = False) -> str:
         else:
             raise RuntimeError("CUDA requested but not available")
 
-    # Auto-detect mode
+    if env_device == "mps":
+        # User explicitly requested MPS - let it fail if unavailable
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            logger.info("Device: MPS (Apple Silicon)")
+            return "mps"
+        else:
+            raise RuntimeError("MPS requested but not available")
+
+    # Auto-detect mode: CUDA > MPS > CPU
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0)
         logger.info(f"Device: CUDA auto-detected ({device_name})")
         return "cuda"
 
-    logger.debug("Device: CPU (CUDA not available)")
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        logger.info("Device: MPS auto-detected (Apple Silicon)")
+        return "mps"
+
+    logger.debug("Device: CPU (no GPU available)")
     return "cpu"
 
 
@@ -101,9 +114,11 @@ def get_gpu_memory_info() -> dict:
     """
     Get GPU memory information if available.
 
+    Note: Only works for CUDA devices. MPS has a different memory API.
+
     Returns:
         Dictionary with 'allocated', 'cached', 'total' in bytes,
-        or empty dict if GPU not available.
+        or empty dict if CUDA not available.
     """
     if get_device() != "cuda":
         return {}
@@ -118,28 +133,36 @@ def get_gpu_memory_info() -> dict:
         return {}
 
 
-def get_device_from_mode(use_gpu: str = "auto") -> torch.device:
+def resolve_device(device: str = "auto") -> str:
     """
-    Get device based on mode string.
+    Resolve device string to actual device.
 
     Args:
-        use_gpu: GPU mode - "auto" (detect), "always" (require GPU), "never" (CPU only)
+        device: Device specification - "auto", "cuda", "mps", or "cpu"
 
     Returns:
-        torch.device for the selected device
+        Resolved device string: "cuda", "mps", or "cpu"
 
     Raises:
-        RuntimeError: If use_gpu="always" but CUDA is not available
+        RuntimeError: If requested device is not available
     """
-    if use_gpu == "never":
-        return torch.device("cpu")
-    elif use_gpu == "always":
+    if device == "cpu":
+        return "cpu"
+    elif device == "cuda":
         if not torch.cuda.is_available():
-            raise RuntimeError("GPU requested (use_gpu='always') but CUDA is not available")
-        return torch.device("cuda")
+            raise RuntimeError("CUDA requested but not available")
+        return "cuda"
+    elif device == "mps":
+        if not (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()):
+            raise RuntimeError("MPS requested but not available")
+        return "mps"
     else:  # auto
-        device_str = get_device()
-        return torch.device(device_str)
+        return get_device()
+
+
+def is_accelerated_device(device: str) -> bool:
+    """Check if device is GPU-accelerated (cuda or mps)."""
+    return device in ("cuda", "mps")
 
 
 def to_device(data: Any, device: torch.device) -> Any:
@@ -271,9 +294,9 @@ def supports_gpu(min_docs: int = 1000) -> bool:
         min_docs: Minimum dataset size to justify GPU overhead
 
     Returns:
-        True if GPU is available and dataset is large enough
+        True if GPU is available (cuda or mps)
     """
-    return get_device() == "cuda"
+    return get_device() in ("cuda", "mps")
 
 
 __all__ = [
@@ -281,7 +304,8 @@ __all__ = [
     'ensure_tensor',
     'clear_device_cache',
     'get_gpu_memory_info',
-    'get_device_from_mode',
+    'resolve_device',
+    'is_accelerated_device',
     'to_device',
     'smart_convert',
     'move_to_device',
