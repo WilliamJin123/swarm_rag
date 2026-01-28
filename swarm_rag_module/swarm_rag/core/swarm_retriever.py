@@ -1807,7 +1807,7 @@ class SwarmRetriever:
         **kwargs
     ) -> List[List[Dict]]:
         """
-        Process multiple queries simultaneously on GPU.
+        Process multiple queries simultaneously on GPU with chunking.
 
         Batches queries in chunks of `batch_size` to manage memory.
         Each chunk runs the full swarm traversal with batched tensor ops.
@@ -1823,10 +1823,82 @@ class SwarmRetriever:
         Returns:
             List of result lists, one per query
         """
-        # Stub: fall back to sequential for now
-        return self._retrieve_batch_precomputed_sequential(
-            query_embeddings, initial_pools, resolved_agents, base_seed, **kwargs
-        )
+        n_queries = len(query_embeddings)
+        n_agents = len(resolved_agents)
+        steps = kwargs.get('steps', self._DEFAULT_PARAMS['steps'])
+        decay = kwargs.get('decay', self._DEFAULT_PARAMS['decay'])
+        drop_zone_inc = kwargs.get('drop_zone_inc', self._DEFAULT_PARAMS['drop_zone_inc'])
+        start_subset = kwargs.get('start_subset', self._DEFAULT_PARAMS['start_subset'])
+        top_k = kwargs.get('top_k', self._DEFAULT_PARAMS['top_k'])
+        ranking_strategies = kwargs.get('ranking_strategies', self._DEFAULT_PARAMS['ranking_strategies'])
+
+        ranking_func = self._compose_strategy(ranking_strategies, "ranking")
+
+        all_results = []
+        gid = kwargs.get('genome_id', '')
+
+        for start in range(0, n_queries, batch_size):
+            end = min(start + batch_size, n_queries)
+            actual_batch = end - start
+
+            batch_embeddings = query_embeddings[start:end]
+            batch_pools = initial_pools[start:end]
+
+            # Truncate pools to start_subset
+            batch_pools = [p[:start_subset] if len(p) > start_subset else p for p in batch_pools]
+
+            # Initialize state
+            agent_locs, pheromones, history = self._init_multi_query_state(
+                batch_size=actual_batch,
+                n_agents=n_agents,
+                n_nodes=self._pheromone_buffer_size,
+                steps=steps,
+                initial_pools=batch_pools,
+                drop_zone_inc=drop_zone_inc,
+                seed=base_seed + start,
+            )
+
+            # Normalize query vectors
+            batch_embeddings = torch.nn.functional.normalize(batch_embeddings, p=2, dim=1)
+
+            # Traversal loop
+            for step in range(steps):
+                max_pheromone = torch.clamp(pheromones.max(), min=1.0)
+
+                new_locs, deposit_locs = self._step_multi_query(
+                    agent_locations=agent_locs,
+                    query_vecs=batch_embeddings,
+                    query_pheromones=pheromones,
+                    step=step,
+                    max_pheromone=max_pheromone.item(),
+                )
+
+                # Update positions
+                history[:, :, step + 1] = new_locs
+                agent_locs = new_locs
+
+                # Decay and deposit pheromones
+                pheromones *= decay
+                if deposit_locs is not None:
+                    pheromones = self._deposit_pheromones_multi_query(
+                        pheromones, deposit_locs, deposit_amount=1.0
+                    )
+
+            # Rank results for each query in batch
+            for q in range(actual_batch):
+                query_results = self._ranking_from_history(
+                    history[q],  # (n_agents, steps+1)
+                    batch_embeddings[q],
+                    ranking_func,
+                    top_k,
+                    n_agents,
+                )
+                all_results.append(query_results)
+
+            if gid:
+                logger.info(f"    [Retriever] [{gid}] Multi-Query Batch: {end}/{n_queries}")
+
+        return all_results
 
     def _init_multi_query_state(
         self,

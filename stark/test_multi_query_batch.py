@@ -204,3 +204,37 @@ class TestMultiQueryBatching:
         assert new_locs.shape == (batch_size, n_agents)
         # Agents should have moved (mostly)
         assert not torch.equal(new_locs, agent_locs)
+
+    def test_full_multi_query_traversal(self, mock_retriever):
+        """Test complete multi-query batched traversal."""
+        n_queries = 8
+        query_embeddings = torch.randn(n_queries, 64, device=mock_retriever._device)
+        initial_pools = [[i % 100, (i+1) % 100, (i+2) % 100, (i+3) % 100, (i+4) % 100]
+                         for i in range(n_queries)]
+
+        resolved_agents = mock_retriever._prepare_agents(
+            agent_groups=None,
+            n_agents=5,
+            movement_strategies=mock_retriever._DEFAULT_PARAMS['movement_strategies'],
+            deposit_strategies=mock_retriever._DEFAULT_PARAMS['deposit_strategies'],
+        )
+
+        # This should now use the real batched implementation
+        results = mock_retriever._retrieve_batch_multi_query_gpu(
+            query_embeddings=query_embeddings,
+            initial_pools=initial_pools,
+            resolved_agents=resolved_agents,
+            base_seed=42,
+            batch_size=4,  # Process in 2 batches
+            steps=3,
+            decay=0.9,
+            drop_zone_inc=0.05,
+            start_subset=5,
+            top_k=5,
+            ranking_strategies=mock_retriever._DEFAULT_PARAMS['ranking_strategies'],
+        )
+
+        assert len(results) == n_queries
+        for r in results:
+            assert isinstance(r, list)
+            assert len(r) <= 5  # top_k
