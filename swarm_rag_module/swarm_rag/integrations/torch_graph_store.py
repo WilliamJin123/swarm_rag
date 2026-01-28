@@ -65,7 +65,7 @@ class TorchGraphStore(GraphStore):
             device: Target device ("cuda" or "cpu")
         """
         self._device = device or get_device()
-        self.n_nodes = n_nodes
+        self._n_nodes = n_nodes
         self._avg_degree = avg_degree
 
         # Store CSR components on device
@@ -191,7 +191,7 @@ class TorchGraphStore(GraphStore):
 
     def get_neighbors(self, node_id: int) -> torch.Tensor:
         """Get neighbors for a single node. Returns tensor on device."""
-        if node_id < 0 or node_id >= self.n_nodes:
+        if node_id < 0 or node_id >= self._n_nodes:
             return torch.tensor([], dtype=torch.long, device=self._device)
 
         start = self._crow_indices[node_id].item()
@@ -228,9 +228,9 @@ class TorchGraphStore(GraphStore):
                 torch.empty((0, 0), device=self._device, dtype=torch.bool)
             )
 
-        valid_mask = (ids >= 0) & (ids < self.n_nodes)
+        valid_mask = (ids >= 0) & (ids < self._n_nodes)
         # Clamp IDs to prevent index errors during lookup, zeroed out later via mask
-        clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
+        clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
 
         # Get start/end indices and lengths for all nodes in batch
         starts = self._crow_indices[clamped_ids]
@@ -315,8 +315,8 @@ class TorchGraphStore(GraphStore):
         """Batch degree lookup for multiple nodes."""
         ids = node_ids.to(device=self._device, dtype=torch.long)
 
-        valid_mask = (ids >= 0) & (ids < self.n_nodes)
-        clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
+        valid_mask = (ids >= 0) & (ids < self._n_nodes)
+        clamped_ids = torch.clamp(ids, 0, self._n_nodes - 1)
 
         degrees = self._degrees[clamped_ids]
         degrees = torch.where(valid_mask, degrees, torch.zeros_like(degrees))
@@ -325,13 +325,13 @@ class TorchGraphStore(GraphStore):
 
     def get_degree(self, node_id: int) -> int:
         """Get degree for a single node."""
-        if node_id < 0 or node_id >= self.n_nodes:
+        if node_id < 0 or node_id >= self._n_nodes:
             return 0
         return int(self._degrees[node_id].item())
 
     def contains(self, node_id: int) -> bool:
         """Check if node exists in graph."""
-        return 0 <= node_id < self.n_nodes
+        return 0 <= node_id < self._n_nodes
 
     def get_avg_degree(self) -> float:
         """Return average graph degree."""
@@ -351,6 +351,10 @@ class TorchGraphStore(GraphStore):
     def is_gpu(self) -> bool:
         """Check if using GPU (cuda or mps)."""
         return self._device != "cpu"
+
+    @property
+    def n_nodes(self) -> int:
+        return self._n_nodes
 
     def to(self, device: Optional[TorchDeviceStr]) -> "TorchGraphStore":
         """Move store to different device. Deprecated: set device at construction."""

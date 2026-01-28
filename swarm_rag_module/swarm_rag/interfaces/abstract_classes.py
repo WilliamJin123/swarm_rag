@@ -142,7 +142,9 @@ class GraphStore(ABC):
         """Batch degree lookup for multiple nodes. Returns tensor of degrees on device."""
         pass
 
-
+    @property
+    def n_nodes(self) -> int:
+        pass
 
 class EmbeddingProvider(ABC):
     """Abstract contract for Embedding Models (Cohere, OpenAI, Pre-computed Lookups)"""
