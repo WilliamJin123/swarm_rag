@@ -1,3 +1,4 @@
+
 """
 SwarmRAG evaluation on STaRK datasets.
 
@@ -112,6 +113,7 @@ def main():
     torch.manual_seed(args.seed)
 
     # Resolve device
+    # Note: We map "gpu" input to "cuda" string for PyTorch compatibility
     if args.device == "gpu":
         base_device = "cuda"
     elif args.device == "cpu":
@@ -152,16 +154,16 @@ def main():
     all_results = {}
 
     for device in devices:
-        use_gpu = (device == "cuda")
-        mode_name = "GPU" if use_gpu else "CPU"
+        mode_name = "GPU" if device == "cuda" else "CPU"
         print(f"\n--- {mode_name} ---")
 
-        vector_store = StarkVectorStore(doc_embs, use_gpu=use_gpu)
+        vector_store = StarkVectorStore(doc_embs, device=device)
+
         graph_store = StarkGraphAdapter(
             skb, args.dataset,
             adjacency_dict=adj_dict,
             cache_path=os.path.join(cache_dir, f"graph_{args.dataset}.npz"),
-            use_gpu=use_gpu
+            device=device
         )
 
         retriever = SwarmRetriever(
@@ -169,11 +171,11 @@ def main():
             graph_store=graph_store,
             embedding_provider=embedding_provider,
             cache_neighbors=False,
-            use_gpu=use_gpu,
+            device=device
         )
         print(f"  device={retriever.device}")
 
-        if use_gpu:
+        if device == "cuda":
             print("  warmup...")
             _ = retriever.retrieve(query=qa_data[0][1], **CONFIG)
 

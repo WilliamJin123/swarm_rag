@@ -32,5 +32,5 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         )
 
         # The result.embeddings is a list of dicts with 'values'
-        embeddings = [torch.tensor(emb['values'], dtype=torch.float32) for emb in result['embeddings']]
+        embeddings = [torch.as_tensor(emb['values'], dtype=torch.float32) for emb in result['embeddings']]
         return embeddings

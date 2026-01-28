@@ -276,7 +276,7 @@ class GeneticStrategies:
 
         # Prepare Scores
         # Use quality_score which is the aggregated fitness
-        scores = torch.tensor([g.fitness.quality_score for g in ctx.population])
+        scores = torch.as_tensor([g.fitness.quality_score for g in ctx.population])
 
         # Numerical Stability: subtract max to avoid overflow in exp
         # T controls the "pressure".

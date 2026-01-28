@@ -81,7 +81,7 @@ def ensure_tensor(
     if isinstance(data, torch.Tensor):
         tensor = data
     else:
-        tensor = torch.tensor(data)
+        tensor = torch.as_tensor(data)
 
     if dtype is not None:
         tensor = tensor.to(dtype=dtype)
@@ -199,7 +199,7 @@ def smart_convert(
             return data  # No move needed
         return data.to(target_device)
 
-    return torch.tensor(data, device=target_device)
+    return torch.as_tensor(data, device=target_device)
 
 
 def move_to_device(
@@ -226,7 +226,7 @@ def move_to_device(
             return data
         return data.to(target_device)
 
-    return torch.tensor(data, device=target_device)
+    return torch.as_tensor(data, device=target_device)
 
 
 def tensor_like(
@@ -255,7 +255,7 @@ def tensor_like(
     if isinstance(data, torch.Tensor):
         return data.to(device=reference.device, dtype=reference.dtype)
 
-    return torch.tensor(data, device=reference.device, dtype=reference.dtype)
+    return torch.as_tensor(data, device=reference.device, dtype=reference.dtype)
 
 
 def is_tensor(data: Any) -> bool:

@@ -13,7 +13,10 @@ from typing import Dict, List, Optional, Tuple, Union, Sequence
 import torch
 import scipy.sparse as sp
 
+
 from ..interfaces.abstract_classes import GraphStore
+from ..interfaces.shared_types import TorchDeviceStr
+
 from ..utils.device import get_device
 
 import logging
@@ -37,7 +40,7 @@ class TorchGraphStore(GraphStore):
         store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cuda")
         store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cpu")
         store = TorchGraphStore.from_csr(csr_matrix)
-        neighbors, mask = store.get_neighbors_batch([1, 2, 3])
+        neighbors, mask = store.get_neighbors_batch(torch.tensor([1, 2, 3]))
     """
 
     def __init__(
@@ -47,7 +50,7 @@ class TorchGraphStore(GraphStore):
         degree_tensor: torch.Tensor,
         n_nodes: int,
         avg_degree: float,
-        device: str = None
+        device: Optional[TorchDeviceStr] = None
     ):
         """
         Initialize graph store with CSR components.
@@ -91,7 +94,7 @@ class TorchGraphStore(GraphStore):
     def from_adjacency_dict(
         cls,
         adj_dict: Dict[int, List[int]],
-        device: str = None,
+        device: Optional[TorchDeviceStr] = None,
         avg_degree: float = None
     ) -> "TorchGraphStore":
         """
@@ -107,6 +110,8 @@ class TorchGraphStore(GraphStore):
         """
         if not adj_dict:
             raise ValueError("Cannot create store from empty adjacency dict")
+        
+        target_device = device or get_device()
 
         nodes = sorted(adj_dict.keys())
         n_nodes = max(nodes) + 1 if nodes else 0
@@ -136,19 +141,19 @@ class TorchGraphStore(GraphStore):
             avg_degree = total_edges / non_zero_nodes if non_zero_nodes > 0 else 0.0
 
         return cls(
-            crow_indices=torch.tensor(indptr, dtype=torch.long),
-            col_indices=torch.tensor(indices, dtype=torch.long),
-            degree_tensor=torch.tensor(degrees, dtype=torch.int32),
+            crow_indices=torch.as_tensor(indptr, dtype=torch.long, device=target_device),
+            col_indices=torch.as_tensor(indices, dtype=torch.long, device=target_device),
+            degree_tensor=torch.as_tensor(degrees, dtype=torch.int32, device=target_device),
             n_nodes=n_nodes,
             avg_degree=avg_degree,
-            device=device
+            device=target_device
         )
 
     @classmethod
     def from_csr(
         cls,
         csr_matrix: sp.csr_matrix,
-        device: str = None,
+        device: Optional[TorchDeviceStr] = None,
         avg_degree: float = None
     ) -> "TorchGraphStore":
         """
@@ -162,11 +167,12 @@ class TorchGraphStore(GraphStore):
         Returns:
             TorchGraphStore instance
         """
+
         n_nodes = csr_matrix.shape[0]
         target_device = device or get_device()
 
-        indptr = torch.tensor(csr_matrix.indptr, dtype=torch.long, device=target_device)
-        indices = torch.tensor(csr_matrix.indices, dtype=torch.long, device=target_device)
+        indptr = torch.as_tensor(csr_matrix.indptr, dtype=torch.long, device=target_device)
+        indices = torch.as_tensor(csr_matrix.indices, dtype=torch.long, device=target_device)
         degrees = indptr[1:] - indptr[:-1]
 
         if avg_degree is None:
@@ -197,7 +203,7 @@ class TorchGraphStore(GraphStore):
 
     def get_neighbors_batch(
         self,
-        node_ids: Union[List[int], torch.Tensor]
+        node_ids: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Batch neighbor lookup for multiple nodes.
@@ -212,10 +218,7 @@ class TorchGraphStore(GraphStore):
                 - mask: Boolean tensor of shape (batch_size, batch_max_degree)
                   True where valid neighbors exist
         """
-        if isinstance(node_ids, torch.Tensor):
-            ids = node_ids.to(device=self._device, dtype=torch.long)
-        else:
-            ids = torch.tensor(node_ids, device=self._device, dtype=torch.long)
+        ids = node_ids.to(device=self._device, dtype=torch.long)
 
         batch_size = ids.shape[0]
 
@@ -287,13 +290,10 @@ class TorchGraphStore(GraphStore):
 
     def get_degrees_batch(
         self,
-        node_ids: Union[List[int], torch.Tensor]
+        node_ids: torch.Tensor
     ) -> torch.Tensor:
         """Batch degree lookup for multiple nodes."""
-        if isinstance(node_ids, torch.Tensor):
-            ids = node_ids.to(device=self._device, dtype=torch.long)
-        else:
-            ids = torch.tensor(node_ids, device=self._device, dtype=torch.long)
+        ids = node_ids.to(device=self._device, dtype=torch.long)
 
         valid_mask = (ids >= 0) & (ids < self.n_nodes)
         clamped_ids = torch.clamp(ids, 0, self.n_nodes - 1)
@@ -332,7 +332,7 @@ class TorchGraphStore(GraphStore):
         """Check if using GPU."""
         return self._device == "cuda"
 
-    def to(self, device: str) -> "TorchGraphStore":
+    def to(self, device: Optional[TorchDeviceStr]) -> "TorchGraphStore":
         """Move store to different device. Deprecated: set device at construction."""
         logger.warning("TorchGraphStore.to() is deprecated - set device at construction time")
         self._crow_indices = self._crow_indices.to(device)

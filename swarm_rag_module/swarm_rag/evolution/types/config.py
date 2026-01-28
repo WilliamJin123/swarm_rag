@@ -98,11 +98,11 @@ class WeightTensors:
         from ...utils.device import get_device
         target_device = device if device is not None else get_device()
         return cls(
-            movement_weights=torch.tensor(d["movement_weights"], dtype=torch.float32, device=target_device),
-            movement_biases=torch.tensor(d["movement_biases"], dtype=torch.float32, device=target_device),
-            deposit_weights=torch.tensor(d["deposit_weights"], dtype=torch.float32, device=target_device),
-            deposit_biases=torch.tensor(d["deposit_biases"], dtype=torch.float32, device=target_device),
-            ranking_weights=torch.tensor(d["ranking_weights"], dtype=torch.float32, device=target_device),
+            movement_weights=torch.as_tensor(d["movement_weights"], dtype=torch.float32, device=target_device),
+            movement_biases=torch.as_tensor(d["movement_biases"], dtype=torch.float32, device=target_device),
+            deposit_weights=torch.as_tensor(d["deposit_weights"], dtype=torch.float32, device=target_device),
+            deposit_biases=torch.as_tensor(d["deposit_biases"], dtype=torch.float32, device=target_device),
+            ranking_weights=torch.as_tensor(d["ranking_weights"], dtype=torch.float32, device=target_device),
             ranking_bias=d["ranking_bias"],
         )
 

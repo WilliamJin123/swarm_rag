@@ -711,7 +711,7 @@ class WeightedSumSeeder:
         weights = []
         for name in feature_names:
             weights.append(weights_dict.get(name, 0.0))
-        return torch.tensor(weights, dtype=torch.float32, device=device)
+        return torch.as_tensor(weights, dtype=torch.float32, device=device)
 
     def _deep_merge(self, base: Dict, override: Dict) -> Dict:
         """Deep merge override into base dictionary."""

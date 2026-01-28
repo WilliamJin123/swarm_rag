@@ -27,11 +27,11 @@ Metrics = TypedDict('Metrics', {
 }, total=False)
 
 def iqr(x):
-    t = torch.tensor(x, dtype=torch.float32) if not isinstance(x, torch.Tensor) else x.float()
+    t = torch.as_tensor(x, dtype=torch.float32) if not isinstance(x, torch.Tensor) else x.float()
     return (torch.quantile(t, 0.75) - torch.quantile(t, 0.25)).item()
 
 def rng(x):  # range
-    t = torch.tensor(x, dtype=torch.float32) if not isinstance(x, torch.Tensor) else x.float()
+    t = torch.as_tensor(x, dtype=torch.float32) if not isinstance(x, torch.Tensor) else x.float()
     return (torch.max(t) - torch.min(t)).item()
 
 class Evaluator:

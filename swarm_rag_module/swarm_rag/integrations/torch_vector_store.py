@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Tuple, Union, Sequence, Any
 import torch
 
 from ..utils.device import get_device, ensure_tensor
+
+from ..interfaces.shared_types import TorchDeviceStr
 from ..interfaces.abstract_classes import VectorStore, Matrix
 
 import logging
@@ -34,7 +36,7 @@ class TensorSearchResult:
             for i, s in zip(ids_cpu, scores_cpu)
         ]
 
-    def to_device(self, device: str) -> "TensorSearchResult":
+    def to_device(self, device: Optional[TorchDeviceStr]) -> "TensorSearchResult":
         """Move result to a different device."""
         return TensorSearchResult(
             ids=self.ids.to(device),
@@ -65,7 +67,7 @@ class TorchVectorStore(VectorStore):
         self,
         embeddings: torch.Tensor,
         ids: Union[torch.Tensor, List[int]],
-        device: str = None,
+        device: Optional[TorchDeviceStr] = None,
         normalize: bool = True
     ):
         """
@@ -113,7 +115,7 @@ class TorchVectorStore(VectorStore):
     def from_dict(
         cls,
         doc_embs: Dict[int, Union[list, torch.Tensor]],
-        device: str = None
+        device: Optional[TorchDeviceStr] = None
     ) -> "TorchVectorStore":
         """
         Create TorchVectorStore from a dictionary of embeddings.
@@ -160,27 +162,20 @@ class TorchVectorStore(VectorStore):
 
     def search(
         self,
-        query_vec: Union[list, torch.Tensor],
+        query_vec: torch.Tensor,
         limit: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Find top-k most similar documents to query vector.
 
         Args:
-            query_vec: Query embedding vector
+            query_vec: Query embedding tensor
             limit: Maximum number of results to return
 
         Returns:
             Tuple of (ids_tensor, scores_tensor) on device, sorted by score descending
         """
-        if not isinstance(query_vec, torch.Tensor):
-            query = torch.tensor(
-                query_vec, device=self._device, dtype=self._dtype
-            )
-        else:
-            query = query_vec.to(device=self._device, dtype=self._dtype)
-
-        query = query.view(-1)
+        query = query_vec.to(device=self._device, dtype=self._dtype).view(-1)
         query = torch.nn.functional.normalize(query.unsqueeze(0), p=2, dim=1)
 
         similarities = torch.mm(query, self._embeddings.t()).squeeze(0)
@@ -197,26 +192,20 @@ class TorchVectorStore(VectorStore):
 
     def search_batch(
         self,
-        query_vecs: Union[list, torch.Tensor],
+        query_vecs: torch.Tensor,
         limit: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Batch search for multiple queries simultaneously.
 
         Args:
-            query_vecs: Query vectors of shape (n_queries, dim)
+            query_vecs: Query vectors tensor of shape (n_queries, dim)
             limit: Maximum results per query
 
         Returns:
             Tuple of (ids_tensor, scores_tensor) with shape (n_queries, limit)
         """
-        if not isinstance(query_vecs, torch.Tensor):
-            queries = torch.tensor(
-                query_vecs, device=self._device, dtype=self._dtype
-            )
-        else:
-            queries = query_vecs.to(device=self._device, dtype=self._dtype)
-
+        queries = query_vecs.to(device=self._device, dtype=self._dtype)
         queries = torch.nn.functional.normalize(queries, p=2, dim=1)
         similarities = torch.mm(queries, self._embeddings.t())
 
@@ -239,89 +228,60 @@ class TorchVectorStore(VectorStore):
             return None
         return self._embeddings[idx]
 
-    def fetch_batch(self, node_ids: Union[List[int], torch.Tensor]) -> Matrix:
-        """Fetch embeddings for multiple documents. Returns tensor on device."""
-        # Convert tensor to list if needed for dict lookup
-        if isinstance(node_ids, torch.Tensor):
-            node_ids_list = node_ids.tolist()
-        else:
-            node_ids_list = list(node_ids)
-
-        result = torch.full(
-            (len(node_ids_list), self.dim), float('nan'),
-            dtype=self._dtype, device=self._device
-        )
-
-        valid_pairs = []
-        for out_idx, nid in enumerate(node_ids_list):
-            int_idx = self._id_to_idx.get(nid)
-            if int_idx is not None:
-                valid_pairs.append((out_idx, int_idx))
-
-        if valid_pairs:
-            out_indices, int_indices = zip(*valid_pairs)
-            int_indices_tensor = torch.tensor(
-                int_indices, device=self._device, dtype=torch.long
-            )
-            out_indices_tensor = torch.tensor(
-                out_indices, device=self._device, dtype=torch.long
-            )
-            result[out_indices_tensor] = self._embeddings[int_indices_tensor]
-
-        return result
-
-    def fetch_batch_gpu(
-        self,
-        doc_ids: Union[List[int], torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def fetch_batch(self, node_ids: Union[List[int], torch.Tensor]) -> Tuple[Matrix, torch.Tensor]:
         """
-        Fetch embeddings keeping everything on device.
+        Fetch embeddings for multiple documents.
+
+        Args:
+            node_ids: List or tensor of node IDs
 
         Returns:
-            Tuple of (embeddings tensor, valid_ids tensor)
+            Tuple of:
+                - embeddings: Tensor of shape (N, D) on device. NaN for invalid indices.
+                - valid_mask: Boolean tensor of shape (N,) indicating which entries are valid.
         """
-        if isinstance(doc_ids, torch.Tensor):
-            ids_tensor = doc_ids.to(device=self._device, dtype=torch.long)
+        if isinstance(node_ids, torch.Tensor):
+            ids_tensor = node_ids.to(device=self._device, dtype=torch.long)
         else:
-            ids_tensor = torch.tensor(doc_ids, device=self._device, dtype=torch.long)
+            ids_tensor = torch.tensor(node_ids, device=self._device, dtype=torch.long)
 
-        # Build reverse mapping tensor for device-native lookup
+        n = ids_tensor.shape[0]
+        result = torch.full((n, self.dim), float('nan'), dtype=self._dtype, device=self._device)
+        valid_mask = torch.zeros(n, dtype=torch.bool, device=self._device)
+
+        if n == 0:
+            return result, valid_mask
+
+        # Build reverse mapping tensor for device-native lookup (lazy init)
         if not hasattr(self, '_id_lookup_tensor') or self._id_lookup_tensor is None:
             max_id = int(self._ids.max().item()) + 1
-            self._id_lookup_tensor = torch.full(
-                (max_id,), -1, device=self._device, dtype=torch.long
-            )
+            self._id_lookup_tensor = torch.full((max_id,), -1, device=self._device, dtype=torch.long)
             id_indices = torch.arange(len(self._ids), device=self._device)
             ids_on_device = self._ids.to(device=self._device, dtype=torch.long)
             self._id_lookup_tensor[ids_on_device] = id_indices
             self._max_valid_id = max_id
 
-        valid_range_mask = (ids_tensor >= 0) & (ids_tensor < self._max_valid_id)
-        ids_in_range = ids_tensor[valid_range_mask]
+        # Find which IDs are in valid range
+        in_range_mask = (ids_tensor >= 0) & (ids_tensor < self._max_valid_id)
+        if not in_range_mask.any():
+            return result, valid_mask
 
-        if ids_in_range.numel() == 0:
-            return (
-                torch.empty((0, self.dim), device=self._device, dtype=torch.float32),
-                torch.empty(0, device=self._device, dtype=torch.long)
-            )
+        # Lookup internal indices for in-range IDs
+        clamped_ids = torch.clamp(ids_tensor, 0, self._max_valid_id - 1)
+        internal_indices = self._id_lookup_tensor[clamped_ids]
 
-        internal_indices = self._id_lookup_tensor[ids_in_range]
-        valid_mask = internal_indices >= 0
-        valid_internal_indices = internal_indices[valid_mask]
-        valid_ids = ids_in_range[valid_mask]
+        # Valid if in range AND found in store
+        valid_mask = in_range_mask & (internal_indices >= 0)
 
-        if valid_internal_indices.numel() == 0:
-            return (
-                torch.empty((0, self.dim), device=self._device, dtype=torch.float32),
-                torch.empty(0, device=self._device, dtype=torch.long)
-            )
+        if valid_mask.any():
+            valid_internal_indices = internal_indices[valid_mask]
+            result[valid_mask] = self._embeddings[valid_internal_indices]
 
-        embeddings = self._embeddings[valid_internal_indices]
-        return embeddings, valid_ids
+        return result, valid_mask
 
     def search_tensor_result(
         self,
-        query_vec: Union[list, torch.Tensor],
+        query_vec: torch.Tensor,
         limit: int
     ) -> TensorSearchResult:
         """Search returning TensorSearchResult."""
@@ -330,24 +290,27 @@ class TorchVectorStore(VectorStore):
 
     def compute_similarities(
         self,
-        query_vec: Union[list, torch.Tensor],
+        query_vec: torch.Tensor,
         candidate_ids: Union[List[int], torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute similarities between query and specific candidates."""
-        candidate_embs, valid_ids = self.fetch_batch_gpu(candidate_ids)
-
-        if valid_ids.numel() == 0:
-            return torch.empty(0, device=self._device), valid_ids
-
-        if not isinstance(query_vec, torch.Tensor):
-            query = torch.tensor(
-                query_vec, device=self._device, dtype=self._dtype
-            ).view(1, -1)
+        if isinstance(candidate_ids, torch.Tensor):
+            ids_tensor = candidate_ids.to(device=self._device, dtype=torch.long)
         else:
-            query = query_vec.to(device=self._device, dtype=self._dtype).view(1, -1)
+            ids_tensor = torch.as_tensor(candidate_ids, device=self._device, dtype=torch.long)
 
+        candidate_embs, valid_mask = self.fetch_batch(ids_tensor)
+
+        if not valid_mask.any():
+            return torch.empty(0, device=self._device), torch.empty(0, device=self._device, dtype=torch.long)
+
+        # Extract only valid embeddings and IDs
+        valid_embs = candidate_embs[valid_mask]
+        valid_ids = ids_tensor[valid_mask]
+
+        query = query_vec.to(device=self._device, dtype=self._dtype).view(1, -1)
         query = torch.nn.functional.normalize(query, p=2, dim=1)
-        similarities = torch.mm(query, candidate_embs.t()).squeeze(0)
+        similarities = torch.mm(query, valid_embs.t()).squeeze(0)
 
         return similarities, valid_ids
 
@@ -366,7 +329,7 @@ class TorchVectorStore(VectorStore):
         """Return raw embeddings tensor."""
         return self._embeddings
 
-    def to(self, device: str) -> "TorchVectorStore":
+    def to(self, device: Optional[TorchDeviceStr]) -> "TorchVectorStore":
         """Move store to a different device. Deprecated: set device at construction."""
         logger.warning("TorchVectorStore.to() is deprecated - set device at construction time")
         self._embeddings = self._embeddings.to(device)

@@ -26,5 +26,5 @@ class CohereEmbeddingProvider(EmbeddingProvider):
             model=self.model,
             input_type=self.input_type
         )
-        return torch.tensor(response.embeddings.float_, dtype=torch.float32)
+        return torch.as_tensor(response.embeddings.float_, dtype=torch.float32)
     

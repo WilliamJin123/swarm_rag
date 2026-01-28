@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod, abstractproperty
-from typing import List, Dict, Any, Optional, Sequence, TypeAlias, Union, Tuple
+from typing import List, Dict, Any, Optional, Sequence, TypeAlias, Tuple
 import torch
 
 # Matrix type alias: PyTorch tensors only
@@ -51,15 +51,17 @@ class VectorStore(ABC):
         pass
 
     @abstractmethod
-    def fetch_batch(self, node_ids: Union[Sequence[Any], torch.Tensor]) -> Matrix:
+    def fetch_batch(self, node_ids: torch.Tensor) -> Tuple[Matrix, torch.Tensor]:
         """
         Fetch embeddings for multiple documents.
 
         Args:
-            node_ids: Sequence or tensor of node IDs
+            node_ids: tensor of node IDs
 
         Returns:
-            Tensor of shape (N, D) on device. NaN for invalid indices.
+            Tuple of:
+                - embeddings: Tensor of shape (N, D) on device. NaN for invalid indices.
+                - valid_mask: Boolean tensor of shape (N,) indicating which entries are valid.
         """
         pass
 
@@ -103,13 +105,13 @@ class GraphStore(ABC):
     @abstractmethod
     def get_neighbors_batch(
         self,
-        node_ids: Union[Sequence[int], torch.Tensor]
+        node_ids: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Batch neighbor lookup for multiple nodes.
 
         Args:
-            node_ids: Sequence or tensor of node IDs
+            node_ids: tensor of node IDs
 
         Returns:
             Tuple of:
@@ -135,7 +137,7 @@ class GraphStore(ABC):
 
     def get_degrees_batch(
         self,
-        node_ids: Union[Sequence[int], torch.Tensor]
+        node_ids: torch.Tensor
     ) -> torch.Tensor:
         """Batch degree lookup for multiple nodes. Returns tensor of degrees on device."""
         pass

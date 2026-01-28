@@ -119,8 +119,8 @@ class HeuristicContext:
     target_vecs: Optional[torch.Tensor] = None
     target_ids: Optional[torch.Tensor] = None  # Always tensor for batched operations
 
-    pheromone_values: torch.Tensor = field(default_factory=lambda: torch.tensor([]))
-    node_degrees: torch.Tensor = field(default_factory=lambda: torch.tensor([]))
+    pheromone_values: torch.Tensor = field(default_factory=lambda: torch.empty(0))
+    node_degrees: torch.Tensor = field(default_factory=lambda: torch.empty(0))
 
     graph: Optional[GraphStore] = None
     max_pheromone: float = 1.0

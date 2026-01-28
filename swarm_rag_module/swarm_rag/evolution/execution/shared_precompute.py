@@ -166,7 +166,7 @@ def prepare_shared_context(
             for i, gt_list in enumerate(gt_int_lists):
                 if gt_list:
                     gt_sizes[i] = len(gt_list)
-                    ground_truth_tensor[i, :len(gt_list)] = torch.tensor(
+                    ground_truth_tensor[i, :len(gt_list)] = torch.as_tensor(
                         gt_list, dtype=torch.long, device=device
                     )
 
@@ -298,7 +298,7 @@ class BatchedRetrievalResults:
         total_rows = sum(len(results_list) for results_list in self.results_by_genome.values())
 
         if total_rows == 0:
-            self.all_retrieved_ids = torch.tensor([], device=device, dtype=torch.long)
+            self.all_retrieved_ids = torch.empty(0, device=device, dtype=torch.long)
             self.genome_query_indices = []
             return self.all_retrieved_ids, self.genome_query_indices
 

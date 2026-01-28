@@ -283,7 +283,7 @@ class DecisionTracker:
 
         dead_ends = sum(1 for d in self._decisions if d.chosen_node == d.current_node)
 
-        avg_branch = float(torch.mean(torch.tensor([len(d.candidates) for d in self._decisions], dtype=torch.float32)).item()) if self._decisions else 0.0
+        avg_branch = float(torch.mean(torch.as_tensor([len(d.candidates) for d in self._decisions], dtype=torch.float32)).item()) if self._decisions else 0.0
 
         # Convergence detection
         convergence_step = None
@@ -302,7 +302,7 @@ class DecisionTracker:
         final_positions = [traj[-1] for traj in agent_trajectories if traj]
         if final_positions:
             counts = Counter(final_positions)
-            probs = torch.tensor(list(counts.values()), dtype=torch.float32) / len(final_positions)
+            probs = torch.as_tensor(list(counts.values()), dtype=torch.float32) / len(final_positions)
             max_entropy = torch.log(torch.tensor(float(len(agent_trajectories)))).item() if len(agent_trajectories) > 1 else 1.0
             actual_entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
             dispersion = actual_entropy / max_entropy if max_entropy > 0 else 0.0
@@ -335,7 +335,7 @@ class DecisionTracker:
         for name, scores in all_scores.items():
             if not scores:
                 continue
-            arr = torch.tensor(scores, dtype=torch.float32)
+            arr = torch.as_tensor(scores, dtype=torch.float32)
             stats[name] = {
                 "mean": float(torch.mean(arr).item()),
                 "std": float(torch.std(arr).item()),
@@ -366,7 +366,7 @@ class DecisionTracker:
 
         n_decisions = len(self._decisions)
         return {
-            "avg_chosen_rank": float(torch.mean(torch.tensor(ranks, dtype=torch.float32)).item()) if ranks else 0.0,
+            "avg_chosen_rank": float(torch.mean(torch.as_tensor(ranks, dtype=torch.float32)).item()) if ranks else 0.0,
             "greedy_match_rate": greedy_matches / n_decisions if n_decisions > 0 else 0.0,
             "exploration_rate": 1.0 - (greedy_matches / n_decisions) if n_decisions > 0 else 0.0
         }

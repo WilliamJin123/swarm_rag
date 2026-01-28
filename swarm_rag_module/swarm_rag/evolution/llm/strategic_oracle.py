@@ -418,8 +418,8 @@ def build_strategic_context(
     if population and len(population) > 1:
         import torch
         # Simple variance of n_agents and steps as proxy for param diversity
-        n_agents_vals = torch.tensor([g.params.get("n_agents", 10) for g in population], dtype=torch.float32)
-        steps_vals = torch.tensor([g.params.get("steps", 4) for g in population], dtype=torch.float32)
+        n_agents_vals = torch.as_tensor([g.params.get("n_agents", 10) for g in population], dtype=torch.float32)
+        steps_vals = torch.as_tensor([g.params.get("steps", 4) for g in population], dtype=torch.float32)
         param_diversity = (torch.var(n_agents_vals).item() + torch.var(steps_vals).item()) / 2
 
         # Strategy diversity as number of unique template structures

@@ -200,7 +200,7 @@ class QueryEmbeddingCache:
             if str(embeddings.device).startswith(self._device):
                 return embeddings
             return embeddings.to(self._device)
-        return torch.tensor(embeddings, device=self._device, dtype=torch.float32)
+        return torch.as_tensor(embeddings, device=self._device, dtype=torch.float32)
 
     def _convert_to_storage_format(self, embeddings):
         """Convert embeddings to tensor on configured device. Deprecated: use _to_device."""
@@ -379,7 +379,7 @@ class QueryEmbeddingCache:
                     if isinstance(emb, torch.Tensor):
                         gpu_embeddings.append(emb)
                     else:
-                        gpu_embeddings.append(torch.tensor(emb, device="cuda", dtype=torch.float32))
+                        gpu_embeddings.append(torch.as_tensor(emb, device="cuda", dtype=torch.float32))
                 else:
                     # Return zero vector for missing
                     if self._embedding_dim:

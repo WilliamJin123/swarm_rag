@@ -1095,7 +1095,7 @@ class PopulationEvaluator:
             # Skip non-numeric values
             if not values or not isinstance(values[0], (int, float)):
                 continue
-            t = torch.tensor(values, dtype=torch.float32)
+            t = torch.as_tensor(values, dtype=torch.float32)
             aggregated[k] = float(torch.mean(t).item())
             # Use population variance (correction=0) for consistency
             aggregated[f"var_{k}"] = float(torch.var(t, correction=0).item()) if len(t) > 1 else 0.0

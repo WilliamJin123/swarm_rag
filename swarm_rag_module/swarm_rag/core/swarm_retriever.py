@@ -379,7 +379,7 @@ class SwarmRetriever:
 
         # Spawn Agents (Weigh "better" nodes higher)
         weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
-        agent_locations = torch.tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long, device=self._device)
+        agent_locations = torch.as_tensor(py_rng.choices(drop_zone, weights=weights, k=n_agents), dtype=torch.long, device=self._device)
 
         # Position history tensor: (n_agents, steps + 1), -1 = unvisited
         # Eliminates per-agent .item() calls in the hot loop
@@ -566,7 +566,7 @@ class SwarmRetriever:
                     val = func(ctx)
                     # Ensure tensor
                     if not isinstance(val, torch.Tensor):
-                        val = torch.tensor(val, device=total.device, dtype=torch.float32)
+                        val = torch.as_tensor(val, device=total.device, dtype=torch.float32)
                     total = total + val * w
                 return total
             return combined_ranking
@@ -574,7 +574,7 @@ class SwarmRetriever:
         elif strategy_type == "movement":
             def combined_movement(ctx: HeuristicContext) -> torch.Tensor:
                 if not components:
-                    return torch.tensor([])
+                    return torch.empty(0)
 
                 # Unroll first iteration to init accumulator with correct shape/type
                 fn0, w0 = components[0]
@@ -606,9 +606,8 @@ class SwarmRetriever:
         device = node_ids.device
 
         if not self.cache_vectors:
-            # Direct fetch from store (returns tensor per interface contract)
-            matrix = self.vector_store.fetch_batch(node_ids)
-            valid_mask = ~torch.isnan(matrix).any(dim=1)
+            # Direct fetch from store
+            matrix, valid_mask = self.vector_store.fetch_batch(node_ids)
             return matrix[valid_mask], node_ids[valid_mask]
 
         # Cache-aware fetch - need list for dict key lookup
@@ -630,8 +629,7 @@ class SwarmRetriever:
 
         # Phase 2: Fetch (Unlocked)
         if missing_ids:
-            fetched_matrix = self.vector_store.fetch_batch(missing_ids)
-            valid_fetched_mask = ~torch.isnan(fetched_matrix).any(dim=1)
+            fetched_matrix, valid_fetched_mask = self.vector_store.fetch_batch(missing_ids)
 
             # Phase 3: Write-back (Locked)
             with self._doc_lock:
@@ -646,11 +644,11 @@ class SwarmRetriever:
         valid_data = [(nid, v) for nid, v in zip(node_ids_list, raw_vecs) if v is not None]
 
         if not valid_data:
-            return torch.tensor([], device=device), torch.tensor([], dtype=torch.long, device=device)
+            return torch.empty(0, device=device), torch.empty(0, dtype=torch.long, device=device)
 
         valid_ids_list, valid_vecs = zip(*valid_data)
         embeddings = torch.stack(list(valid_vecs))
-        valid_ids_tensor = torch.tensor(valid_ids_list, dtype=torch.long, device=device)
+        valid_ids_tensor = torch.as_tensor(valid_ids_list, dtype=torch.long, device=device)
         return embeddings, valid_ids_tensor
 
     def _process_agent_step(
@@ -683,7 +681,7 @@ class SwarmRetriever:
         if query_pheromones:
             max_pheromone_id = max(query_pheromones.keys()) + 1
             # Ensure we can index all valid_ids
-            valid_ids_tensor = torch.tensor(valid_ids, device=candidate_matrix.device, dtype=torch.long)
+            valid_ids_tensor = torch.as_tensor(valid_ids, device=candidate_matrix.device, dtype=torch.long)
             max_needed = int(valid_ids_tensor.max().item()) + 1 if valid_ids_tensor.numel() > 0 else 0
             lookup_size = max(max_pheromone_id, max_needed)
             pheromone_lookup = torch.zeros(lookup_size, dtype=torch.float32, device=candidate_matrix.device)
@@ -721,7 +719,7 @@ class SwarmRetriever:
 
         # Ensure tensor on correct device
         if not isinstance(total_scores, torch.Tensor):
-            total_scores = torch.tensor(total_scores, dtype=torch.float32, device=candidate_matrix.device)
+            total_scores = torch.as_tensor(total_scores, dtype=torch.float32, device=candidate_matrix.device)
         total_scores = torch.atleast_1d(torch.clamp(total_scores, min=0.001))
 
         # Ensure total_scores matches valid_ids length (broadcast scalar if needed)
@@ -834,27 +832,15 @@ class SwarmRetriever:
             return agent_locations, {}
 
         # Batch fetch embeddings for all unique neighbors
-        # Pass GPU tensor directly - no CPU transfer needed
-        if hasattr(self.vector_store, 'fetch_batch_gpu') and self._use_gpu:
-            unique_embs, valid_unique_ids = self.vector_store.fetch_batch_gpu(unique_neighbors_gpu)
-            if not isinstance(unique_embs, torch.Tensor):
-                unique_embs = torch.tensor(unique_embs, device=device, dtype=torch.float32)
-            if not isinstance(valid_unique_ids, torch.Tensor):
-                valid_unique_ids = torch.tensor(valid_unique_ids, device=device, dtype=torch.long)
-        else:
-            # Pass tensor directly to _fetch_vectors_batch (it handles conversion internally)
-            unique_embs_result, valid_unique_ids_list = self._fetch_vectors_batch(unique_neighbors_gpu)
-            if not isinstance(unique_embs_result, torch.Tensor):
-                unique_embs = torch.tensor(unique_embs_result, device=device, dtype=torch.float32)
-            else:
-                unique_embs = unique_embs_result.to(device=device, dtype=torch.float32)
-            valid_unique_ids = torch.tensor(valid_unique_ids_list, device=device, dtype=torch.long)
+        embs, valid_mask = self.vector_store.fetch_batch(unique_neighbors_gpu)
+        unique_embs = embs[valid_mask].to(device=device, dtype=torch.float32)
+        valid_unique_ids = unique_neighbors_gpu[valid_mask].to(device=device, dtype=torch.long)
 
         if valid_unique_ids.numel() == 0:
             return agent_locations, {}
 
         # Convert query to GPU tensor
-        query_tensor = torch.tensor(query_vec, device=device, dtype=torch.float32).view(1, -1)
+        query_tensor = torch.as_tensor(query_vec, device=device, dtype=torch.float32).view(1, -1)
         query_tensor = torch.nn.functional.normalize(query_tensor, p=2, dim=1)
 
         # Compute similarities for all unique neighbors at once
@@ -915,8 +901,8 @@ class SwarmRetriever:
             pheromone_tensor = torch.zeros(max_node_id, device=device, dtype=torch.float32)
 
             # Convert pheromone dict to GPU tensor
-            pheromone_keys = torch.tensor(list(query_pheromones.keys()), device=device, dtype=torch.long)
-            pheromone_vals = torch.tensor(list(query_pheromones.values()), device=device, dtype=torch.float32)
+            pheromone_keys = torch.as_tensor(list(query_pheromones.keys()), device=device, dtype=torch.long)
+            pheromone_vals = torch.as_tensor(list(query_pheromones.values()), device=device, dtype=torch.float32)
             # Clamp keys to valid range
             valid_key_mask = (pheromone_keys >= 0) & (pheromone_keys < max_node_id)
             if valid_key_mask.any():
@@ -980,7 +966,7 @@ class SwarmRetriever:
 
         # Initialize chosen positions and new locations
         chosen_positions = torch.zeros(n_agents, dtype=torch.long, device=device)
-        new_locations_tensor = torch.tensor(agent_locations, device=device, dtype=torch.long)
+        new_locations_tensor = torch.as_tensor(agent_locations, device=device, dtype=torch.long)
 
         # Vectorized sampling for agents with valid probabilities
         valid_agent_mask = has_valid & agent_has_neighbors
@@ -1163,7 +1149,7 @@ class SwarmRetriever:
         if not self.cache_neighbors:
             neighbors = self.graph_store.get_neighbors(node_id)
             if not isinstance(neighbors, torch.Tensor):
-                neighbors = torch.tensor(neighbors, dtype=torch.long)
+                neighbors = torch.as_tensor(neighbors, dtype=torch.long)
             return neighbors
         with self._neighbor_lock:
             cached = self.neighbor_cache.get(node_id)
@@ -1172,7 +1158,7 @@ class SwarmRetriever:
 
         neighbors = self.graph_store.get_neighbors(node_id)
         if not isinstance(neighbors, torch.Tensor):
-            neighbors = torch.tensor(neighbors, dtype=torch.long)
+            neighbors = torch.as_tensor(neighbors, dtype=torch.long)
         with self._neighbor_lock:
             self.neighbor_cache.set(node_id, neighbors)
             self.degree_cache.set(node_id, len(neighbors))
@@ -1195,11 +1181,7 @@ class SwarmRetriever:
             node_ids_list = list(node_ids)
 
         if not self.cache_vectors:
-            # Pass tensor directly to fetch_batch if it was a tensor
-            matrix = self.vector_store.fetch_batch(node_ids)
-            if not isinstance(matrix, torch.Tensor):
-                matrix = torch.as_tensor(matrix, dtype=torch.float32)
-            valid_mask = ~torch.isnan(matrix).any(dim=1)
+            matrix, valid_mask = self.vector_store.fetch_batch(node_ids)
 
             if torch.all(valid_mask):
                 return matrix, node_ids_list
@@ -1224,10 +1206,7 @@ class SwarmRetriever:
 
         # Phase 2: Fetch (Unlocked)
         if missing_ids:
-            fetched_matrix = self.vector_store.fetch_batch(missing_ids)
-            if not isinstance(fetched_matrix, torch.Tensor):
-                fetched_matrix = torch.as_tensor(fetched_matrix, dtype=torch.float32)
-            valid_fetched_mask = ~torch.isnan(fetched_matrix).any(dim=1)
+            fetched_matrix, valid_fetched_mask = self.vector_store.fetch_batch(missing_ids)
 
             # Phase 3: Write-back (Locked)
             with self._doc_lock:
@@ -1235,14 +1214,13 @@ class SwarmRetriever:
                     if is_valid:
                         original_idx = missing_indices[i]
                         vec = fetched_matrix[i]
-
                         self.doc_cache.set(node_ids_list[original_idx], vec)
                         raw_vecs[original_idx] = vec
 
         valid_data = [(nid, v) for nid, v in zip(node_ids_list, raw_vecs) if v is not None]
 
         if not valid_data:
-            return torch.tensor([]), []
+            return torch.empty(0), []
 
         valid_ids, valid_vecs = zip(*valid_data)
         return torch.stack(list(valid_vecs)), list(valid_ids)
@@ -1254,7 +1232,7 @@ class SwarmRetriever:
         """
         if not self.cache_neighbors:
             # If caching is disabled, we must fetch neighbors to count them
-            return torch.tensor([len(self._get_cached_neighbors(nid)) for nid in node_ids], dtype=torch.int32)
+            return torch.as_tensor([len(self._get_cached_neighbors(nid)) for nid in node_ids], dtype=torch.int32)
 
         degrees = torch.empty(len(node_ids), dtype=torch.int32)
         missing_indices = []
@@ -1285,7 +1263,7 @@ class SwarmRetriever:
                     d = len(nb)
                     # Cache both the neighbors and the degree since we paid the cost
                     if not isinstance(nb, torch.Tensor):
-                        nb = torch.tensor(nb, dtype=torch.long)
+                        nb = torch.as_tensor(nb, dtype=torch.long)
                     self.neighbor_cache.set(nid, nb)
                     self.degree_cache.set(nid, d)
                     degrees[i] = d
@@ -1320,7 +1298,7 @@ class SwarmRetriever:
         Retrieves embeddings for a batch of queries, returning a single 2D tensor.
         """
         if not queries:
-            return torch.tensor([])
+            return torch.empty(0)
         if not self.cache_vectors:
             embs = self.embed_fn.embed_query_batch(queries)
             if not isinstance(embs, torch.Tensor):
@@ -1351,7 +1329,7 @@ class SwarmRetriever:
                     results_by_index[i] = emb
 
         if not results_by_index:
-            return torch.tensor([])
+            return torch.empty(0)
 
         first_embedding = next(iter(results_by_index.values()))
         embedding_dim = first_embedding.shape[0]
@@ -1701,7 +1679,7 @@ class SwarmRetriever:
 
         # Spawn agents
         weights = [1.0 + drop_zone_inc * (dz_len - i - 1) for i in range(dz_len)]
-        agent_locations = torch.tensor(
+        agent_locations = torch.as_tensor(
             py_rng.choices(drop_zone, weights=weights, k=n_agents),
             dtype=torch.long,
             device=self._device

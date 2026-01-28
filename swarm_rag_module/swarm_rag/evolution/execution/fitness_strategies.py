@@ -39,7 +39,7 @@ class ParetoStrategy(FitnessStrategy):
         # Shape: (N, 3) -> [Quality, Stability, -Cost]
         objectives = torch.zeros((pop_size, 3))
         for i, g in enumerate(population):
-            objectives[i] = torch.tensor([
+            objectives[i] = torch.as_tensor([
                 g.fitness.quality_score,
                 g.fitness.stability_score,
                 -g.fitness.cost_score

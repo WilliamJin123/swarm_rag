@@ -8,13 +8,15 @@ a single source of truth for type definitions.
 Usage:
     from swarm_rag.interfaces.shared_types import AgentGroupConfig, StrategyConfig
 """
-from typing import Dict, Any, List, Tuple, Callable, TypedDict, Optional
+from typing import Dict, Any, List, Tuple, Callable, TypedDict, Optional, Literal
 
 try:
     from typing import NotRequired
 except ImportError:
     from typing_extensions import NotRequired
 
+
+TorchDeviceStr = Literal["cpu", "cuda", "mps"]
 
 # =============================================================================
 # Strategy Configuration Types

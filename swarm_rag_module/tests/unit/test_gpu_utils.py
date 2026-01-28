@@ -282,10 +282,12 @@ class TestBatchOptimization:
         mock_embeddings = torch.randn(10, 768, dtype=torch.float32)
 
         mock_vector_store = MagicMock()
-        # fetch_batch should return matrix with shape (n_requested, dim)
+        # fetch_batch should return (matrix, valid_mask)
         def mock_fetch_batch(ids):
-            n = len(ids)
-            return mock_embeddings[:n]
+            n = len(ids) if not isinstance(ids, torch.Tensor) else ids.shape[0]
+            embs = mock_embeddings[:n]
+            valid_mask = torch.ones(n, dtype=torch.bool)
+            return embs, valid_mask
 
         mock_vector_store.fetch_batch = MagicMock(side_effect=mock_fetch_batch)
 
@@ -453,9 +455,11 @@ class TestTorchVectorStore:
 
         store = TorchVectorStore(embeddings, ids, device="cpu")
 
-        result = store.fetch_batch([0, 1, 2])
+        result, valid_mask = store.fetch_batch([0, 1, 2])
 
         assert result.shape == (3, 64)
+        assert valid_mask.shape == (3,)
+        assert valid_mask.all()  # All valid IDs
         # Check no NaN for valid IDs
         assert not torch.isnan(result).any()
 
@@ -508,8 +512,7 @@ class TestTorchGraphStore:
         }
 
         store = TorchGraphStore.from_adjacency_dict(adj_dict, device="cpu")
-
-        neighbors, mask = store.get_neighbors_batch([0, 1, 2])
+        neighbors, mask = store.get_neighbors_batch(torch.tensor([0,1,2]))
 
         assert neighbors.shape[0] == 3
         assert mask.shape[0] == 3

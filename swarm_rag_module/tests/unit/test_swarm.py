@@ -59,19 +59,22 @@ class DummyVectorStore(VectorStore):
 
         return top_indices, top_scores
 
-    def fetch_batch(self, node_ids) -> torch.Tensor:
-        """Fetch embeddings for given node IDs, returning stacked tensor matrix"""
+    def fetch_batch(self, node_ids) -> tuple[torch.Tensor, torch.Tensor]:
+        """Fetch embeddings for given node IDs, returning (matrix, valid_mask)"""
         if isinstance(node_ids, torch.Tensor):
             node_ids = node_ids.tolist()
         embeddings = []
+        valid_mask = []
         for nid in node_ids:
             emb = self.embeddings.get(nid)
             if emb is not None:
                 embeddings.append(emb)
+                valid_mask.append(True)
             else:
                 # Return NaN vector for missing IDs
                 embeddings.append(torch.full((self.embedding_dim,), float('nan'), dtype=torch.float32))
-        return torch.stack(embeddings)
+                valid_mask.append(False)
+        return torch.stack(embeddings), torch.tensor(valid_mask, dtype=torch.bool)
 
     def fetch(self, node_id) -> Optional[torch.Tensor]:
         return self.embeddings.get(node_id)
