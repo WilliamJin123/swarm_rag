@@ -2052,6 +2052,92 @@ class SwarmRetriever:
 
         return query_pheromones
 
+    def _step_multi_query(
+        self,
+        agent_locations: torch.Tensor,   # (batch_size, n_agents)
+        query_vecs: torch.Tensor,        # (batch_size, dim)
+        query_pheromones: torch.Tensor,  # (batch_size, n_nodes)
+        step: int,
+        max_pheromone: float,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Execute one step for all agents across all queries.
+
+        Returns:
+            new_locations: (batch_size, n_agents)
+            deposit_locations: (batch_size, n_agents) or None
+        """
+        batch_size, n_agents = agent_locations.shape
+        device = agent_locations.device
+
+        # 1. Get neighbors for all agents
+        all_neighbors, neighbor_mask = self._get_neighbors_multi_query(agent_locations)
+        # (batch_size, n_agents, max_degree)
+
+        if all_neighbors is None:
+            return agent_locations, None
+
+        max_degree = all_neighbors.shape[2]
+
+        # 2. Compute similarities
+        similarities = self._compute_similarities_multi_query(
+            query_vecs, all_neighbors, neighbor_mask
+        )
+
+        # 3. Lookup pheromones
+        pheromone_vals = self._lookup_pheromones_multi_query(
+            query_pheromones, all_neighbors
+        )
+
+        # 4. Get degrees for centrality heuristic
+        flat_neighbors = all_neighbors.flatten()
+        flat_degrees = self.graph_store.get_degrees_batch(flat_neighbors.clamp(0, self._max_node_id))
+        all_degrees = flat_degrees.float().view(batch_size, n_agents, max_degree)
+
+        # 5. Compute heuristic scores
+        # Centrality: log(1 + degree) / (log(1 + degree) + avg_log_degree)
+        log_degrees = torch.log(1 + all_degrees)
+        centrality_scores = log_degrees / (log_degrees + self._avg_log_degree + 1e-8)
+
+        # Pheromone repulsion: 1 - normalized_pheromone
+        normalized_pheromones = pheromone_vals / (max_pheromone + 1e-8)
+        repulsion_scores = 1.0 - normalized_pheromones
+
+        # Combine with default weights
+        total_scores = (
+            0.3 * similarities +
+            0.4 * centrality_scores +
+            0.3 * repulsion_scores
+        )
+
+        # Apply mask
+        total_scores = torch.where(neighbor_mask, total_scores, torch.zeros_like(total_scores))
+        total_scores = torch.clamp(total_scores, min=0.001)
+
+        # 6. Normalize to probabilities
+        score_sums = total_scores.sum(dim=-1, keepdim=True)
+        probs = total_scores / (score_sums + 1e-10)
+
+        # 7. Sample next positions
+        # Reshape for multinomial: (batch_size * n_agents, max_degree)
+        flat_probs = probs.view(-1, max_degree)
+
+        # Handle zero-sum rows
+        row_sums = flat_probs.sum(dim=1, keepdim=True)
+        flat_probs = torch.where(
+            row_sums > 1e-10,
+            flat_probs,
+            torch.ones_like(flat_probs) / max_degree  # Uniform fallback
+        )
+        flat_probs = flat_probs / (flat_probs.sum(dim=1, keepdim=True) + 1e-10)
+
+        chosen_idx = torch.multinomial(flat_probs, 1).view(batch_size, n_agents)
+
+        # Gather chosen neighbors
+        new_locations = all_neighbors.gather(2, chosen_idx.unsqueeze(-1)).squeeze(-1)
+
+        return new_locations, new_locations.clone()
+
     def _retrieve_with_pool_internal(
         self,
         query_vec: torch.Tensor,

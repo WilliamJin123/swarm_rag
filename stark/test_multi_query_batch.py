@@ -172,3 +172,35 @@ class TestMultiQueryBatching:
 
         assert updated.shape == query_pheromones.shape
         assert updated.sum() > 0  # Some deposits made
+
+    def test_batched_step_function(self, mock_retriever):
+        """Verify batched step updates agent positions."""
+        batch_size = 4
+        n_agents = 5
+        n_nodes = 100
+        steps = 3
+
+        agent_locs, pheromones, history = mock_retriever._init_multi_query_state(
+            batch_size=batch_size,
+            n_agents=n_agents,
+            n_nodes=n_nodes,
+            steps=steps,
+            initial_pools=[[i, (i+1)%n_nodes, (i+2)%n_nodes, (i+3)%n_nodes, (i+4)%n_nodes]
+                           for i in range(batch_size)],
+            drop_zone_inc=0.05,
+            seed=42,
+        )
+
+        query_vecs = torch.randn(batch_size, 64, device=mock_retriever._device)
+
+        new_locs, deposits = mock_retriever._step_multi_query(
+            agent_locations=agent_locs,
+            query_vecs=query_vecs,
+            query_pheromones=pheromones,
+            step=0,
+            max_pheromone=1.0,
+        )
+
+        assert new_locs.shape == (batch_size, n_agents)
+        # Agents should have moved (mostly)
+        assert not torch.equal(new_locs, agent_locs)
