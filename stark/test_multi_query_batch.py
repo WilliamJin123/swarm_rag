@@ -140,3 +140,35 @@ class TestMultiQueryBatching:
         )
 
         assert sims.shape == (batch_size, n_agents, max_degree)
+
+    def test_batched_pheromone_lookup(self, mock_retriever):
+        """Verify batched pheromone lookup."""
+        batch_size = 4
+        n_agents = 5
+        max_degree = 10
+        n_nodes = 100
+
+        query_pheromones = torch.rand(batch_size, n_nodes, device=mock_retriever._device)
+        all_neighbors = torch.randint(0, n_nodes, (batch_size, n_agents, max_degree), device=mock_retriever._device)
+
+        pheromone_vals = mock_retriever._lookup_pheromones_multi_query(
+            query_pheromones, all_neighbors
+        )
+
+        assert pheromone_vals.shape == (batch_size, n_agents, max_degree)
+
+    def test_batched_pheromone_deposit(self, mock_retriever):
+        """Verify batched pheromone deposit."""
+        batch_size = 4
+        n_agents = 5
+        n_nodes = 100
+
+        query_pheromones = torch.zeros(batch_size, n_nodes, device=mock_retriever._device)
+        new_locations = torch.randint(0, n_nodes, (batch_size, n_agents), device=mock_retriever._device)
+
+        updated = mock_retriever._deposit_pheromones_multi_query(
+            query_pheromones, new_locations, deposit_amount=1.0
+        )
+
+        assert updated.shape == query_pheromones.shape
+        assert updated.sum() > 0  # Some deposits made

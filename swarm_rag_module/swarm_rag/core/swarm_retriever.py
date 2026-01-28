@@ -1996,6 +1996,62 @@ class SwarmRetriever:
 
         return similarities
 
+    def _lookup_pheromones_multi_query(
+        self,
+        query_pheromones: torch.Tensor,  # (batch_size, n_nodes)
+        all_neighbors: torch.Tensor,      # (batch_size, n_agents, max_degree)
+    ) -> torch.Tensor:
+        """
+        Look up pheromone values for all neighbors across all queries.
+
+        Returns:
+            pheromone_vals: (batch_size, n_agents, max_degree)
+        """
+        batch_size = query_pheromones.shape[0]
+        n_nodes = query_pheromones.shape[1]
+        device = query_pheromones.device
+
+        # Clamp neighbor IDs to valid range
+        clamped = all_neighbors.clamp(0, n_nodes - 1)
+
+        # Advanced indexing: pheromones[q, neighbors[q,a,n]]
+        batch_idx = torch.arange(batch_size, device=device)[:, None, None]
+        batch_idx = batch_idx.expand_as(clamped)
+
+        pheromone_vals = query_pheromones[batch_idx, clamped]
+
+        # Zero out-of-bounds lookups
+        out_of_bounds = (all_neighbors < 0) | (all_neighbors >= n_nodes)
+        pheromone_vals = torch.where(out_of_bounds, torch.zeros_like(pheromone_vals), pheromone_vals)
+
+        return pheromone_vals
+
+    def _deposit_pheromones_multi_query(
+        self,
+        query_pheromones: torch.Tensor,  # (batch_size, n_nodes)
+        new_locations: torch.Tensor,      # (batch_size, n_agents)
+        deposit_amount: float = 1.0,
+    ) -> torch.Tensor:
+        """
+        Deposit pheromones at new agent locations for all queries.
+
+        Returns:
+            Updated pheromone tensor
+        """
+        batch_size, n_nodes = query_pheromones.shape
+        device = query_pheromones.device
+
+        # Process each query (scatter_add doesn't support batch dimension well)
+        for q in range(batch_size):
+            locs = new_locations[q]
+            valid_locs = locs[(locs >= 0) & (locs < n_nodes)]
+            if valid_locs.numel() > 0:
+                unique_locs, counts = torch.unique(valid_locs, return_counts=True)
+                deposits = deposit_amount * counts.float()
+                query_pheromones[q].scatter_add_(0, unique_locs, deposits)
+
+        return query_pheromones
+
     def _retrieve_with_pool_internal(
         self,
         query_vec: torch.Tensor,
