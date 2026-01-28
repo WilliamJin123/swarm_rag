@@ -1,3 +1,4 @@
+
 """
 Benchmarking utilities for CPU vs GPU performance comparison.
 
@@ -10,12 +11,13 @@ Provides comprehensive benchmarks for:
 
 import time
 import statistics
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Any, Tuple, Union
 import torch
 import logging
 
-from .device import get_device, ensure_tensor, clear_device_cache
+from .device import get_device
 
 logger = logging.getLogger(__name__)
 
@@ -84,23 +86,6 @@ class ComparisonResult:
 class Benchmarker:
     """
     Benchmarking utility for comparing CPU vs GPU performance.
-
-    Usage:
-        benchmarker = Benchmarker(warmup_iterations=3, n_iterations=10)
-
-        # Benchmark a function
-        result = benchmarker.run(
-            "vector_search",
-            func=lambda: store.search(query, 100),
-            device="cuda"
-        )
-
-        # Compare CPU vs GPU
-        comparison = benchmarker.compare(
-            "vector_search",
-            cpu_func=lambda: cpu_store.search(query, 100),
-            gpu_func=lambda: gpu_store.search(query, 100)
-        )
     """
 
     def __init__(
@@ -109,14 +94,6 @@ class Benchmarker:
         n_iterations: int = 10,
         sync_cuda: bool = True
     ):
-        """
-        Initialize benchmarker.
-
-        Args:
-            warmup_iterations: Number of warmup runs before measurement
-            n_iterations: Number of timed iterations
-            sync_cuda: Whether to synchronize CUDA before timing (for accurate GPU timing)
-        """
         self.warmup_iterations = warmup_iterations
         self.n_iterations = n_iterations
         self.sync_cuda = sync_cuda
@@ -134,19 +111,6 @@ class Benchmarker:
         n_ops: int = 1,
         extra_metrics_func: Callable[[Any], Dict[str, float]] = None
     ) -> BenchmarkResult:
-        """
-        Run a benchmark.
-
-        Args:
-            name: Name of the benchmark
-            func: Function to benchmark (should take no arguments)
-            device: Device being used ("cuda" or "cpu")
-            n_ops: Number of operations per call (for throughput calculation)
-            extra_metrics_func: Optional function to compute extra metrics from result
-
-        Returns:
-            BenchmarkResult with timing statistics
-        """
         device = device or get_device()
 
         # Warmup
@@ -176,7 +140,6 @@ class Benchmarker:
         max_time = max(times_ms)
         throughput = (n_ops * 1000) / mean_time if mean_time > 0 else 0.0
 
-        # Extra metrics
         extra_metrics = {}
         if extra_metrics_func and last_result is not None:
             extra_metrics = extra_metrics_func(last_result)
@@ -200,18 +163,6 @@ class Benchmarker:
         gpu_func: Callable[[], Any],
         n_ops: int = 1
     ) -> ComparisonResult:
-        """
-        Compare CPU vs GPU performance.
-
-        Args:
-            name: Name of the benchmark
-            cpu_func: CPU implementation
-            gpu_func: GPU implementation
-            n_ops: Number of operations per call
-
-        Returns:
-            ComparisonResult with speedup factor
-        """
         cpu_result = self.run(f"{name}_cpu", cpu_func, device="cpu", n_ops=n_ops)
         gpu_result = self.run(f"{name}_gpu", gpu_func, device="cuda", n_ops=n_ops)
 
@@ -235,21 +186,9 @@ def benchmark_vector_search(
 ) -> ComparisonResult:
     """
     Benchmark vector search CPU vs GPU.
-
-    Args:
-        n_docs: Number of documents in the index
-        dim: Embedding dimension
-        n_queries: Number of queries to run
-        top_k: Number of results per query
-        warmup: Warmup iterations
-        iterations: Timed iterations
-
-    Returns:
-        ComparisonResult with speedup factor
     """
     logger.info(f"Generating benchmark data: {n_docs} docs, {dim} dim, {n_queries} queries")
 
-    # Generate random data using PyTorch
     torch.manual_seed(42)
     doc_embeddings = torch.randn(n_docs, dim, dtype=torch.float32)
     doc_embeddings = doc_embeddings / torch.linalg.norm(doc_embeddings, dim=1, keepdim=True)
@@ -257,24 +196,22 @@ def benchmark_vector_search(
     query_embeddings = torch.randn(n_queries, dim, dtype=torch.float32)
     query_embeddings = query_embeddings / torch.linalg.norm(query_embeddings, dim=1, keepdim=True)
 
-    # CPU setup (PyTorch CPU)
+    # CPU setup
+    # FIX: Use batched matrix multiplication instead of a Python for-loop.
+    # Comparing a Python loop on CPU vs CUDA kernel on GPU is misleading.
+    # A fair comparison requires vectorized operations on both sides.
     def cpu_search():
-        results = []
         with torch.no_grad():
-            for q in query_embeddings:
-                scores = torch.matmul(doc_embeddings, q)
-                _, top_indices = torch.topk(scores, top_k)
-                results.append(top_indices)
-        return results
+            scores = torch.mm(query_embeddings, doc_embeddings.t())
+            _, top_indices = torch.topk(scores, top_k, dim=1)
+        return top_indices
 
-    # GPU setup (PyTorch CUDA)
+    # GPU setup
     doc_tensor = doc_embeddings.cuda()
     query_tensor = query_embeddings.cuda()
 
     def gpu_search():
-        # Use no_grad for inference performance
         with torch.no_grad():
-            # Batch matrix multiplication
             scores = torch.mm(query_tensor, doc_tensor.t())
             _, top_indices = torch.topk(scores, top_k, dim=1)
             return top_indices.cpu()
@@ -288,7 +225,6 @@ def benchmark_vector_search(
         n_ops=n_queries
     )
 
-    # Clean up GPU memory after benchmark
     del doc_tensor, query_tensor
     torch.cuda.empty_cache()
 
@@ -302,19 +238,6 @@ def benchmark_batch_similarity(
     warmup: int = 3,
     iterations: int = 10
 ) -> List[ComparisonResult]:
-    """
-    Benchmark batch similarity computation at various batch sizes.
-
-    Args:
-        n_candidates: Number of candidate vectors
-        dim: Embedding dimension
-        batch_sizes: List of batch sizes to test
-        warmup: Warmup iterations
-        iterations: Timed iterations
-
-    Returns:
-        List of ComparisonResults for each batch size
-    """
     if batch_sizes is None:
         batch_sizes = [1, 10, 50, 100, 500]
 
@@ -324,7 +247,6 @@ def benchmark_batch_similarity(
     for batch_size in batch_sizes:
         logger.info(f"Benchmarking batch size {batch_size}")
 
-        # Generate data using PyTorch
         torch.manual_seed(42)
         candidates = torch.randn(n_candidates, dim, dtype=torch.float32)
         candidates = candidates / torch.linalg.norm(candidates, dim=1, keepdim=True)
@@ -332,12 +254,10 @@ def benchmark_batch_similarity(
         queries = torch.randn(batch_size, dim, dtype=torch.float32)
         queries = queries / torch.linalg.norm(queries, dim=1, keepdim=True)
 
-        # CPU
         def cpu_similarity():
             with torch.no_grad():
                 return torch.mm(queries, candidates.t())
 
-        # GPU
         candidates_gpu = candidates.cuda()
         queries_gpu = queries.cuda()
 
@@ -353,7 +273,6 @@ def benchmark_batch_similarity(
         )
         results.append(comparison)
 
-        # Clean up GPU memory between batch sizes
         del candidates_gpu, queries_gpu
         torch.cuda.empty_cache()
 
@@ -366,22 +285,9 @@ def benchmark_heuristics(
     warmup: int = 3,
     iterations: int = 20
 ) -> List[ComparisonResult]:
-    """
-    Benchmark heuristic computations on CPU vs GPU.
-
-    Args:
-        n_candidates: Number of candidate vectors
-        dim: Embedding dimension
-        warmup: Warmup iterations
-        iterations: Timed iterations
-
-    Returns:
-        List of ComparisonResults for each heuristic
-    """
     results = []
     benchmarker = Benchmarker(warmup_iterations=warmup, n_iterations=iterations)
 
-    # Generate data using PyTorch
     torch.manual_seed(42)
     query_cpu = torch.randn(dim, dtype=torch.float32)
     query_cpu = query_cpu / torch.linalg.norm(query_cpu)
@@ -413,20 +319,22 @@ def benchmark_heuristics(
     # Node centrality
     degrees_cpu = torch.randint(1, 100, (n_candidates,), dtype=torch.float32)
     avg_degree = 50.0
+    
+    # FIX: Pre-calculate scalar values to ensure fair comparison. 
+    # The previous CPU implementation created a new tensor inside the loop.
+    log_avg_val = math.log(1 + avg_degree)
 
     def cpu_centrality():
         with torch.no_grad():
             log_degrees = torch.log(1 + degrees_cpu)
-            log_avg = torch.log(torch.tensor(1 + avg_degree))
-            return log_degrees / (log_degrees + log_avg + 1e-8)
+            return log_degrees / (log_degrees + log_avg_val + 1e-8)
 
     degrees_gpu = degrees_cpu.cuda()
-    log_avg_t = torch.log(torch.tensor(1 + avg_degree)).item()
 
     def gpu_centrality():
         with torch.no_grad():
             log_degrees = torch.log(1 + degrees_gpu)
-            return (log_degrees / (log_degrees + log_avg_t + 1e-8)).cpu()
+            return (log_degrees / (log_degrees + log_avg_val + 1e-8)).cpu()
 
     results.append(benchmarker.compare(
         "node_centrality",
@@ -435,7 +343,6 @@ def benchmark_heuristics(
         n_ops=n_candidates
     ))
 
-    # Clean up GPU memory after heuristics benchmark
     del query_gpu, targets_gpu, degrees_gpu
     torch.cuda.empty_cache()
 
@@ -447,17 +354,6 @@ def run_all_benchmarks(
     dim: int = 768,
     verbose: bool = True
 ) -> Dict[str, Union[ComparisonResult, List[ComparisonResult]]]:
-    """
-    Run all benchmarks and return comprehensive results.
-
-    Args:
-        n_docs: Number of documents for search benchmarks
-        dim: Embedding dimension
-        verbose: Whether to print results
-
-    Returns:
-        Dictionary of benchmark results
-    """
     device = get_device()
     if device != "cuda":
         logger.warning("GPU not available, skipping GPU benchmarks")
@@ -465,19 +361,16 @@ def run_all_benchmarks(
 
     results = {}
 
-    # Vector search
     logger.info("Running vector search benchmark...")
     results['vector_search'] = benchmark_vector_search(
         n_docs=n_docs, dim=dim, n_queries=100
     )
 
-    # Batch similarity
     logger.info("Running batch similarity benchmark...")
     results['batch_similarity'] = benchmark_batch_similarity(
         n_candidates=5000, dim=dim
     )
 
-    # Heuristics
     logger.info("Running heuristics benchmark...")
     results['heuristics'] = benchmark_heuristics(
         n_candidates=1000, dim=dim
@@ -504,7 +397,6 @@ def run_all_benchmarks(
 
 
 def print_benchmark_summary(results: Dict) -> None:
-    """Print a formatted summary of benchmark results."""
     print("\n" + "=" * 70)
     print(" BENCHMARK SUMMARY - CPU vs GPU Performance")
     print("=" * 70)

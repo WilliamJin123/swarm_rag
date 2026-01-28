@@ -1,7 +1,6 @@
 import random
 import torch
 from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict, Callable, Union
-from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import logging
@@ -61,12 +60,10 @@ class SwarmRetriever:
         doc_cache_size: int = 50000,
         query_cache_size: int = 1000,
         device: str = None,
-        tensor_mode: bool = True,
     ):
         self.vector_store = vector_store
         self.graph_store = graph_store
         self.embed_fn = embedding_provider
-        self.base_pheromones = defaultdict(float)
 
         self.py_rng = random.Random(seed) if seed else random
         # Use torch Generator for random operations
@@ -81,6 +78,8 @@ class SwarmRetriever:
         self.avg_degree = self.graph_store.get_avg_degree()
         # Cache max_node_id for dense pheromone tensor building
         self._max_node_id = self.graph_store.n_nodes
+        # Pheromone buffer size with headroom for out-of-bounds IDs
+        self._pheromone_buffer_size = max(self._max_node_id + 1024, 150000)
 
         self.cache_neighbors = cache_neighbors
         if self.cache_neighbors:
@@ -103,10 +102,38 @@ class SwarmRetriever:
         else:
             logger.debug("SwarmRetriever: Using CPU mode")
 
-        # Tensor mode: keep data as tensors on GPU when possible
-        self._tensor_mode = tensor_mode and self._use_gpu
-        if self._tensor_mode:
-            logger.debug("SwarmRetriever: Tensor mode enabled - minimizing CPU-GPU transfers")
+    def _create_pheromone_tensor(self) -> torch.Tensor:
+        """Create fresh pheromone tensor for a query."""
+        return torch.zeros(self._pheromone_buffer_size, dtype=torch.float32, device=self._device)
+
+    def _safe_scatter_add(self, pheromone_tensor: torch.Tensor,
+                          deposit_ids: torch.Tensor, deposit_vals: torch.Tensor) -> torch.Tensor:
+        """Scatter add with bounds checking and auto-resize."""
+        if deposit_ids.numel() == 0:
+            return pheromone_tensor
+
+        # Ensure correct dtype for scatter indexing
+        deposit_ids = deposit_ids.to(dtype=torch.long)
+
+        # Filter out negative IDs (invalid nodes)
+        valid_mask = deposit_ids >= 0
+        if not valid_mask.all():
+            deposit_ids = deposit_ids[valid_mask]
+            deposit_vals = deposit_vals[valid_mask]
+            if deposit_ids.numel() == 0:
+                return pheromone_tensor
+
+        max_id = deposit_ids.max().item()
+        if max_id >= pheromone_tensor.size(0):
+            # Resize tensor (rare case)
+            new_size = int(max_id) + 1024
+            new_tensor = torch.zeros(new_size, dtype=torch.float32, device=self._device)
+            new_tensor[:pheromone_tensor.size(0)] = pheromone_tensor
+            pheromone_tensor = new_tensor
+            self._pheromone_buffer_size = new_size
+
+        pheromone_tensor.scatter_add_(0, deposit_ids, deposit_vals)
+        return pheromone_tensor
 
     def _resolve_params(self, **user_params) -> Dict:
         """Standard parameter resolution."""
@@ -386,7 +413,8 @@ class SwarmRetriever:
         position_history = torch.full((n_agents, steps + 1), -1, device=self._device, dtype=torch.long)
         position_history[:, 0] = agent_locations
 
-        query_pheromones = self.base_pheromones.copy()
+        # Tensor-based pheromones for GPU acceleration
+        query_pheromones = self._create_pheromone_tensor()
 
         # Initialize decision tracking if provided
         if decision_tracker is not None:
@@ -406,8 +434,9 @@ class SwarmRetriever:
 
         # --- TRAVERSAL LOOP ---
         for step in range(steps):
-            pheromone_updates = {}
-            max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
+            pheromone_updates = None
+            # Single GPU reduction: max() returns 0 for all-zero tensor, use 1.0 as floor
+            max_pheromone = max(query_pheromones.max().item(), 1.0)
 
             if use_batched:
                 # GPU-accelerated batched agent processing
@@ -427,6 +456,7 @@ class SwarmRetriever:
 
             else:
                 # Sequential processing with decision tracking support
+                seq_updates = {}
                 for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
                     current_loc = agent_locations[agent_idx].item()
 
@@ -451,22 +481,24 @@ class SwarmRetriever:
                         deposit = result['deposit']
                         # Aggressive pruning: only track significant deposits
                         if deposit > self.PHEROMONE_EPSILON:
-                            pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
+                            seq_updates[next_node] = seq_updates.get(next_node, 0.0) + deposit
 
-            # Update pheromones with pruning
-            # 1. Decay and prune existing
-            if query_pheromones:
-                existing_keys = list(query_pheromones.keys())
-                for k in existing_keys:
-                    new_val = query_pheromones[k] * decay
-                    if new_val < self.PHEROMONE_EPSILON:
-                        del query_pheromones[k]
-                    else:
-                        query_pheromones[k] = new_val
+                pheromone_updates = seq_updates if seq_updates else None
 
-            # 2. Add new deposits
-            for node_id, amount in pheromone_updates.items():
-                query_pheromones[node_id] += amount
+            # Decay: single GPU operation
+            query_pheromones *= decay
+
+            # Deposit: handle both batched (tensor tuple) and sequential (dict) returns
+            if pheromone_updates is not None:
+                if isinstance(pheromone_updates, tuple):
+                    # Batched path: (deposit_ids, deposit_vals) tensors
+                    deposit_ids, deposit_vals = pheromone_updates
+                    query_pheromones = self._safe_scatter_add(query_pheromones, deposit_ids, deposit_vals)
+                else:
+                    # Sequential path: dict
+                    for node_id, amount in pheromone_updates.items():
+                        if node_id < query_pheromones.size(0):
+                            query_pheromones[node_id] += amount
 
         return self._ranking_from_history(
             position_history,
@@ -656,7 +688,7 @@ class SwarmRetriever:
         agent_id: int,
         current_loc: int,
         query_vec: torch.Tensor,
-        query_pheromones: Dict,
+        query_pheromones: torch.Tensor,
         move_func: Callable,
         deposit_func: Callable,
         step: int,
@@ -676,22 +708,13 @@ class SwarmRetriever:
         if len(valid_ids) == 0:
             return None
 
-        # Prefetch Vectorization Metadata using tensor indexing for pheromones
-        # Build pheromone lookup tensor if we have pheromones
-        if query_pheromones:
-            max_pheromone_id = max(query_pheromones.keys()) + 1
-            # Ensure we can index all valid_ids
-            valid_ids_tensor = torch.as_tensor(valid_ids, device=candidate_matrix.device, dtype=torch.long)
-            max_needed = int(valid_ids_tensor.max().item()) + 1 if valid_ids_tensor.numel() > 0 else 0
-            lookup_size = max(max_pheromone_id, max_needed)
-            pheromone_lookup = torch.zeros(lookup_size, dtype=torch.float32, device=candidate_matrix.device)
-            for nid, val in query_pheromones.items():
-                if nid < lookup_size:
-                    pheromone_lookup[nid] = val
-            # Pure tensor indexing
-            p_vals = pheromone_lookup[valid_ids_tensor]
-        else:
-            p_vals = torch.zeros(len(valid_ids), dtype=torch.float32, device=candidate_matrix.device)
+        # Direct tensor indexing for pheromone lookup
+        valid_ids_tensor = torch.as_tensor(valid_ids, device=candidate_matrix.device, dtype=torch.long)
+        pheromone_size = query_pheromones.size(0)
+        clamped_ids = valid_ids_tensor.clamp(0, pheromone_size - 1)
+        p_vals = query_pheromones[clamped_ids]
+        # Zero out-of-bounds
+        p_vals = torch.where(valid_ids_tensor >= pheromone_size, torch.zeros_like(p_vals), p_vals)
 
         # Safe degree fetching using Two-Phase Fetch for degrees
         degrees = self._fetch_degrees_batch(valid_ids)
@@ -772,12 +795,12 @@ class SwarmRetriever:
         self,
         agent_locations: torch.Tensor,
         query_vec: torch.Tensor,
-        query_pheromones: Dict,
+        query_pheromones: torch.Tensor,
         resolved_agents: List[Tuple[Callable, Callable]],
         step: int,
         max_pheromone: float,
         torch_gen: torch.Generator,
-    ) -> Tuple[torch.Tensor, Dict[int, float]]:
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Process all agents in one batched GPU operation.
 
@@ -790,14 +813,14 @@ class SwarmRetriever:
         Args:
             agent_locations: Tensor of current agent positions
             query_vec: Query embedding vector
-            query_pheromones: Current pheromone map
+            query_pheromones: Pheromone tensor (size: _pheromone_buffer_size)
             resolved_agents: List of (move_fn, deposit_fn) tuples
             step: Current step index
             max_pheromone: Maximum pheromone value
             torch_gen: PyTorch random generator
 
         Returns:
-            Tuple of (new_locations tensor, pheromone_updates dict)
+            Tuple of (new_locations tensor, (deposit_ids, deposit_vals) or None)
         """
         n_agents = len(agent_locations)
         device = self._device
@@ -829,7 +852,7 @@ class SwarmRetriever:
 
         if unique_neighbors_gpu.numel() == 0:
             # No valid neighbors for any agent
-            return agent_locations, {}
+            return agent_locations, None
 
         # Batch fetch embeddings for all unique neighbors
         embs, valid_mask = self.vector_store.fetch_batch(unique_neighbors_gpu)
@@ -837,7 +860,7 @@ class SwarmRetriever:
         valid_unique_ids = unique_neighbors_gpu[valid_mask].to(device=device, dtype=torch.long)
 
         if valid_unique_ids.numel() == 0:
-            return agent_locations, {}
+            return agent_locations, None
 
         # Convert query to GPU tensor
         query_tensor = torch.as_tensor(query_vec, device=device, dtype=torch.float32).view(1, -1)
@@ -894,25 +917,15 @@ class SwarmRetriever:
                 neighbor_sims_flat[valid_emb_mask] = all_similarities[valid_emb_indices]
                 neighbor_sims[neighbor_mask] = neighbor_sims_flat
 
-        # Vectorized pheromone lookup on GPU
-        if query_pheromones:
-            # Build pheromone tensor on GPU (once per step)
-            max_node_id = int(all_neighbors.max().item()) + 1
-            pheromone_tensor = torch.zeros(max_node_id, device=device, dtype=torch.float32)
-
-            # Convert pheromone dict to GPU tensor
-            pheromone_keys = torch.as_tensor(list(query_pheromones.keys()), device=device, dtype=torch.long)
-            pheromone_vals = torch.as_tensor(list(query_pheromones.values()), device=device, dtype=torch.float32)
-            # Clamp keys to valid range
-            valid_key_mask = (pheromone_keys >= 0) & (pheromone_keys < max_node_id)
-            if valid_key_mask.any():
-                pheromone_tensor[pheromone_keys[valid_key_mask]] = pheromone_vals[valid_key_mask]
-
-            # Vectorized GPU lookup for all neighbors
-            valid_neighbor_ids = all_neighbors[neighbor_mask]
-            clamped_ids = valid_neighbor_ids.clamp(0, max_node_id - 1)
-            flat_pheromones = pheromone_tensor[clamped_ids]
-            neighbor_pheromones[neighbor_mask] = flat_pheromones
+        # Direct tensor indexing for pheromone lookup - no conversion needed
+        valid_neighbor_ids = all_neighbors[neighbor_mask]
+        pheromone_size = query_pheromones.size(0)
+        clamped_ids = valid_neighbor_ids.clamp(0, pheromone_size - 1)
+        flat_pheromones = query_pheromones[clamped_ids]
+        # Zero out-of-bounds (IDs >= tensor size)
+        out_of_bounds = valid_neighbor_ids >= pheromone_size
+        flat_pheromones = torch.where(out_of_bounds, torch.zeros_like(flat_pheromones), flat_pheromones)
+        neighbor_pheromones[neighbor_mask] = flat_pheromones
 
         # Compute combined scores using vectorized heuristics
         # Semantic similarity (already computed)
@@ -990,36 +1003,29 @@ class SwarmRetriever:
         # Keep as tensor - no numpy conversion
         new_locations = new_locations_tensor
 
-        # Compute pheromone updates using tensor operations
-        pheromone_updates = {}
+        # Return tensors directly - no .tolist() conversion
         deposit_amount = 1.0
-
-        if deposit_amount > self.PHEROMONE_EPSILON:
-            # Get unique nodes that agents moved to and count deposits
+        if deposit_amount > self.PHEROMONE_EPSILON and valid_agent_mask.any():
             moved_nodes = new_locations[valid_agent_mask]
             unique_nodes, counts = torch.unique(moved_nodes, return_counts=True)
-
-            # Build pheromone updates dict - single CPU transfer at boundary
-            # Multiply on GPU before transfer to minimize operations
-            deposits = (deposit_amount * counts.float()).tolist()
-            unique_nodes_cpu = unique_nodes.tolist()
-            for node, dep in zip(unique_nodes_cpu, deposits):
-                pheromone_updates[node] = dep
-
-        return new_locations, pheromone_updates
+            deposit_vals = deposit_amount * counts.float()
+            return new_locations, (unique_nodes, deposit_vals)
+        else:
+            return new_locations, None
 
     def _step_agents_sequential_fallback(
         self,
         agent_locations: torch.Tensor,
         query_vec: torch.Tensor,
-        query_pheromones: Dict,
+        query_pheromones: torch.Tensor,
         resolved_agents: List[Tuple[Callable, Callable]],
         step: int,
         max_pheromone: float,
         torch_gen: torch.Generator,
-    ) -> Tuple[torch.Tensor, Dict[int, float]]:
+    ) -> Tuple[torch.Tensor, Optional[Dict[int, float]]]:
         """
         Fallback to sequential agent processing when batch mode unavailable.
+        Returns dict for sequential path compatibility.
         """
         new_locations = agent_locations.clone()
         pheromone_updates = {}
@@ -1047,7 +1053,7 @@ class SwarmRetriever:
                 if deposit > self.PHEROMONE_EPSILON:
                     pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
 
-        return new_locations, pheromone_updates
+        return new_locations, pheromone_updates if pheromone_updates else None
 
     def _capture_heuristic_scores(self, ctx: HeuristicContext) -> Dict[str, torch.Tensor]:
         """
@@ -1689,7 +1695,8 @@ class SwarmRetriever:
         position_history = torch.full((n_agents, steps + 1), -1, device=self._device, dtype=torch.long)
         position_history[:, 0] = agent_locations
 
-        query_pheromones = self.base_pheromones.copy()
+        # Tensor-based pheromones for GPU acceleration
+        query_pheromones = self._create_pheromone_tensor()
 
         # Initialize decision tracking if provided
         if decision_tracker is not None:
@@ -1709,8 +1716,9 @@ class SwarmRetriever:
 
         # Traversal loop
         for step in range(steps):
-            pheromone_updates = {}
-            max_pheromone = max(query_pheromones.values()) if query_pheromones else 1.0
+            pheromone_updates = None
+            # Single GPU reduction: max() returns 0 for all-zero tensor, use 1.0 as floor
+            max_pheromone = max(query_pheromones.max().item(), 1.0)
 
             if use_batched:
                 new_locations, pheromone_updates = self._step_agents_batched(
@@ -1727,6 +1735,7 @@ class SwarmRetriever:
                 position_history[:, step + 1] = new_locations
                 agent_locations = new_locations
             else:
+                seq_updates = {}
                 for agent_idx, (move_fn, deposit_fn) in enumerate(resolved_agents):
                     current_loc = agent_locations[agent_idx].item()
 
@@ -1750,20 +1759,24 @@ class SwarmRetriever:
 
                         deposit = result['deposit']
                         if deposit > self.PHEROMONE_EPSILON:
-                            pheromone_updates[next_node] = pheromone_updates.get(next_node, 0.0) + deposit
+                            seq_updates[next_node] = seq_updates.get(next_node, 0.0) + deposit
 
-            # Update pheromones
-            if query_pheromones:
-                existing_keys = list(query_pheromones.keys())
-                for k in existing_keys:
-                    new_val = query_pheromones[k] * decay
-                    if new_val < self.PHEROMONE_EPSILON:
-                        del query_pheromones[k]
-                    else:
-                        query_pheromones[k] = new_val
+                pheromone_updates = seq_updates if seq_updates else None
 
-            for node_id, amount in pheromone_updates.items():
-                query_pheromones[node_id] += amount
+            # Decay: single GPU operation
+            query_pheromones *= decay
+
+            # Deposit: handle both batched (tensor tuple) and sequential (dict) returns
+            if pheromone_updates is not None:
+                if isinstance(pheromone_updates, tuple):
+                    # Batched path: (deposit_ids, deposit_vals) tensors
+                    deposit_ids, deposit_vals = pheromone_updates
+                    query_pheromones = self._safe_scatter_add(query_pheromones, deposit_ids, deposit_vals)
+                else:
+                    # Sequential path: dict
+                    for node_id, amount in pheromone_updates.items():
+                        if node_id < query_pheromones.size(0):
+                            query_pheromones[node_id] += amount
 
         return self._ranking_from_history(
             position_history, query_vec, ranking_func, top_k, n_agents
