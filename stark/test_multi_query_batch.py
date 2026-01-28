@@ -106,3 +106,20 @@ class TestMultiQueryBatching:
         assert pheromones.shape == (batch_size, n_nodes)
         assert history.shape == (batch_size, n_agents, steps + 1)
         assert (history[:, :, 0] == agent_locs).all()  # First position recorded
+
+    def test_batched_neighbor_lookup(self, mock_retriever):
+        """Verify batched neighbor lookup returns correct shapes."""
+        batch_size = 4
+        n_agents = 5
+
+        # Create agent locations
+        agent_locations = torch.randint(0, 100, (batch_size, n_agents), device=mock_retriever._device)
+
+        # Call batched neighbor lookup
+        all_neighbors, neighbor_mask = mock_retriever._get_neighbors_multi_query(agent_locations)
+
+        # Should be (batch_size, n_agents, max_degree)
+        assert all_neighbors.dim() == 3
+        assert all_neighbors.shape[0] == batch_size
+        assert all_neighbors.shape[1] == n_agents
+        assert neighbor_mask.shape == all_neighbors.shape

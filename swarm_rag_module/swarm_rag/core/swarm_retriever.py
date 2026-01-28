@@ -1889,6 +1889,39 @@ class SwarmRetriever:
 
         return agent_locations, query_pheromones, position_history
 
+    def _get_neighbors_multi_query(
+        self,
+        agent_locations: torch.Tensor,  # (batch_size, n_agents)
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Batch fetch neighbors for all agents across all queries.
+
+        Args:
+            agent_locations: (batch_size, n_agents) positions
+
+        Returns:
+            all_neighbors: (batch_size, n_agents, max_degree) neighbor IDs
+            neighbor_mask: (batch_size, n_agents, max_degree) validity mask
+        """
+        batch_size, n_agents = agent_locations.shape
+        device = agent_locations.device
+
+        # Flatten all positions
+        flat_positions = agent_locations.flatten()  # (batch_size * n_agents,)
+
+        # Batch fetch from graph store
+        flat_neighbors, flat_mask = self.graph_store.get_neighbors_batch(flat_positions)
+        # flat_neighbors: (batch_size * n_agents, max_degree)
+        # flat_mask: (batch_size * n_agents, max_degree)
+
+        max_degree = flat_neighbors.shape[1]
+
+        # Reshape back to (batch_size, n_agents, max_degree)
+        all_neighbors = flat_neighbors.view(batch_size, n_agents, max_degree)
+        neighbor_mask = flat_mask.view(batch_size, n_agents, max_degree)
+
+        return all_neighbors, neighbor_mask
+
     def _retrieve_with_pool_internal(
         self,
         query_vec: torch.Tensor,
