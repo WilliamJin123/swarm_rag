@@ -1797,6 +1797,37 @@ class SwarmRetriever:
 
             return results
 
+    def _retrieve_batch_multi_query_gpu(
+        self,
+        query_embeddings: torch.Tensor,
+        initial_pools: List[List[int]],
+        resolved_agents: List[Tuple[Callable, Callable]],
+        base_seed: int,
+        batch_size: int = 32,
+        **kwargs
+    ) -> List[List[Dict]]:
+        """
+        Process multiple queries simultaneously on GPU.
+
+        Batches queries in chunks of `batch_size` to manage memory.
+        Each chunk runs the full swarm traversal with batched tensor ops.
+
+        Args:
+            query_embeddings: Pre-computed query embeddings (n_queries, dim)
+            initial_pools: List of initial candidate pools per query
+            resolved_agents: List of (move_fn, deposit_fn) tuples
+            base_seed: Base random seed for reproducibility
+            batch_size: Number of queries to process simultaneously
+            **kwargs: Additional params (steps, decay, top_k, etc.)
+
+        Returns:
+            List of result lists, one per query
+        """
+        # Stub: fall back to sequential for now
+        return self._retrieve_batch_precomputed_sequential(
+            query_embeddings, initial_pools, resolved_agents, base_seed, **kwargs
+        )
+
     def _retrieve_with_pool_internal(
         self,
         query_vec: torch.Tensor,
