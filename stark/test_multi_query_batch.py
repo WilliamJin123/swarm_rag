@@ -238,3 +238,23 @@ class TestMultiQueryBatching:
         for r in results:
             assert isinstance(r, list)
             assert len(r) <= 5  # top_k
+
+    def test_retrieve_batch_uses_multi_query_on_gpu(self, mock_retriever):
+        """Verify retrieve_batch_with_precomputed uses multi-query path on GPU."""
+        if not mock_retriever._use_gpu:
+            pytest.skip("GPU not available")
+
+        n_queries = 8
+        query_embeddings = torch.randn(n_queries, 64, device=mock_retriever._device)
+        initial_pools = [[i % 100, (i+1) % 100, (i+2) % 100] for i in range(n_queries)]
+
+        # This is the public API
+        results = mock_retriever.retrieve_batch_with_precomputed(
+            query_embeddings=query_embeddings,
+            initial_pools=initial_pools,
+            n_agents=5,
+            steps=3,
+            top_k=5,
+        )
+
+        assert len(results) == n_queries

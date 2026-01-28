@@ -1673,8 +1673,18 @@ class SwarmRetriever:
         )
 
         # Process based on device mode
-        if self._use_gpu or max_workers <= 1:
-            # Sequential processing for GPU (CUDA thread-locality)
+        if self._use_gpu:
+            # Multi-query batched processing for GPU
+            return self._retrieve_batch_multi_query_gpu(
+                query_embeddings,
+                initial_pools,
+                resolved_agents,
+                base_seed=base_seed,
+                batch_size=32,
+                **params
+            )
+        elif max_workers <= 1:
+            # Sequential processing
             return self._retrieve_batch_precomputed_sequential(
                 query_embeddings,
                 initial_pools,
