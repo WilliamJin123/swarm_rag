@@ -1828,6 +1828,67 @@ class SwarmRetriever:
             query_embeddings, initial_pools, resolved_agents, base_seed, **kwargs
         )
 
+    def _init_multi_query_state(
+        self,
+        batch_size: int,
+        n_agents: int,
+        n_nodes: int,
+        steps: int,
+        initial_pools: List[List[int]],
+        drop_zone_inc: float,
+        seed: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Initialize batched state tensors for multi-query processing.
+
+        Returns:
+            agent_locations: (batch_size, n_agents) - current positions
+            query_pheromones: (batch_size, n_nodes) - pheromone values
+            position_history: (batch_size, n_agents, steps+1) - trajectory history
+        """
+        device = self._device
+
+        # Initialize pheromones: (batch_size, n_nodes)
+        query_pheromones = torch.zeros(
+            (batch_size, n_nodes),
+            dtype=torch.float32, device=device
+        )
+
+        # Initialize position history: (batch_size, n_agents, steps+1)
+        position_history = torch.full(
+            (batch_size, n_agents, steps + 1), -1,
+            dtype=torch.long, device=device
+        )
+
+        # Initialize agent locations from pools
+        agent_locations = torch.zeros(
+            (batch_size, n_agents), dtype=torch.long, device=device
+        )
+
+        torch.manual_seed(seed)
+        for q in range(batch_size):
+            pool = initial_pools[q]
+            if not pool:
+                continue
+            pool_tensor = torch.tensor(pool, device=device, dtype=torch.long)
+            pool_len = len(pool)
+
+            # Weighted sampling favoring earlier pool entries
+            weights = torch.tensor(
+                [1.0 + drop_zone_inc * (pool_len - i - 1) for i in range(pool_len)],
+                device=device
+            )
+            weights = weights / weights.sum()
+
+            # Sample agent starting positions
+            indices = torch.multinomial(weights, n_agents, replacement=True)
+            agent_locations[q] = pool_tensor[indices]
+
+        # Record initial positions
+        position_history[:, :, 0] = agent_locations
+
+        return agent_locations, query_pheromones, position_history
+
     def _retrieve_with_pool_internal(
         self,
         query_vec: torch.Tensor,

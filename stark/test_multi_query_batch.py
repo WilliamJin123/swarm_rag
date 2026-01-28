@@ -83,3 +83,26 @@ class TestMultiQueryBatching:
         assert len(results) == n_queries
         for r in results:
             assert isinstance(r, list)
+
+    def test_batched_initialization_shapes(self, mock_retriever):
+        """Verify batched tensors have correct shapes."""
+        batch_size = 4
+        n_agents = 5
+        n_nodes = 100
+        steps = 3
+
+        # Call internal init helper (we'll add this)
+        agent_locs, pheromones, history = mock_retriever._init_multi_query_state(
+            batch_size=batch_size,
+            n_agents=n_agents,
+            n_nodes=n_nodes,
+            steps=steps,
+            initial_pools=[[0,1,2,3,4] for _ in range(batch_size)],
+            drop_zone_inc=0.05,
+            seed=42,
+        )
+
+        assert agent_locs.shape == (batch_size, n_agents)
+        assert pheromones.shape == (batch_size, n_nodes)
+        assert history.shape == (batch_size, n_agents, steps + 1)
+        assert (history[:, :, 0] == agent_locs).all()  # First position recorded
