@@ -250,31 +250,54 @@ class WeightedSumMutator:
     Self-adaptive ES-style mutation for weighted sum genomes.
 
     Mutation operators:
-    - Weight perturbation (60%): w += N(0, sigma)
-    - Bias perturbation (15%): b += N(0, sigma)
-    - Group ratio shift (10%): Rebalance proportions
-    - Hyperparam mutation (10%): Mutate n_agents, steps, decay, pool_size
-    - Group add/remove (5%): Change n_groups by +/-1
+    - Weight perturbation: w += N(0, sigma)
+    - Bias perturbation: b += N(0, sigma)
+    - Group ratio shift: Rebalance proportions
+    - Hyperparam mutation: Mutate n_agents, steps, decay, pool_size
+    - Group add/remove: Change n_groups by +/-1
+
+    Probabilities are configurable via GeneticConfig.
     """
 
-    # Mutation probabilities
-    PROB_WEIGHT = 0.60
-    PROB_BIAS = 0.15
-    PROB_RATIO = 0.10
-    PROB_HYPERPARAM = 0.10
-    PROB_GROUP_CHANGE = 0.05
+    # Default mutation probabilities (used when no config provided)
+    # These are deprecated - use GeneticConfig instead
+    DEFAULT_PROB_WEIGHT = 0.60
+    DEFAULT_PROB_BIAS = 0.15
+    DEFAULT_PROB_RATIO = 0.10
+    DEFAULT_PROB_HYPERPARAM = 0.10
+    DEFAULT_PROB_GROUP_CHANGE = 0.05
 
-    def __init__(self, feature_config: HeuristicFeatureConfig):
+    def __init__(
+        self,
+        feature_config: HeuristicFeatureConfig,
+        prob_weight: float = None,
+        prob_bias: float = None,
+        prob_ratio: float = None,
+        prob_hyperparam: float = None,
+        prob_group_change: float = None,
+    ):
         """
-        Initialize mutator with feature configuration.
+        Initialize mutator with feature configuration and optional probability overrides.
 
         Args:
             feature_config: Configuration specifying feature dimensions
+            prob_weight: Probability of weight mutation (default: 0.60)
+            prob_bias: Probability of bias mutation (default: 0.15)
+            prob_ratio: Probability of ratio mutation (default: 0.10)
+            prob_hyperparam: Probability of hyperparam mutation (default: 0.10)
+            prob_group_change: Probability of group change mutation (default: 0.05)
         """
         self.feature_config = feature_config
         self.n_movement_features = len(feature_config.movement)
         self.n_deposit_features = len(feature_config.deposit)
         self.n_ranking_features = len(feature_config.ranking)
+
+        # Use provided probabilities or defaults
+        self.prob_weight = prob_weight if prob_weight is not None else self.DEFAULT_PROB_WEIGHT
+        self.prob_bias = prob_bias if prob_bias is not None else self.DEFAULT_PROB_BIAS
+        self.prob_ratio = prob_ratio if prob_ratio is not None else self.DEFAULT_PROB_RATIO
+        self.prob_hyperparam = prob_hyperparam if prob_hyperparam is not None else self.DEFAULT_PROB_HYPERPARAM
+        self.prob_group_change = prob_group_change if prob_group_change is not None else self.DEFAULT_PROB_GROUP_CHANGE
 
     def mutate(self, genome: Genome, ctx: EvolutionContext) -> Genome:
         """
@@ -301,13 +324,13 @@ class WeightedSumMutator:
         # Step 2: Apply mutations based on probabilities
         roll = random.random()
 
-        if roll < self.PROB_WEIGHT:
+        if roll < self.prob_weight:
             self._mutate_weights(genome, sigmas)
-        elif roll < self.PROB_WEIGHT + self.PROB_BIAS:
+        elif roll < self.prob_weight + self.prob_bias:
             self._mutate_biases(genome, sigmas)
-        elif roll < self.PROB_WEIGHT + self.PROB_BIAS + self.PROB_RATIO:
+        elif roll < self.prob_weight + self.prob_bias + self.prob_ratio:
             self._mutate_ratios(genome, sigmas)
-        elif roll < self.PROB_WEIGHT + self.PROB_BIAS + self.PROB_RATIO + self.PROB_HYPERPARAM:
+        elif roll < self.prob_weight + self.prob_bias + self.prob_ratio + self.prob_hyperparam:
             self._mutate_hyperparams(genome, sigmas, ctx)
         else:
             self._mutate_group_count(genome, ctx)
@@ -833,7 +856,16 @@ def register_weighted_sum_strategies():
             mutation_fn = GeneticRegistry.get_mutation("guided_mutation")
             return mutation_fn(genome, ctx)
 
-        mutator = WeightedSumMutator(ctx.config.heuristic_features)
+        # Get mutation probabilities from config
+        genetic_config = ctx.config.genetic
+        mutator = WeightedSumMutator(
+            ctx.config.heuristic_features,
+            prob_weight=genetic_config.mutation_prob_weight,
+            prob_bias=genetic_config.mutation_prob_bias,
+            prob_ratio=genetic_config.mutation_prob_ratio,
+            prob_hyperparam=genetic_config.mutation_prob_hyperparam,
+            prob_group_change=genetic_config.mutation_prob_group_change,
+        )
         return mutator.mutate(genome, ctx)
 
     @GeneticRegistry.register_creation("weighted_sum_seeded")
