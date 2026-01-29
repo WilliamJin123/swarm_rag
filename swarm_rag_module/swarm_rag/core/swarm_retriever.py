@@ -7,8 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from contextlib import contextmanager
 import logging
-from ..utils import LRUCache, get_device, move_to_device, tensor_like
-from ..evolution.types.genome import DEFAULT_PARAMS as _GENOME_DEFAULT_PARAMS
+from ..utils import LRUCache, get_device, move_to_device, tensor_like, DEFAULT_SWARM_PARAMS
 
 if TYPE_CHECKING:
     from ..evolution.types.config import WeightTensors, HeuristicFeatureConfig
@@ -83,10 +82,10 @@ logger = logging.getLogger(__name__)
 
 
 class SwarmRetriever:
-    # Swarm hyperparameter defaults imported from single source of truth
+    # Swarm hyperparameter defaults imported from single source of truth (utils.constants)
     # Extended with retriever-specific strategy defaults
     _DEFAULT_PARAMS = {
-        **_GENOME_DEFAULT_PARAMS,
+        **DEFAULT_SWARM_PARAMS,
         # Retriever-specific defaults not in genome params
         "top_k": 20,
         # Default "Homogeneous" Strategy (Fallback)

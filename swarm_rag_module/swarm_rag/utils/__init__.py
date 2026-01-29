@@ -40,6 +40,12 @@ from .memory import (
     estimate_tensor_memory
 )
 
+# Re-export constants
+from .constants import (
+    SwarmParams,
+    DEFAULT_SWARM_PARAMS,
+)
+
 def fail_on_missing_imports(modules: list[str], extra_name: str = None):
     """
     Checks if a list of modules can be imported.
@@ -136,4 +142,7 @@ __all__ = [
     'clear_gpu_cache',
     'memory_guard',
     'estimate_tensor_memory',
+    # Constants
+    'SwarmParams',
+    'DEFAULT_SWARM_PARAMS',
 ]
