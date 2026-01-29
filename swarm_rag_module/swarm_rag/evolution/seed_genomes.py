@@ -15,61 +15,125 @@ from .types.expressions import ExpressionNode
 # Seed Genome Configurations
 # =============================================================================
 
+# =============================================================================
+# Seed Genome Configurations
+# Target metrics: Hit@1>60%, Hit@5>80%, MRR>80%, Recall@20>85%
+# =============================================================================
 SEED_GENOMES: List[Dict[str, Any]] = [
-    # High-semantic config with balanced exploration
+    # --- PRECISION-FOCUSED (Hit@1, MRR) ---
+    # High semantic similarity for precise top-1 results
     {
-        "name": "semantic_balanced",
-        "n_agents": 25,
-        "steps": 4,
-        "decay": 0.5,
+        "name": "precision_semantic",
+        "n_agents": 20,
+        "steps": 6,
+        "decay": 0.6,
         "initial_pool_size": 30,
-        "movement_tree": "ADD(MUL(semantic_similarity, 0.7), MUL(node_centrality, 0.3))",
-        "deposit_tree": "semantic_similarity",
-        "ranking_tree": "ADD(MUL(percentage_visited, 0.4), MUL(semantic_rank, 0.6))",
+        "movement_tree": "ADD(ADD(MUL(semantic_similarity_unnormalized, 0.6), MUL(stark_centrality, 0.2)), MUL(node_centrality, 0.2))",
+        "deposit_tree": "ADD(ADD(MUL(semantic_unnormalized, 0.4), MUL(hub, 0.3)), MUL(collaborative_amplification, 0.3))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.8), MUL(percentage_visited, 0.2))",
     },
-    # Hub-explorer config - emphasizes graph structure
+    # Hub highways - fast paths to relevant content
     {
-        "name": "hub_explorer",
+        "name": "precision_hub_highways",
+        "n_agents": 25,
+        "steps": 5,
+        "decay": 0.5,
+        "initial_pool_size": 35,
+        "movement_tree": "ADD(ADD(MUL(stark_centrality, 0.35), MUL(semantic_similarity_unnormalized, 0.35)), MUL(node_centrality, 0.3))",
+        "deposit_tree": "ADD(MUL(hub, 0.5), MUL(collaborative_amplification, 0.5))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.7), MUL(percentage_visited, 0.3))",
+    },
+    # Consensus-driven - multiple agents agree = high quality
+    {
+        "name": "precision_consensus",
         "n_agents": 30,
         "steps": 5,
-        "decay": 0.6,
-        "initial_pool_size": 40,
-        "movement_tree": "ADD(ADD(MUL(node_centrality, 0.5), MUL(semantic_similarity, 0.3)), MUL(pheromone_repulsion, 0.2))",
-        "deposit_tree": "node_centrality",
-        "ranking_tree": "ADD(MUL(pheromone_level, 0.3), MUL(semantic_rank, 0.7))",
+        "decay": 0.55,
+        "initial_pool_size": 35,
+        "movement_tree": "ADD(ADD(MUL(semantic_similarity_unnormalized, 0.45), MUL(stark_centrality, 0.25)), MUL(random_jitter, 0.3))",
+        "deposit_tree": "ADD(MUL(collaborative_amplification, 0.5), MUL(semantic_unnormalized, 0.5))",
+        "ranking_tree": "ADD(MUL(percentage_visited, 0.5), MUL(semantic_rank, 0.5))",
     },
-    # Diversity-focused config - avoids clustering
+
+    # --- RECALL-FOCUSED (Recall@20) ---
+    # High exploration - maximize coverage
     {
-        "name": "diversity_focused",
-        "n_agents": 20,
+        "name": "recall_explorer",
+        "n_agents": 40,
         "steps": 4,
         "decay": 0.4,
-        "initial_pool_size": 35,
-        "movement_tree": "ADD(MUL(pheromone_repulsion, 0.4), MUL(semantic_similarity, 0.6))",
-        "deposit_tree": "MUL(semantic_similarity, pheromone_repulsion)",
-        "ranking_tree": "ADD(MUL(percentage_visited, 0.5), MUL(pheromone_level, 0.5))",
+        "initial_pool_size": 50,
+        "movement_tree": "ADD(ADD(MUL(pheromone_repulsion, 0.3), MUL(random_jitter, 0.3)), MUL(semantic_similarity_unnormalized, 0.4))",
+        "deposit_tree": "ADD(MUL(exploration_bonus, 0.5), MUL(flat, 0.5))",
+        "ranking_tree": "ADD(MUL(percentage_visited, 0.4), MUL(semantic_rank, 0.6))",
     },
-    # Conservative config - fewer agents, more steps
+    # Wide swarm - many agents, shallow depth
     {
-        "name": "conservative_deep",
-        "n_agents": 18,
-        "steps": 6,
-        "decay": 0.7,
-        "initial_pool_size": 25,
-        "movement_tree": "ADD(MUL(semantic_similarity, 0.8), MUL(node_centrality, 0.2))",
-        "deposit_tree": "semantic_similarity",
-        "ranking_tree": "semantic_rank",
-    },
-    # Aggressive exploration config
-    {
-        "name": "aggressive_explorer",
-        "n_agents": 45,
+        "name": "recall_wide_swarm",
+        "n_agents": 50,
         "steps": 3,
         "decay": 0.35,
-        "initial_pool_size": 50,
-        "movement_tree": "ADD(MUL(pheromone_repulsion, 0.5), MUL(semantic_similarity, 0.5))",
-        "deposit_tree": "ADD(semantic_similarity, node_centrality)",
-        "ranking_tree": "ADD(MUL(percentage_visited, 0.6), MUL(semantic_rank, 0.4))",
+        "initial_pool_size": 60,
+        "movement_tree": "ADD(ADD(MUL(semantic_similarity_unnormalized, 0.35), MUL(random_jitter, 0.35)), MUL(pheromone_repulsion, 0.3))",
+        "deposit_tree": "ADD(MUL(exploration_bonus, 0.4), MUL(flat, 0.6))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.6), MUL(percentage_visited, 0.4))",
+    },
+    # Repulsion-driven - spread agents across graph
+    {
+        "name": "recall_repulsion",
+        "n_agents": 35,
+        "steps": 4,
+        "decay": 0.3,
+        "initial_pool_size": 45,
+        "movement_tree": "ADD(ADD(MUL(pheromone_repulsion, 0.4), MUL(semantic_similarity_unnormalized, 0.35)), MUL(stark_centrality, 0.25))",
+        "deposit_tree": "ADD(MUL(exploration_bonus, 0.6), MUL(hub, 0.4))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.7), MUL(percentage_visited, 0.3))",
+    },
+
+    # --- BALANCED VARIANTS ---
+    # Balanced baseline with all new features
+    {
+        "name": "balanced_baseline",
+        "n_agents": 25,
+        "steps": 5,
+        "decay": 0.5,
+        "initial_pool_size": 35,
+        "movement_tree": "ADD(ADD(ADD(MUL(semantic_similarity_unnormalized, 0.4), MUL(stark_centrality, 0.25)), MUL(pheromone_repulsion, 0.2)), MUL(random_jitter, 0.15))",
+        "deposit_tree": "ADD(ADD(MUL(semantic_unnormalized, 0.35), MUL(exploration_bonus, 0.35)), MUL(hub, 0.3))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.75), MUL(percentage_visited, 0.25))",
+    },
+    # Deep search - fewer agents, more steps
+    {
+        "name": "balanced_deep",
+        "n_agents": 18,
+        "steps": 8,
+        "decay": 0.7,
+        "initial_pool_size": 25,
+        "movement_tree": "ADD(ADD(MUL(semantic_similarity_unnormalized, 0.5), MUL(stark_centrality, 0.3)), MUL(node_centrality, 0.2))",
+        "deposit_tree": "ADD(MUL(semantic_unnormalized, 0.5), MUL(collaborative_amplification, 0.5))",
+        "ranking_tree": "semantic_rank",
+    },
+    # STaRK-graph optimized
+    {
+        "name": "balanced_stark_graph",
+        "n_agents": 28,
+        "steps": 5,
+        "decay": 0.5,
+        "initial_pool_size": 40,
+        "movement_tree": "ADD(ADD(MUL(stark_centrality, 0.4), MUL(semantic_similarity_unnormalized, 0.35)), MUL(node_centrality, 0.25))",
+        "deposit_tree": "ADD(ADD(MUL(hub, 0.4), MUL(semantic_unnormalized, 0.3)), MUL(exploration_bonus, 0.3))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.8), MUL(percentage_visited, 0.2))",
+    },
+    # Hybrid precision-recall
+    {
+        "name": "balanced_hybrid",
+        "n_agents": 32,
+        "steps": 5,
+        "decay": 0.45,
+        "initial_pool_size": 40,
+        "movement_tree": "ADD(ADD(ADD(MUL(semantic_similarity_unnormalized, 0.35), MUL(stark_centrality, 0.25)), MUL(pheromone_repulsion, 0.2)), MUL(random_jitter, 0.2))",
+        "deposit_tree": "ADD(ADD(MUL(semantic_unnormalized, 0.3), MUL(exploration_bonus, 0.3)), MUL(collaborative_amplification, 0.4))",
+        "ranking_tree": "ADD(MUL(semantic_rank, 0.65), MUL(percentage_visited, 0.35))",
     },
 ]
 

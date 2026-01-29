@@ -13,8 +13,13 @@ Usage:
 import argparse
 import os
 import random
+import sys
 import time
 import torch
+
+# Ensure UTF-8 encoding for stdout (Windows compatibility)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 from swarm_rag.core import Heuristics, SwarmRetriever, HeuristicRegistry
 from swarm_rag.interfaces.enums import HeuristicKey
@@ -146,7 +151,9 @@ def main():
     indices = list(range(n_questions))
     print(f"Questions: {n_questions}/{total_q}" + (" (full)" if args.full else ""))
 
-    cache_dir = os.path.join("stark", "adjacency_cache")
+    # Use script directory as base for cache paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cache_dir = os.path.join(script_dir, "adjacency_cache")
     os.makedirs(cache_dir, exist_ok=True)
     embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
     evaluator = Evaluator(k_values=[1, 5, 10, 20])

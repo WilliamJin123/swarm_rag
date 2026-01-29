@@ -1,9 +1,9 @@
 Found a genome that has:
 
 Hit@1 > 60%
-Hit@5 > 75%
-Recall@20 > 80%
-MRR > 75%
+Hit@5 > 80%
+Recall@20 > 85%
+MRR > 80%
 
 across the test set and / or the validation set and / or the human eval set.
 

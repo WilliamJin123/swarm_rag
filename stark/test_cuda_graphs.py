@@ -6,6 +6,10 @@ import os
 import sys
 import time
 
+# Ensure UTF-8 encoding for stdout (Windows compatibility)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # Enable profiling
 os.environ['SWARM_PROFILE'] = '1'
 
@@ -17,6 +21,7 @@ from swarm_rag.integrations.stark import (
     StarkVectorStore,
     StarkGraphAdapter,
 )
+from swarm_rag.evolution.types.config import STARK_FEATURES
 from load_stark import (
     load_and_download_embeddings,
     load_and_download_skb,
@@ -25,8 +30,8 @@ from load_stark import (
 )
 
 
-def make_config(n_agents=20, steps=4):
-    return {
+def make_config(n_agents=20, steps=4, weight_tensors=None):
+    config = {
         "n_agents": n_agents,
         "steps": steps,
         "decay": 0.5,
@@ -46,7 +51,11 @@ def make_config(n_agents=20, steps=4):
             "visited": (Heuristics.percentage_visited, 0.1),
             "semantic": (Heuristics.semantic_rank, 0.9),
         },
+        "feature_config": STARK_FEATURES,
     }
+    if weight_tensors is not None:
+        config["weight_tensors"] = weight_tensors
+    return config
 
 
 def benchmark_config(retriever, query_ids, config, name, warmup=3, n_runs=1):
@@ -88,7 +97,9 @@ def main():
 
     # Create stores with dense=True for fused path
     print("Creating stores (dense=True for fast path)...")
-    cache_dir = os.path.join("stark", "adjacency_cache")
+    # Use script directory as base for cache paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cache_dir = os.path.join(script_dir, "adjacency_cache")
     os.makedirs(cache_dir, exist_ok=True)
 
     graph_store = StarkGraphAdapter(
@@ -108,6 +119,11 @@ def main():
         device="cuda"
     )
 
+    # Create weight_tensors for batched GPU path
+    # Features: [semantic_similarity_unnormalized, stark_centrality, node_centrality, pheromone_repulsion]
+    weight_tensors = retriever._create_default_weight_tensors(device="cuda")
+    weight_tensors.movement_weights = torch.tensor([[0.5, 0.2, 0.0, 0.25]], device="cuda")
+
     # Get test queries
     n_queries = 50
     query_ids = [qa_data[i][1] for i in range(n_queries)]
@@ -116,31 +132,31 @@ def main():
     results = []
 
     # Test 1: Baseline (4 steps, 20 agents)
-    config = make_config(n_agents=20, steps=4)
+    config = make_config(n_agents=20, steps=4, weight_tensors=weight_tensors)
     latency = benchmark_config(retriever, query_ids, config, "baseline")
     results.append(("Baseline (4 steps, 20 agents)", latency))
     print(f"  Baseline: {latency:.2f} ms/query")
 
     # Test 2: Reduced steps (3 steps)
-    config = make_config(n_agents=20, steps=3)
+    config = make_config(n_agents=20, steps=3, weight_tensors=weight_tensors)
     latency = benchmark_config(retriever, query_ids, config, "3 steps")
     results.append(("3 steps, 20 agents", latency))
     print(f"  3 steps:  {latency:.2f} ms/query")
 
     # Test 3: Reduced steps (2 steps)
-    config = make_config(n_agents=20, steps=2)
+    config = make_config(n_agents=20, steps=2, weight_tensors=weight_tensors)
     latency = benchmark_config(retriever, query_ids, config, "2 steps")
     results.append(("2 steps, 20 agents", latency))
     print(f"  2 steps:  {latency:.2f} ms/query")
 
     # Test 4: Fewer agents (2 steps, 15 agents)
-    config = make_config(n_agents=15, steps=2)
+    config = make_config(n_agents=15, steps=2, weight_tensors=weight_tensors)
     latency = benchmark_config(retriever, query_ids, config, "2 steps 15 agents")
     results.append(("2 steps, 15 agents", latency))
     print(f"  2 steps, 15 agents: {latency:.2f} ms/query")
 
     # Test 5: Minimal (2 steps, 10 agents)
-    config = make_config(n_agents=10, steps=2)
+    config = make_config(n_agents=10, steps=2, weight_tensors=weight_tensors)
     latency = benchmark_config(retriever, query_ids, config, "2 steps 10 agents")
     results.append(("2 steps, 10 agents", latency))
     print(f"  2 steps, 10 agents: {latency:.2f} ms/query")
@@ -164,15 +180,15 @@ def main():
 
     # Re-run best config with profiling
     if "2 steps, 10" in best_name:
-        config = make_config(n_agents=10, steps=2)
+        config = make_config(n_agents=10, steps=2, weight_tensors=weight_tensors)
     elif "2 steps, 15" in best_name:
-        config = make_config(n_agents=15, steps=2)
+        config = make_config(n_agents=15, steps=2, weight_tensors=weight_tensors)
     elif "2 steps, 20" in best_name:
-        config = make_config(n_agents=20, steps=2)
+        config = make_config(n_agents=20, steps=2, weight_tensors=weight_tensors)
     elif "3 steps" in best_name:
-        config = make_config(n_agents=20, steps=3)
+        config = make_config(n_agents=20, steps=3, weight_tensors=weight_tensors)
     else:
-        config = make_config(n_agents=20, steps=4)
+        config = make_config(n_agents=20, steps=4, weight_tensors=weight_tensors)
 
     retriever._profiler.reset()
     for qid in query_ids[:3]:

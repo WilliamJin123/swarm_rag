@@ -1,8 +1,15 @@
 """Benchmark multi-query batching performance."""
+import sys
 import time
 import torch
 import argparse
 from typing import Optional
+
+# Ensure UTF-8 encoding for stdout (Windows compatibility)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
+from swarm_rag.evolution.types.config import STARK_FEATURES
 
 
 def get_gpu_memory_mb() -> float:
@@ -31,6 +38,11 @@ def benchmark_batch_sizes(retriever, n_queries=50, batch_sizes=[1, 8, 16, 32, 64
         retriever._DEFAULT_PARAMS['deposit_strategies'],
     )
 
+    # Create weight tensors for STARK features
+    weight_tensors = retriever._create_default_weight_tensors(device=retriever._device)
+    # Update to match STARK_FEATURES (4 movement features)
+    weight_tensors.movement_weights = torch.tensor([[0.5, 0.2, 0.2, 0.1]], device=retriever._device)
+
     results = {}
 
     for bs in batch_sizes:
@@ -41,6 +53,8 @@ def benchmark_batch_sizes(retriever, n_queries=50, batch_sizes=[1, 8, 16, 32, 64
             base_seed=42, batch_size=bs, steps=5, decay=0.9,
             drop_zone_inc=0.05, start_subset=10, top_k=20,
             ranking_strategies=retriever._DEFAULT_PARAMS['ranking_strategies'],
+            weight_tensors=weight_tensors,
+            feature_config=STARK_FEATURES,
         )
         torch.cuda.synchronize()
 
@@ -52,6 +66,8 @@ def benchmark_batch_sizes(retriever, n_queries=50, batch_sizes=[1, 8, 16, 32, 64
             base_seed=42, batch_size=bs, steps=5, decay=0.9,
             drop_zone_inc=0.05, start_subset=10, top_k=20,
             ranking_strategies=retriever._DEFAULT_PARAMS['ranking_strategies'],
+            weight_tensors=weight_tensors,
+            feature_config=STARK_FEATURES,
         )
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
@@ -74,6 +90,10 @@ def benchmark_sequential_vs_batched(retriever, n_queries=50):
         retriever._DEFAULT_PARAMS['deposit_strategies'],
     )
 
+    # Create weight tensors for STARK features
+    weight_tensors = retriever._create_default_weight_tensors(device=retriever._device)
+    weight_tensors.movement_weights = torch.tensor([[0.5, 0.2, 0.2, 0.1]], device=retriever._device)
+
     params = {
         'steps': 5,
         'decay': 0.9,
@@ -81,6 +101,8 @@ def benchmark_sequential_vs_batched(retriever, n_queries=50):
         'start_subset': 10,
         'top_k': 20,
         'ranking_strategies': retriever._DEFAULT_PARAMS['ranking_strategies'],
+        'weight_tensors': weight_tensors,
+        'feature_config': STARK_FEATURES,
     }
 
     # Warmup
@@ -262,6 +284,10 @@ def benchmark_evolution_style(retriever, n_queries=50, n_genomes=5, batch_size=3
     # Also benchmark old API for comparison
     reset_gpu_memory()
 
+    # Create weight tensors for old API
+    weight_tensors = retriever._create_default_weight_tensors(device=retriever._device)
+    weight_tensors.movement_weights = torch.tensor([[0.5, 0.2, 0.2, 0.1]], device=retriever._device)
+
     start = time.perf_counter()
     for g in range(n_genomes):
         _ = retriever.retrieve_batch_with_precomputed(
@@ -274,6 +300,8 @@ def benchmark_evolution_style(retriever, n_queries=50, n_genomes=5, batch_size=3
             start_subset=10,
             top_k=20,
             max_workers=4,
+            weight_tensors=weight_tensors,
+            feature_config=STARK_FEATURES,
         )
     torch.cuda.synchronize() if torch.cuda.is_available() else None
     old_api_time = time.perf_counter() - start

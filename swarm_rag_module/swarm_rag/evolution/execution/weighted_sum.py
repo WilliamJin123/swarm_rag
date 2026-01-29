@@ -460,81 +460,169 @@ class WeightedSumMutator:
 # WeightedSumSeeder
 # =============================================================================
 
-# Baseline configuration from test_n_q.py
+# Baseline configuration - balanced starting point
+# Target metrics: Hit@1>60%, Hit@5>80%, MRR>80%, Recall@20>85%
 BASELINE_CONFIG = {
     "n_agents": 25,
     "steps": 5,
     "decay": 0.5,
     "initial_pool_size": 30,
     "movement_weights": {
-        "semantic_similarity_unnormalized": 0.50,
-        "stark_centrality": 0.20,
-        "node_centrality": 0.15,
-        "pheromone_repulsion": 0.25,
+        "semantic_similarity_unnormalized": 0.40,  # Core relevance signal
+        "stark_centrality": 0.20,                  # STaRK graph structure
+        "node_centrality": 0.15,                   # Hub navigation
+        "pheromone_repulsion": 0.15,               # Avoid over-visited
+        "random_jitter": 0.10,                     # Exploration noise
     },
     "deposit_weights": {
-        "flat": 1.0,
-        "semantic_unnormalized": 0.0,
-        "exploration_bonus": 0.0,
+        "flat": 0.30,                              # Baseline deposit
+        "semantic_unnormalized": 0.25,             # Relevance-weighted
+        "exploration_bonus": 0.20,                 # Reward new nodes
+        "hub": 0.15,                               # Reinforce hubs
+        "collaborative_amplification": 0.10,      # Consensus paths
     },
     "ranking_weights": {
-        "semantic_rank": 0.90,
-        "percentage_visited": 0.10,
+        "semantic_rank": 0.80,                     # Primary ranking signal
+        "percentage_visited": 0.20,                # Swarm consensus
     },
 }
 
-# Seed variants as specified in the plan
+# =============================================================================
+# Seed Variants - Diverse configurations targeting different metrics
+# =============================================================================
+# Strategy:
+# - Precision seeds (Hit@1, MRR): high semantic, hub deposit, collaborative_amp
+# - Recall seeds (Recall@20): high jitter, exploration, many agents
+# - Balanced seeds: different trade-offs between precision and recall
 SEED_VARIANTS = [
-    # 1. baseline_exact
-    {"name": "baseline_exact", "changes": {}},
+    # --- BASELINE ---
+    {"name": "baseline_balanced", "changes": {}},
 
-    # 2. high_semantic
-    {"name": "high_semantic", "changes": {
-        "movement_weights": {"semantic_similarity_unnormalized": 0.65, "stark_centrality": 0.15,
-                            "node_centrality": 0.10, "pheromone_repulsion": 0.15},
+    # --- PRECISION-FOCUSED (Hit@1, MRR) ---
+    # High semantic similarity for precise top-1 results
+    {"name": "precision_semantic", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.60, "stark_centrality": 0.15,
+            "node_centrality": 0.10, "pheromone_repulsion": 0.10, "random_jitter": 0.05,
+        },
+        "deposit_weights": {
+            "flat": 0.10, "semantic_unnormalized": 0.40, "exploration_bonus": 0.10,
+            "hub": 0.20, "collaborative_amplification": 0.20,
+        },
+        "n_agents": 20, "steps": 6,
     }},
 
-    # 3. high_explore
-    {"name": "high_explore", "changes": {
-        "movement_weights": {"semantic_similarity_unnormalized": 0.35, "stark_centrality": 0.20,
-                            "node_centrality": 0.10, "pheromone_repulsion": 0.40},
+    # Hub highways - fast paths to relevant content
+    {"name": "precision_hub_highways", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.35, "stark_centrality": 0.30,
+            "node_centrality": 0.20, "pheromone_repulsion": 0.10, "random_jitter": 0.05,
+        },
+        "deposit_weights": {
+            "flat": 0.10, "semantic_unnormalized": 0.20, "exploration_bonus": 0.10,
+            "hub": 0.35, "collaborative_amplification": 0.25,
+        },
     }},
 
-    # 4. hub_focused
-    {"name": "hub_focused", "changes": {
-        "movement_weights": {"semantic_similarity_unnormalized": 0.40, "stark_centrality": 0.35,
-                            "node_centrality": 0.15, "pheromone_repulsion": 0.10},
+    # Consensus-driven - multiple agents agree = high quality
+    {"name": "precision_consensus", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.45, "stark_centrality": 0.20,
+            "node_centrality": 0.15, "pheromone_repulsion": 0.05, "random_jitter": 0.15,
+        },
+        "deposit_weights": {
+            "flat": 0.05, "semantic_unnormalized": 0.25, "exploration_bonus": 0.10,
+            "hub": 0.20, "collaborative_amplification": 0.40,
+        },
+        "ranking_weights": {"semantic_rank": 0.60, "percentage_visited": 0.40},
     }},
 
-    # 5. no_jitter (remove random_jitter emphasis)
-    {"name": "no_jitter", "changes": {
-        "movement_weights": {"semantic_similarity_unnormalized": 0.55, "stark_centrality": 0.20,
-                            "node_centrality": 0.15, "pheromone_repulsion": 0.25},
+    # --- RECALL-FOCUSED (Recall@20) ---
+    # High exploration - maximize coverage
+    {"name": "recall_explorer", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.25, "stark_centrality": 0.15,
+            "node_centrality": 0.15, "pheromone_repulsion": 0.25, "random_jitter": 0.20,
+        },
+        "deposit_weights": {
+            "flat": 0.20, "semantic_unnormalized": 0.15, "exploration_bonus": 0.40,
+            "hub": 0.15, "collaborative_amplification": 0.10,
+        },
+        "n_agents": 40, "steps": 4, "initial_pool_size": 50,
     }},
 
-    # 6. semantic_deposit
-    {"name": "semantic_deposit", "changes": {
-        "deposit_weights": {"flat": 0.3, "semantic_unnormalized": 0.5, "exploration_bonus": 0.2},
+    # Wide search - many agents, shallow depth
+    {"name": "recall_wide_swarm", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.30, "stark_centrality": 0.20,
+            "node_centrality": 0.10, "pheromone_repulsion": 0.20, "random_jitter": 0.20,
+        },
+        "deposit_weights": {
+            "flat": 0.30, "semantic_unnormalized": 0.20, "exploration_bonus": 0.30,
+            "hub": 0.10, "collaborative_amplification": 0.10,
+        },
+        "n_agents": 50, "steps": 3, "initial_pool_size": 60,
     }},
 
-    # 7. consensus_rank
-    {"name": "consensus_rank", "changes": {
+    # Repulsion-driven - spread agents across graph
+    {"name": "recall_repulsion", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.30, "stark_centrality": 0.15,
+            "node_centrality": 0.10, "pheromone_repulsion": 0.35, "random_jitter": 0.10,
+        },
+        "deposit_weights": {
+            "flat": 0.15, "semantic_unnormalized": 0.15, "exploration_bonus": 0.45,
+            "hub": 0.15, "collaborative_amplification": 0.10,
+        },
+        "decay": 0.3,  # Fast decay to encourage spread
+    }},
+
+    # --- BALANCED VARIANTS ---
+    # Deep search - fewer agents, more steps
+    {"name": "balanced_deep", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.45, "stark_centrality": 0.20,
+            "node_centrality": 0.15, "pheromone_repulsion": 0.10, "random_jitter": 0.10,
+        },
+        "n_agents": 18, "steps": 8, "decay": 0.7,
+    }},
+
+    # STaRK-optimized - leverage graph structure
+    {"name": "balanced_stark_graph", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.30, "stark_centrality": 0.35,
+            "node_centrality": 0.15, "pheromone_repulsion": 0.10, "random_jitter": 0.10,
+        },
+        "deposit_weights": {
+            "flat": 0.20, "semantic_unnormalized": 0.20, "exploration_bonus": 0.20,
+            "hub": 0.25, "collaborative_amplification": 0.15,
+        },
+    }},
+
+    # Semantic-deposit synergy
+    {"name": "balanced_semantic_deposit", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.50, "stark_centrality": 0.15,
+            "node_centrality": 0.10, "pheromone_repulsion": 0.15, "random_jitter": 0.10,
+        },
+        "deposit_weights": {
+            "flat": 0.10, "semantic_unnormalized": 0.45, "exploration_bonus": 0.15,
+            "hub": 0.15, "collaborative_amplification": 0.15,
+        },
+    }},
+
+    # Hybrid precision-recall
+    {"name": "balanced_hybrid", "changes": {
+        "movement_weights": {
+            "semantic_similarity_unnormalized": 0.35, "stark_centrality": 0.20,
+            "node_centrality": 0.15, "pheromone_repulsion": 0.15, "random_jitter": 0.15,
+        },
+        "deposit_weights": {
+            "flat": 0.15, "semantic_unnormalized": 0.25, "exploration_bonus": 0.25,
+            "hub": 0.20, "collaborative_amplification": 0.15,
+        },
         "ranking_weights": {"semantic_rank": 0.70, "percentage_visited": 0.30},
-    }},
-
-    # 8. more_agents
-    {"name": "more_agents", "changes": {
-        "n_agents": 35, "steps": 4,
-    }},
-
-    # 9. deeper_search
-    {"name": "deeper_search", "changes": {
-        "n_agents": 20, "steps": 7, "decay": 0.7,
-    }},
-
-    # 10. fast_shallow
-    {"name": "fast_shallow", "changes": {
-        "n_agents": 40, "steps": 3, "initial_pool_size": 50,
+        "n_agents": 30, "steps": 5,
     }},
 ]
 

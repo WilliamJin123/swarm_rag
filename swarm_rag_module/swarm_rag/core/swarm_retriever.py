@@ -1,12 +1,15 @@
 import random
 import time
 import torch
-from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict, Callable, Union
+from typing import Any, List, Dict, Optional, Sequence, Tuple, TypedDict, Callable, Union, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from contextlib import contextmanager
 import logging
 from ..utils import LRUCache, get_device, move_to_device, tensor_like
+
+if TYPE_CHECKING:
+    from ..evolution.types.config import WeightTensors, HeuristicFeatureConfig
 
 
 class StepProfiler:
@@ -62,7 +65,6 @@ from ..interfaces.retriever_types import (
     TraversalState,
     QueryBuilder,
 )
-from ..evolution.types.config import WeightTensors
 
 class AgentGroupConfig(TypedDict):
     """
@@ -101,6 +103,25 @@ class SwarmRetriever:
     )
     
     PHEROMONE_EPSILON = 1e-6
+
+    @staticmethod
+    def _create_default_weight_tensors(device: str = "cpu") -> "WeightTensors":
+        """
+        Create default WeightTensors matching _DEFAULT_PARAMS movement weights.
+
+        Default features: [semantic_similarity_unnormalized, node_centrality, pheromone_repulsion]
+        Default weights:  [0.3,                              0.4,             0.3]
+        """
+        # Import here to avoid circular import at module level
+        from ..evolution.types.config import WeightTensors
+        return WeightTensors(
+            movement_weights=torch.tensor([[0.3, 0.4, 0.3]], dtype=torch.float32, device=device),
+            movement_biases=torch.zeros(1, dtype=torch.float32, device=device),
+            deposit_weights=torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32, device=device),
+            deposit_biases=torch.zeros(1, dtype=torch.float32, device=device),
+            ranking_weights=torch.tensor([0.8, 0.2], dtype=torch.float32, device=device),
+            ranking_bias=0.0,
+        )
 
     def __init__(
         self,
@@ -516,6 +537,19 @@ class SwarmRetriever:
         """
         Core retrieval logic shared between retrieve() and retrieve_batch().
         """
+        # Get weight tensors from kwargs or create default
+        weight_tensors: "WeightTensors" = kwargs.get(
+            'weight_tensors',
+            self._create_default_weight_tensors(device=self._device)
+        )
+
+        # Get feature names from feature_config or use defaults
+        feature_config = kwargs.get('feature_config', None)
+        if feature_config is not None:
+            feature_names = feature_config.movement
+        else:
+            # Default feature names matching _DEFAULT_PARAMS order
+            feature_names = ["semantic_similarity_unnormalized", "node_centrality", "pheromone_repulsion"]
 
         n_agents = len(resolved_agents)
         prof = self._profiler
@@ -609,6 +643,8 @@ class SwarmRetriever:
                         step=step,
                         max_pheromone=max_pheromone,
                         torch_gen=torch_gen,
+                        weight_tensors=weight_tensors,
+                        feature_names=feature_names,
                     )
 
                 # Pure tensor assignment - no .item() calls
@@ -964,7 +1000,8 @@ class SwarmRetriever:
         step: int,
         max_pheromone: float,
         torch_gen: torch.Generator,
-        weight_tensors: Optional[WeightTensors] = None,
+        weight_tensors: "WeightTensors",
+        feature_names: List[str],
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Process all agents in one batched GPU operation.
@@ -1092,39 +1129,34 @@ class SwarmRetriever:
         flat_pheromones = torch.where(out_of_bounds, torch.zeros_like(flat_pheromones), flat_pheromones)
         neighbor_pheromones[neighbor_mask] = flat_pheromones
 
-        # Compute combined scores using vectorized heuristics
-        # Semantic similarity (already computed)
-        semantic_scores = neighbor_sims.clone()
-        semantic_scores = (semantic_scores + 1.0) / 2.0  # Scale to [0, 1]
-
-        # Centrality heuristic (log degree normalized)
+        # Compute features dynamically based on feature_names
+        # Pre-compute common intermediate values
+        semantic_scores = (neighbor_sims.clone() + 1.0) / 2.0  # Scale to [0, 1]
         log_degrees = torch.log(1 + all_neighbor_degrees)
-        # Use pre-computed avg_log_degree (computed once in __init__)
         centrality_scores = log_degrees / (log_degrees + self._avg_log_degree + 1e-8)
-
-        # Pheromone repulsion
         normalized_pheromones = neighbor_pheromones / (max_pheromone + 1e-8)
         repulsion_scores = 1.0 - normalized_pheromones
 
-        # Combine features using genome weights (or defaults if not provided)
-        # Movement features: [0] semantic, [1] stark_centrality (unused), [2] node_centrality, [3] pheromone_repulsion
-        if weight_tensors is not None:
-            # Use genome weights - take mean across groups for now (all agents use same weights)
-            w = weight_tensors.movement_weights.mean(dim=0)  # (n_features,)
-            w_semantic = w[0].item()
-            w_centrality = w[2].item()  # node_centrality is feature index 2
-            w_repulsion = w[3].item()   # pheromone_repulsion is feature index 3
-        else:
-            # Fallback to default weights
-            w_semantic = 0.3
-            w_centrality = 0.4
-            w_repulsion = 0.3
+        # Feature computation registry (batched versions)
+        feature_registry = {
+            "semantic_similarity_unnormalized": semantic_scores,
+            "semantic_similarity": semantic_scores,
+            "stark_centrality": centrality_scores,  # Same as node_centrality for batched
+            "node_centrality": centrality_scores,
+            "pheromone_repulsion": repulsion_scores,
+            "random_jitter": torch.rand_like(semantic_scores) * 0.1,
+        }
 
-        total_scores = (
-            w_semantic * semantic_scores +
-            w_centrality * centrality_scores +
-            w_repulsion * repulsion_scores
-        )
+        # Get weights for each feature in order (mean across groups)
+        w = weight_tensors.movement_weights.mean(dim=0)  # (n_features,)
+
+        # Compute weighted sum of features
+        total_scores = torch.zeros_like(semantic_scores)
+        for i, feat_name in enumerate(feature_names):
+            if feat_name in feature_registry:
+                feat_tensor = feature_registry[feat_name]
+                weight = w[i].item() if i < w.numel() else 0.0
+                total_scores = total_scores + weight * feat_tensor
 
         # Apply mask: set invalid neighbors to 0
         total_scores = torch.where(neighbor_mask, total_scores, torch.zeros_like(total_scores))
@@ -2505,6 +2537,15 @@ class SwarmRetriever:
         start_subset = kwargs.get('start_subset', self._DEFAULT_PARAMS['start_subset'])
         top_k = kwargs.get('top_k', self._DEFAULT_PARAMS['top_k'])
         ranking_strategies = kwargs.get('ranking_strategies', self._DEFAULT_PARAMS['ranking_strategies'])
+        weight_tensors: "WeightTensors" = kwargs['weight_tensors']  # Required
+
+        # Get feature config for dynamic feature computation
+        feature_config = kwargs.get('feature_config', None)
+        if feature_config is not None:
+            feature_names = feature_config.movement
+        else:
+            # Default feature names matching _DEFAULT_PARAMS order
+            feature_names = ["semantic_similarity_unnormalized", "node_centrality", "pheromone_repulsion"]
 
         ranking_func = self._compose_strategy(ranking_strategies, "ranking")
 
@@ -2545,6 +2586,8 @@ class SwarmRetriever:
                     query_pheromones=pheromones,
                     step=step,
                     max_pheromone=max_pheromone.item(),
+                    weight_tensors=weight_tensors,
+                    feature_names=feature_names,
                 )
 
                 # Update positions
@@ -2807,7 +2850,8 @@ class SwarmRetriever:
         query_pheromones: torch.Tensor,  # (batch_size, n_nodes)
         step: int,
         max_pheromone: float,
-        weight_tensors: Optional[WeightTensors] = None,
+        weight_tensors: "WeightTensors",
+        feature_names: List[str],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Execute one step for all agents across all queries.
@@ -2843,34 +2887,34 @@ class SwarmRetriever:
         flat_degrees = self.graph_store.get_degrees_batch(flat_neighbors.clamp(0, self._max_node_id))
         all_degrees = flat_degrees.float().view(batch_size, n_agents, max_degree)
 
-        # 5. Compute heuristic scores
-        # Centrality: log(1 + degree) / (log(1 + degree) + avg_log_degree)
+        # 5. Compute features dynamically based on feature_names
+        # Pre-compute common intermediate values
+        semantic_scores = (similarities + 1.0) / 2.0  # Scale to [0, 1]
         log_degrees = torch.log(1 + all_degrees)
         centrality_scores = log_degrees / (log_degrees + self._avg_log_degree + 1e-8)
-
-        # Pheromone repulsion: 1 - normalized_pheromone
         normalized_pheromones = pheromone_vals / (max_pheromone + 1e-8)
         repulsion_scores = 1.0 - normalized_pheromones
 
-        # Combine features using genome weights (or defaults if not provided)
-        # Movement features: [0] semantic, [1] stark_centrality (unused), [2] node_centrality, [3] pheromone_repulsion
-        if weight_tensors is not None:
-            # Use genome weights - take mean across groups for now (all agents use same weights)
-            w = weight_tensors.movement_weights.mean(dim=0)  # (n_features,)
-            w_semantic = w[0].item()
-            w_centrality = w[2].item()  # node_centrality is feature index 2
-            w_repulsion = w[3].item()   # pheromone_repulsion is feature index 3
-        else:
-            # Fallback to default weights
-            w_semantic = 0.3
-            w_centrality = 0.4
-            w_repulsion = 0.3
+        # Feature computation registry (batched versions)
+        feature_registry = {
+            "semantic_similarity_unnormalized": semantic_scores,
+            "semantic_similarity": semantic_scores,
+            "stark_centrality": centrality_scores,  # Same as node_centrality for batched
+            "node_centrality": centrality_scores,
+            "pheromone_repulsion": repulsion_scores,
+            "random_jitter": torch.rand_like(semantic_scores) * 0.1,
+        }
 
-        total_scores = (
-            w_semantic * similarities +
-            w_centrality * centrality_scores +
-            w_repulsion * repulsion_scores
-        )
+        # Get weights for each feature in order (mean across groups)
+        w = weight_tensors.movement_weights.mean(dim=0)  # (n_features,)
+
+        # Compute weighted sum of features
+        total_scores = torch.zeros_like(semantic_scores)
+        for i, feat_name in enumerate(feature_names):
+            if feat_name in feature_registry:
+                feat_tensor = feature_registry[feat_name]
+                weight = w[i].item() if i < w.numel() else 0.0
+                total_scores = total_scores + weight * feat_tensor
 
         # Apply mask
         total_scores = torch.where(neighbor_mask, total_scores, torch.zeros_like(total_scores))
@@ -2922,6 +2966,20 @@ class SwarmRetriever:
         Shared implementation used by both retrieve_with_precomputed
         and _retrieve_with_pool.
         """
+        # Get weight tensors from kwargs or create default
+        weight_tensors: "WeightTensors" = kwargs.get(
+            'weight_tensors',
+            self._create_default_weight_tensors(device=self._device)
+        )
+
+        # Get feature names from feature_config or use defaults
+        feature_config = kwargs.get('feature_config', None)
+        if feature_config is not None:
+            feature_names = feature_config.movement
+        else:
+            # Default feature names matching _DEFAULT_PARAMS order
+            feature_names = ["semantic_similarity_unnormalized", "node_centrality", "pheromone_repulsion"]
+
         n_agents = len(resolved_agents)
 
         # Pre-compose ranking strategy
@@ -2984,6 +3042,8 @@ class SwarmRetriever:
                     step=step,
                     max_pheromone=max_pheromone,
                     torch_gen=torch_gen,
+                    weight_tensors=weight_tensors,
+                    feature_names=feature_names,
                 )
 
                 # Pure tensor assignment - no .item() calls

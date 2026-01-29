@@ -2,6 +2,8 @@
 import torch
 import pytest
 
+from swarm_rag.evolution.types.config import STARK_FEATURES
+
 
 class TestMultiQueryBatching:
     """Test multi-query batched retrieval matches sequential."""
@@ -67,6 +69,9 @@ class TestMultiQueryBatching:
             deposit_strategies=mock_retriever._DEFAULT_PARAMS['deposit_strategies'],
         )
 
+        # Create weight tensors for testing
+        weight_tensors = mock_retriever._create_default_weight_tensors(device=mock_retriever._device)
+
         results = mock_retriever._retrieve_batch_multi_query_gpu(
             query_embeddings=query_embeddings,
             initial_pools=initial_pools,
@@ -78,6 +83,7 @@ class TestMultiQueryBatching:
             start_subset=3,
             top_k=5,
             ranking_strategies=mock_retriever._DEFAULT_PARAMS['ranking_strategies'],
+            weight_tensors=weight_tensors,
         )
 
         assert len(results) == n_queries
@@ -193,12 +199,18 @@ class TestMultiQueryBatching:
 
         query_vecs = torch.randn(batch_size, 64, device=mock_retriever._device)
 
+        # Create weight tensors for testing
+        weight_tensors = mock_retriever._create_default_weight_tensors(device=mock_retriever._device)
+        feature_names = ["semantic_similarity_unnormalized", "node_centrality", "pheromone_repulsion"]
+
         new_locs, deposits = mock_retriever._step_multi_query(
             agent_locations=agent_locs,
             query_vecs=query_vecs,
             query_pheromones=pheromones,
             step=0,
             max_pheromone=1.0,
+            weight_tensors=weight_tensors,
+            feature_names=feature_names,
         )
 
         assert new_locs.shape == (batch_size, n_agents)
@@ -219,6 +231,9 @@ class TestMultiQueryBatching:
             deposit_strategies=mock_retriever._DEFAULT_PARAMS['deposit_strategies'],
         )
 
+        # Create weight tensors for testing
+        weight_tensors = mock_retriever._create_default_weight_tensors(device=mock_retriever._device)
+
         # This should now use the real batched implementation
         results = mock_retriever._retrieve_batch_multi_query_gpu(
             query_embeddings=query_embeddings,
@@ -232,6 +247,7 @@ class TestMultiQueryBatching:
             start_subset=5,
             top_k=5,
             ranking_strategies=mock_retriever._DEFAULT_PARAMS['ranking_strategies'],
+            weight_tensors=weight_tensors,
         )
 
         assert len(results) == n_queries

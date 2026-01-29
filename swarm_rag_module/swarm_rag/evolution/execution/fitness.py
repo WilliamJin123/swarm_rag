@@ -40,10 +40,10 @@ class FitnessConfig:
 
     # Metric configurations
     metric_configs: Dict[str, MetricConfig] = field(default_factory=lambda: {
-        "Hit@1": MetricConfig(weight=0.25, threshold=0.50, min_acceptable=0.10),
-        "Hit@5": MetricConfig(weight=0.25, threshold=0.70, min_acceptable=0.20),
+        "Hit@1": MetricConfig(weight=0.25, threshold=0.60, min_acceptable=0.10),
+        "Hit@5": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.20),
         "MRR": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.20),
-        "Recall@20": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.30),
+        "Recall@20": MetricConfig(weight=0.25, threshold=0.85, min_acceptable=0.30),
     })
 
     # Mode-specific parameters
@@ -335,10 +335,10 @@ def create_fitness_calculator(
 
     # Build metric configs
     default_configs = {
-        "Hit@1": MetricConfig(weight=0.25, threshold=0.50, min_acceptable=0.10),
-        "Hit@5": MetricConfig(weight=0.25, threshold=0.70, min_acceptable=0.20),
+        "Hit@1": MetricConfig(weight=0.25, threshold=0.60, min_acceptable=0.10),
+        "Hit@5": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.20),
         "MRR": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.20),
-        "Recall@20": MetricConfig(weight=0.25, threshold=0.80, min_acceptable=0.30),
+        "Recall@20": MetricConfig(weight=0.25, threshold=0.85, min_acceptable=0.30),
     }
 
     # Apply custom weights

@@ -5,15 +5,19 @@ Uses MAP-Elites with optional LLM-guided mutations to evolve
 specialized retrieval strategies.
 
 Target Metrics:
-- Hit@1: >50%
-- Hit@5: >75%
-- MRR: >70%
-- Recall@20: >80%
+- Hit@1: >60%
+- Hit@5: >80%
+- MRR: >80%
+- Recall@20: >85%
 """
 import argparse
 import os
 import random
 import sys
+
+# Ensure UTF-8 encoding for stdout (Windows compatibility)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 from dotenv import load_dotenv
 load_dotenv(override=True)  
