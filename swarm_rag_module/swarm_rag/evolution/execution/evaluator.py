@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 # Default early exit threshold at quarter checkpoint (25% of queries)
+# DEPRECATED: Use ResourceConfig.early_exit_threshold instead for new code.
+# This constant is kept for backward compatibility with existing tests and imports.
 DEFAULT_EARLY_EXIT_THRESHOLD: float = 0.30
 
 
