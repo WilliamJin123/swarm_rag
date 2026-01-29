@@ -71,28 +71,28 @@ Deferred to future if v1 doesn't achieve targets.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PERF-01 | TBD | Pending |
-| PERF-02 | TBD | Pending |
-| PERF-03 | TBD | Pending |
-| PERF-04 | TBD | Pending |
-| METRIC-01 | TBD | Pending |
-| METRIC-02 | TBD | Pending |
-| METRIC-03 | TBD | Pending |
-| METRIC-04 | TBD | Pending |
-| CACHE-01 | TBD | Pending |
-| CACHE-02 | TBD | Pending |
-| MEM-01 | TBD | Pending |
-| MEM-02 | TBD | Pending |
-| MEM-03 | TBD | Pending |
-| CONV-01 | TBD | Pending |
-| CONV-02 | TBD | Pending |
-| CKPT-01 | TBD | Pending |
+| PERF-01 | Phase 6 | Pending |
+| PERF-02 | Phase 1 | Pending |
+| PERF-03 | Phase 1 | Pending |
+| PERF-04 | Phase 6 | Pending |
+| METRIC-01 | Phase 7 | Pending |
+| METRIC-02 | Phase 7 | Pending |
+| METRIC-03 | Phase 7 | Pending |
+| METRIC-04 | Phase 7 | Pending |
+| CACHE-01 | Phase 2 | Pending |
+| CACHE-02 | Phase 3 | Pending |
+| MEM-01 | Phase 1 | Pending |
+| MEM-02 | Phase 1 | Pending |
+| MEM-03 | Phase 1 | Pending |
+| CONV-01 | Phase 4 | Pending |
+| CONV-02 | Phase 4 | Pending |
+| CKPT-01 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 16 total
-- Mapped to phases: 0
-- Unmapped: 16 (pending roadmap creation)
+- Mapped to phases: 16
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-29*
-*Last updated: 2026-01-29 after initial definition*
+*Last updated: 2026-01-29 after roadmap creation*
