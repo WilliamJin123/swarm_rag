@@ -693,13 +693,9 @@ class PopulationEvaluator:
                             device="cuda"
                         )
             except Exception as e:
-                logger.debug(f"GPU batch metrics failed, falling back to CPU: {e}")
-                expanded_gt_sets = ground_truth_sets * n_genomes
-                all_metrics_per_query = MetricFunctions.compute_all_metrics_batch(
-                    retrieved_ids,
-                    expanded_gt_sets[:n_total],
-                    k_values=self.evaluator.k_values
-                )
+                # Fail explicitly - GPU/CPU overhead makes silent fallback inefficient
+                logger.error(f"GPU batch metrics failed: {e}")
+                raise RuntimeError(f"GPU metric computation failed: {e}") from e
         else:
             expanded_gt_sets = ground_truth_sets * n_genomes
             all_metrics_per_query = MetricFunctions.compute_all_metrics_batch(
@@ -1090,16 +1086,9 @@ class PopulationEvaluator:
                     return_per_query=True
                 )
             except Exception as e:
-                logger.debug(f"GPU metrics failed, falling back to CPU: {e}")
-                metrics = MetricFunctions.compute_all_metrics_batch(
-                    retrieved_ids.cpu(),
-                    gt_sets,
-                    k_values=self.evaluator.k_values
-                )
-                # Fall back to zero variance for CPU path
-                for key in list(metrics.keys()):
-                    if not key.startswith("per_query_") and not key.startswith("var_"):
-                        metrics[f"var_{key}"] = 0.0
+                # Fail explicitly - GPU/CPU overhead makes silent fallback inefficient
+                logger.error(f"GPU metrics failed: {e}")
+                raise RuntimeError(f"GPU metric computation failed: {e}") from e
         else:
             # CPU batch computation
             metrics = MetricFunctions.compute_all_metrics_batch(
@@ -1333,11 +1322,6 @@ class PopulationEvaluator:
             )
             return metrics
         except Exception as e:
-            logger.debug(f"GPU metrics failed, falling back to CPU: {e}")
-            # Fallback to sets-based computation
-            gt_sets = shared_context.ground_truth_sets[:n_queries]
-            return MetricFunctions.compute_all_metrics_batch(
-                retrieved_ids.cpu(),
-                gt_sets,
-                k_values=self.evaluator.k_values
-            )
+            # Fail explicitly - GPU/CPU overhead makes silent fallback inefficient
+            logger.error(f"GPU metrics failed: {e}")
+            raise RuntimeError(f"GPU metric computation failed: {e}") from e
