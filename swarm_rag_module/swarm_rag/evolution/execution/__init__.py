@@ -5,6 +5,8 @@ Provides evaluation, genetic strategies, and utilities for the evolution engine.
 """
 from .evaluator import (
     PopulationEvaluator,
+    PopulationEvaluatorBuilder,
+    EvaluatorConfig,
     EvaluationStats,
     DEFAULT_EARLY_EXIT_THRESHOLD,
 )
@@ -39,6 +41,8 @@ from .shared_precompute import (
 __all__ = [
     # Core
     "PopulationEvaluator",
+    "PopulationEvaluatorBuilder",
+    "EvaluatorConfig",
     "FitnessCalculator",
     "GeneticStrategies",
     "GeneticRegistry",

@@ -49,6 +49,184 @@ class EvaluationStats:
     time_saved_estimate: float = 0.0
 
 
+@dataclass
+class EvaluatorConfig:
+    """
+    Configuration for PopulationEvaluator.
+
+    Groups related parameters for cleaner initialization.
+    Use PopulationEvaluatorBuilder for fluent construction.
+    """
+    # Required dependencies (no defaults)
+    retriever: Optional[RetrievalBackend] = None
+    evaluator: Optional[Evaluator] = None
+    fitness_calc: Optional[FitnessCalculator] = None
+
+    # Data
+    queries: List[str] = field(default_factory=list)
+    ground_truth: List[List[Any]] = field(default_factory=list)
+
+    # Concurrency
+    concurrent_evaluations: int = 4
+    max_workers_per_retrieval: int = 1
+
+    # Decision tracking
+    track_decisions: bool = False
+    decision_sample_rate: float = 1.0
+
+    # Early exit
+    early_exit_threshold: float = DEFAULT_EARLY_EXIT_THRESHOLD
+    enable_adaptive: bool = True
+
+    # Device and optimization
+    device: Optional[Any] = None
+    enable_shared_precompute: bool = True
+    enable_cross_genome_metric_batch: bool = True
+
+    # Feature configuration
+    heuristic_features: Optional[HeuristicFeatureConfig] = None
+
+    # Execution mode
+    run_mode: str = "batched"
+    run_batch_size: int = 100
+
+
+class PopulationEvaluatorBuilder:
+    """
+    Builder for PopulationEvaluator with fluent interface.
+
+    Simplifies construction when many parameters need customization.
+
+    Example:
+        evaluator = (PopulationEvaluatorBuilder()
+            .with_retriever(retriever)
+            .with_evaluator(evaluator)
+            .with_fitness_calc(fitness_calc)
+            .with_queries(queries, ground_truth)
+            .with_device("cuda")
+            .enable_early_exit(threshold=0.25)
+            .build())
+    """
+
+    def __init__(self):
+        """Initialize builder with default configuration."""
+        self._config = EvaluatorConfig()
+
+    def with_retriever(self, retriever: RetrievalBackend) -> "PopulationEvaluatorBuilder":
+        """Set the retrieval backend."""
+        self._config.retriever = retriever
+        return self
+
+    def with_evaluator(self, evaluator: Evaluator) -> "PopulationEvaluatorBuilder":
+        """Set the metrics evaluator."""
+        self._config.evaluator = evaluator
+        return self
+
+    def with_fitness_calc(self, fitness_calc: FitnessCalculator) -> "PopulationEvaluatorBuilder":
+        """Set the fitness calculator."""
+        self._config.fitness_calc = fitness_calc
+        return self
+
+    def with_queries(
+        self, queries: List[str], ground_truth: List[List[Any]]
+    ) -> "PopulationEvaluatorBuilder":
+        """Set queries and ground truth data."""
+        self._config.queries = queries
+        self._config.ground_truth = ground_truth
+        return self
+
+    def with_concurrency(
+        self, concurrent_evaluations: int = 4, max_workers_per_retrieval: int = 1
+    ) -> "PopulationEvaluatorBuilder":
+        """Set concurrency parameters."""
+        self._config.concurrent_evaluations = concurrent_evaluations
+        self._config.max_workers_per_retrieval = max_workers_per_retrieval
+        return self
+
+    def with_decision_tracking(
+        self, enabled: bool = True, sample_rate: float = 1.0
+    ) -> "PopulationEvaluatorBuilder":
+        """Enable decision tracking for LLM context."""
+        self._config.track_decisions = enabled
+        self._config.decision_sample_rate = sample_rate
+        return self
+
+    def enable_early_exit(
+        self, threshold: float = DEFAULT_EARLY_EXIT_THRESHOLD
+    ) -> "PopulationEvaluatorBuilder":
+        """Enable adaptive early exit at quarter checkpoint."""
+        self._config.enable_adaptive = True
+        self._config.early_exit_threshold = threshold
+        return self
+
+    def disable_early_exit(self) -> "PopulationEvaluatorBuilder":
+        """Disable adaptive early exit (full evaluation only)."""
+        self._config.enable_adaptive = False
+        return self
+
+    def with_device(self, device: Any) -> "PopulationEvaluatorBuilder":
+        """Set the target device (cuda, mps, cpu, or torch.device)."""
+        self._config.device = device
+        return self
+
+    def with_optimization(
+        self, shared_precompute: bool = True, cross_genome_batch: bool = True
+    ) -> "PopulationEvaluatorBuilder":
+        """Configure optimization flags."""
+        self._config.enable_shared_precompute = shared_precompute
+        self._config.enable_cross_genome_metric_batch = cross_genome_batch
+        return self
+
+    def with_heuristic_features(
+        self, features: HeuristicFeatureConfig
+    ) -> "PopulationEvaluatorBuilder":
+        """Set heuristic features for weighted sum mode."""
+        self._config.heuristic_features = features
+        return self
+
+    def with_run_mode(
+        self, mode: str = "batched", batch_size: int = 100
+    ) -> "PopulationEvaluatorBuilder":
+        """Set execution mode (batched or sequential)."""
+        self._config.run_mode = mode
+        self._config.run_batch_size = batch_size
+        return self
+
+    def build(self) -> "PopulationEvaluator":
+        """
+        Build the PopulationEvaluator.
+
+        Raises:
+            ValueError: If required dependencies are not set.
+        """
+        if self._config.retriever is None:
+            raise ValueError("retriever is required - use with_retriever()")
+        if self._config.evaluator is None:
+            raise ValueError("evaluator is required - use with_evaluator()")
+        if self._config.fitness_calc is None:
+            raise ValueError("fitness_calc is required - use with_fitness_calc()")
+
+        return PopulationEvaluator(
+            retriever=self._config.retriever,
+            evaluator=self._config.evaluator,
+            fitness_calc=self._config.fitness_calc,
+            concurrent_evaluations=self._config.concurrent_evaluations,
+            max_workers_per_retrieval=self._config.max_workers_per_retrieval,
+            queries=self._config.queries,
+            ground_truth=self._config.ground_truth,
+            track_decisions=self._config.track_decisions,
+            decision_sample_rate=self._config.decision_sample_rate,
+            early_exit_threshold=self._config.early_exit_threshold,
+            enable_adaptive=self._config.enable_adaptive,
+            device=self._config.device,
+            enable_shared_precompute=self._config.enable_shared_precompute,
+            enable_cross_genome_metric_batch=self._config.enable_cross_genome_metric_batch,
+            heuristic_features=self._config.heuristic_features,
+            run_mode=self._config.run_mode,
+            run_batch_size=self._config.run_batch_size,
+        )
+
+
 class PopulationEvaluator:
     """
     Evaluator with single-checkpoint early exit.
