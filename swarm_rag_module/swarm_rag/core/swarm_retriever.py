@@ -1,3 +1,4 @@
+import os
 import random
 import time
 import torch
@@ -182,10 +183,12 @@ class SwarmRetriever:
             logger.debug("SwarmRetriever: Using CPU mode")
 
         # Profiler for performance analysis (enabled via SWARM_PROFILE=1)
-        import os
+        # Max samples configurable via SWARM_PROFILE_SAMPLES (default 1000)
+        profiler_samples = int(os.environ.get('SWARM_PROFILE_SAMPLES', '1000'))
         self._profiler = StepProfiler(
             enabled=os.environ.get('SWARM_PROFILE', '0') == '1',
-            cuda_sync=self._use_gpu
+            cuda_sync=self._use_gpu,
+            max_samples_per_section=profiler_samples
         )
 
         # CUDA graph acceleration (enabled via enable_cuda_graphs())
@@ -499,12 +502,14 @@ class SwarmRetriever:
                 )
             return idx, result
         
-        total = len(query_vectors) 
+        total = len(query_vectors)
         completed = 0
         gid = kwargs.get('genome_id', '')
         if gid != '': gid = f"[{gid}]"
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Bound workers to available CPU cores to prevent over-subscription
+        effective_workers = min(max_workers, os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
             # Submit all tasks with their indices
             futures_to_index = {
                 executor.submit(process, i, vec): i
@@ -2503,7 +2508,9 @@ class SwarmRetriever:
         if gid:
             gid = f"[{gid}]"
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Bound workers to available CPU cores to prevent over-subscription
+        effective_workers = min(max_workers, os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
             futures_to_index = {
                 executor.submit(process, i, vec, pool): i
                 for i, (vec, pool) in enumerate(zip(query_embeddings, initial_pools))

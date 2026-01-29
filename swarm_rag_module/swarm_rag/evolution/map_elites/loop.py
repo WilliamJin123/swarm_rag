@@ -1,3 +1,4 @@
+import os
 import random
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -124,7 +125,9 @@ class MapElitesLoop:
 
         results = [None] * self.batch_size
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Bound workers to available CPU cores to prevent over-subscription
+        effective_workers = min(max_workers, os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
             futures = {
                 executor.submit(mutate_child, item): item[0]
                 for item in children_to_mutate
