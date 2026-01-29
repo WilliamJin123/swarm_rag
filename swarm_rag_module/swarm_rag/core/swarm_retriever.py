@@ -915,8 +915,7 @@ class SwarmRetriever:
         neighbors = self._get_cached_neighbors(current_loc)
         if len(neighbors) == 0:
             return None
-        if step % 2 == 0:
-            logger.debug(f"Agent {agent_id} at {current_loc} (degree={len(neighbors)})")
+        # Hot path: removed per-step logging to avoid ~12,500 log calls per genome at DEBUG level
 
         # Fetch Matrix & IDs (Two-phase fetch handled internally by _fetch_vectors_batch)
         candidate_matrix, valid_ids = self._fetch_vectors_batch(neighbors)
