@@ -8,6 +8,7 @@ from threading import Lock
 from contextlib import contextmanager
 import logging
 from ..utils import LRUCache, get_device, move_to_device, tensor_like
+from ..evolution.types.genome import DEFAULT_PARAMS as _GENOME_DEFAULT_PARAMS
 
 if TYPE_CHECKING:
     from ..evolution.types.config import WeightTensors, HeuristicFeatureConfig
@@ -56,6 +57,9 @@ class StepProfiler:
             lines.append(f"  {name}: total={total:.2f}, avg={avg:.3f}, calls={len(times)}")
         return "\n".join(lines)
 
+# Progress logging interval for sequential batch processing (configurable via env var)
+PROGRESS_LOG_INTERVAL = int(os.environ.get("SWARM_PROGRESS_INTERVAL", "10"))
+
 from .heuristics import HeuristicRegistry, Heuristics, HeuristicContext
 from ..interfaces.abstract_classes import VectorStore, GraphStore, EmbeddingProvider, Matrix
 from ..interfaces.retriever_types import (
@@ -79,29 +83,26 @@ logger = logging.getLogger(__name__)
 
 
 class SwarmRetriever:
-    _DEFAULT_PARAMS = dict(
-        # Global Defaults
-        steps=4,
-        n_agents=20,
-        decay=0.5,
-        drop_zone_inc=0.05,
-        initial_pool_size=30,
-        start_subset=10,
-        top_k=20,
+    # Swarm hyperparameter defaults imported from single source of truth
+    # Extended with retriever-specific strategy defaults
+    _DEFAULT_PARAMS = {
+        **_GENOME_DEFAULT_PARAMS,
+        # Retriever-specific defaults not in genome params
+        "top_k": 20,
         # Default "Homogeneous" Strategy (Fallback)
-        movement_strategies={
+        "movement_strategies": {
             "semantic": ("semantic_similarity", 0.3),
             "centrality": ("node_centrality", 0.4),
             "diversity": ("pheromone_repulsion", 0.3),
         },
-        ranking_strategies={
+        "ranking_strategies": {
             "visited": ("percentage_visited", 0.2),
             "semantic": ("semantic_rank", 0.8),
         },
-        deposit_strategies={
+        "deposit_strategies": {
             "flat_mark": ("flat", 1.0),
         },
-    )
+    }
     
     PHEROMONE_EPSILON = 1e-6
 
@@ -457,7 +458,7 @@ class SwarmRetriever:
         if gid != '': gid = f"[{gid}]"
 
         for i, vec in enumerate(query_vectors):
-            if (i + 1) % 10 == 0 or (i + 1) == total:
+            if (i + 1) % PROGRESS_LOG_INTERVAL == 0 or (i + 1) == total:
                 logger.info(f"    [Retriever] {gid} Sequential Progress: {i+1}/{total} queries")
 
             # Deterministic seeding for each query
