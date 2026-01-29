@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import os
 import random
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..execution.llm_strategies import StrategicDirective
 
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
@@ -149,7 +154,7 @@ class MapElitesLoop:
         logger.debug(f"Parallel mutation complete: {len(offspring)} offspring created")
         return offspring
 
-    def update_strategic_directive(self, archive: MapElitesArchive) -> Optional["StrategicDirective"]:
+    def update_strategic_directive(self, archive: MapElitesArchive) -> Optional[StrategicDirective]:
         """
         Update the strategic directive if needed.
 
