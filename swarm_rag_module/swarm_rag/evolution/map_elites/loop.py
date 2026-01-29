@@ -43,6 +43,9 @@ class MapElitesLoop:
 
         Note: Generation counter is managed by the orchestrator, not here.
         """
+        # Reset offspring counter at start of each generation
+        self._offspring_counter = 0
+
         # If archive is empty, we can't breed.
         if not archive.grid:
             return []

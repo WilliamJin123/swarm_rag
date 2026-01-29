@@ -4,6 +4,7 @@ MAP-Elites Archive with Configurable Comparison Modes
 Stores high-performing elites in a structured phenotypic grid with
 configurable comparison strategies for determining which genomes replace others.
 """
+import ast
 import math
 import random
 from dataclasses import dataclass, field
@@ -284,11 +285,12 @@ class MapElitesArchive:
         return False
 
     def select_random(self) -> Optional[Genome]:
-        """Returns a random elite from the archive."""
+        """Returns a copy of a random elite from the archive."""
         if not self.grid:
             return None
         key = random.choice(list(self.grid.keys()))
-        return self.grid[key]
+        # Return copy to maintain archive immutability
+        return self.grid[key].copy()
 
     def select_k_random(self, k: int) -> List[Genome]:
         """Returns k random elites with replacement."""
@@ -404,11 +406,11 @@ class MapElitesArchive:
             for key_str, genome_data in data["grid"].items():
                 if genome_data.get("genome"):
                     try:
-                        # Parse tuple key from string
-                        key = eval(key_str)
+                        # Parse tuple key from string safely (no code execution)
+                        key = ast.literal_eval(key_str)
                         genome = Genome.from_dict(genome_data["genome"])
                         archive.grid[key] = genome
-                    except Exception:
+                    except (ValueError, SyntaxError):
                         pass  # Skip malformed entries
 
         return archive
