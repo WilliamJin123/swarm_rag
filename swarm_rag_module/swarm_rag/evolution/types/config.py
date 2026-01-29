@@ -625,35 +625,26 @@ DEFAULT_CONFIG = EvolutionConfig()
 
 
 # =============================================================================
-# Evolution Context (Runtime State)
+# Evolution State (Mutable Runtime State)
 # =============================================================================
 
 @dataclass
-class EvolutionContext:
+class EvolutionState:
     """
-    Shared context passed to all genetic operators (Selection, Crossover, Mutation).
+    Mutable runtime state for evolution.
 
-    Contains both static config and dynamic runtime state.
+    This class holds all state that changes during evolution.
+    Separated from config for clarity and potential future immutability.
     """
-    # Configuration (new dataclass-based)
-    config: EvolutionConfig = field(default_factory=EvolutionConfig)
-
-    # Current State
+    # === Generation State ===
     generation: int = 0
     population: List["Genome"] = field(default_factory=list)
+
+    # === Adaptive Strategy State ===
     global_mutation_multiplier: float = 1.0
-
-    # Registry Data (What features can we mutate into?)
-    available_features: List[str] = field(default_factory=list)
-    expression_features: Dict[str, List[str]] = field(default_factory=dict)
-
-    # State for Adaptive Strategies
     current_temperature: float = 1.0
 
-    # LLM Integration (single provider interface)
-    llm_provider: Optional[Any] = None
-
-    # Creative Mode State (runtime tracking)
+    # === Creative Mode State (runtime tracking) ===
     stagnation_count: int = 0              # Generations without improvement
     archive_fill_rate: float = 0.0         # Current archive fill rate
     top_fitness_unchanged: int = 0         # Generations where top fitness unchanged
@@ -661,14 +652,98 @@ class EvolutionContext:
     creative_success_count: int = 0        # Successful creative mutations
     creative_failure_count: int = 0        # Failed creative mutations
 
-    # Resolved device (computed on init)
+    def reset_creative_gen_count(self):
+        """Reset the per-generation creative mutation counter."""
+        self.creative_mutations_this_gen = 0
+
+    def reset_for_new_run(self):
+        """Reset all state for a new evolution run."""
+        self.generation = 0
+        self.population = []
+        self.global_mutation_multiplier = 1.0
+        self.current_temperature = 1.0
+        self.stagnation_count = 0
+        self.archive_fill_rate = 0.0
+        self.top_fitness_unchanged = 0
+        self.creative_mutations_this_gen = 0
+        self.creative_success_count = 0
+        self.creative_failure_count = 0
+
+
+# =============================================================================
+# Evolution Context (Config + State + Resources)
+# =============================================================================
+
+@dataclass
+class EvolutionContext:
+    """
+    Shared context passed to all genetic operators (Selection, Crossover, Mutation).
+
+    Contains:
+    - config: Immutable configuration (EvolutionConfig)
+    - state: Mutable runtime state (EvolutionState) - also exposed as top-level fields
+    - resources: Feature registries and LLM provider
+    - device: Computed device string
+
+    Note: For backward compatibility, state fields are also exposed at the top level.
+    New code should prefer accessing state through the state property.
+    """
+    # === Configuration (immutable) ===
+    config: EvolutionConfig = field(default_factory=EvolutionConfig)
+
+    # === Registry Data (quasi-immutable, set at init) ===
+    available_features: List[str] = field(default_factory=list)
+    expression_features: Dict[str, List[str]] = field(default_factory=dict)
+
+    # === LLM Integration ===
+    llm_provider: Optional[Any] = None
+
+    # === Mutable State (use state property for clean access) ===
+    # These fields are exposed for backward compatibility
+    generation: int = 0
+    population: List["Genome"] = field(default_factory=list)
+    global_mutation_multiplier: float = 1.0
+    current_temperature: float = 1.0
+    stagnation_count: int = 0
+    archive_fill_rate: float = 0.0
+    top_fitness_unchanged: int = 0
+    creative_mutations_this_gen: int = 0
+    creative_success_count: int = 0
+    creative_failure_count: int = 0
+
+    # === Computed Fields ===
     resolved_device: str = field(default="", init=False)
+    _state: Optional[EvolutionState] = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         """Initialize computed fields."""
         if not self.resolved_device:
             from ...utils.device import resolve_device
             self.resolved_device = resolve_device(self.config.storage.device)
+
+    @property
+    def state(self) -> EvolutionState:
+        """
+        Get a view of the mutable state as an EvolutionState object.
+
+        This provides a clean interface for accessing state fields.
+        Modifications to the returned object affect the context.
+        """
+        if self._state is None:
+            # Create a state view that syncs with context fields
+            self._state = EvolutionState(
+                generation=self.generation,
+                population=self.population,
+                global_mutation_multiplier=self.global_mutation_multiplier,
+                current_temperature=self.current_temperature,
+                stagnation_count=self.stagnation_count,
+                archive_fill_rate=self.archive_fill_rate,
+                top_fitness_unchanged=self.top_fitness_unchanged,
+                creative_mutations_this_gen=self.creative_mutations_this_gen,
+                creative_success_count=self.creative_success_count,
+                creative_failure_count=self.creative_failure_count,
+            )
+        return self._state
 
     def reset_creative_gen_count(self):
         """Reset the per-generation creative mutation counter."""

@@ -14,6 +14,7 @@ from .config import (
     StorageConfig,
     SwarmParamRanges,
     EvolutionContext,
+    EvolutionState,
     GenomeMode,
     DEFAULT_CONFIG,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "StorageConfig",
     "SwarmParamRanges",
     "EvolutionContext",
+    "EvolutionState",
     "GenomeMode",
     "DEFAULT_CONFIG",
     # Genome types
