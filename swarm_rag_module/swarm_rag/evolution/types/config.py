@@ -49,11 +49,6 @@ def _get_optimal_concurrency() -> int:
 # Dual-Mode Evolution Data Structures
 # =============================================================================
 
-def _get_default_device() -> str:
-    """Get device for default tensor creation."""
-    from ...utils.device import get_device
-    return get_device()
-
 
 @dataclass
 class WeightTensors:
@@ -62,17 +57,20 @@ class WeightTensors:
 
     All weights stored as contiguous tensors for GPU batch operations.
     Used in weighted_sum genome mode for fast linear heuristic combinations.
+
+    Note: Default tensors are created on CPU to avoid triggering CUDA initialization
+    at import time. Use to_device() to move tensors to GPU when needed.
     """
     # Movement: (n_groups, n_movement_features)
-    movement_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 4, device=_get_default_device()))
-    movement_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1, device=_get_default_device()))
+    movement_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 4, device="cpu"))
+    movement_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1, device="cpu"))
 
     # Deposit: (n_groups, n_deposit_features)
-    deposit_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 3, device=_get_default_device()))
-    deposit_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1, device=_get_default_device()))
+    deposit_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(1, 3, device="cpu"))
+    deposit_biases: torch.Tensor = field(default_factory=lambda: torch.zeros(1, device="cpu"))
 
     # Ranking: shared across groups (n_ranking_features,)
-    ranking_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(2, device=_get_default_device()))
+    ranking_weights: torch.Tensor = field(default_factory=lambda: torch.zeros(2, device="cpu"))
     ranking_bias: float = 0.0
 
     def to_device(self, device: str) -> "WeightTensors":
