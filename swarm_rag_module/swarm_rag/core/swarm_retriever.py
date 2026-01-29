@@ -138,6 +138,7 @@ class SwarmRetriever:
         doc_cache_size: int = 50000,
         query_cache_size: int = 1000,
         device: str = None,
+        profiler_max_samples: int = None,
     ):
         self.vector_store = vector_store
         self.graph_store = graph_store
@@ -184,12 +185,18 @@ class SwarmRetriever:
             logger.debug("SwarmRetriever: Using CPU mode")
 
         # Profiler for performance analysis (enabled via SWARM_PROFILE=1)
-        # Max samples configurable via SWARM_PROFILE_SAMPLES (default 1000)
-        profiler_samples = int(os.environ.get('SWARM_PROFILE_SAMPLES', '1000'))
+        # Max samples configurable via:
+        #   1. Constructor parameter (profiler_max_samples)
+        #   2. Environment variable SWARM_PROFILE_SAMPLES
+        #   3. Default value (1000)
+        if profiler_max_samples is not None:
+            _profiler_samples = profiler_max_samples
+        else:
+            _profiler_samples = int(os.environ.get('SWARM_PROFILE_SAMPLES', '1000'))
         self._profiler = StepProfiler(
             enabled=os.environ.get('SWARM_PROFILE', '0') == '1',
             cuda_sync=self._use_gpu,
-            max_samples_per_section=profiler_samples
+            max_samples_per_section=_profiler_samples
         )
 
         # CUDA graph acceleration (enabled via enable_cuda_graphs())
