@@ -196,7 +196,6 @@ class Genome:
         new_fitness = FitnessResult(
             quality_score=self.fitness.quality_score,
             stability_score=self.fitness.stability_score,
-            cost_score=self.fitness.cost_score
         )
 
         target_id = new_id if new_id is not None else f"{self.id}_copy"
@@ -213,7 +212,7 @@ class Genome:
             fitness=new_fitness,
             metrics=self.metrics.copy(),
             latency=self.latency,
-            evaluated=self.evaluated,
+            evaluated=False,  # Children must be re-evaluated
             _compiled_cache={}
         )
 

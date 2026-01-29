@@ -574,7 +574,8 @@ class MetricFunctions:
         retrieved_ids_batch: torch.Tensor,
         gt_ids_batch: List[Set[int]],
         k_values: List[int] = None,
-        device: str = "cuda"
+        device: str = "cuda",
+        return_per_query: bool = False
     ) -> dict:
         """
         GPU-accelerated batch metric computation using PyTorch.
@@ -587,9 +588,11 @@ class MetricFunctions:
             gt_ids_batch: List of sets of ground truth IDs (on CPU)
             k_values: List of k values for Hit@K and Recall@K (default: [1, 5, 10, 20])
             device: Device string ("cuda" or "cpu")
+            return_per_query: If True, also return per-query score tensors for variance computation
 
         Returns:
             Dictionary of metric_name -> mean_score
+            If return_per_query=True, also includes 'per_query_<metric>': tensor entries
         """
         if k_values is None:
             k_values = [1, 5, 10, 20]
@@ -659,6 +662,14 @@ class MetricFunctions:
             results[f'Hit@{k}'] = float(hit_scores[k].mean().item())
             results[f'Recall@{k}'] = float(recall_scores[k].mean().item())
             results[f'NDCG@{k}'] = float(ndcg_scores[k].mean().item())
+
+        # Include per-query scores if requested (for variance computation)
+        if return_per_query:
+            results['per_query_MRR'] = mrr_scores.cpu()
+            for k in k_values:
+                results[f'per_query_Hit@{k}'] = hit_scores[k].cpu()
+                results[f'per_query_Recall@{k}'] = recall_scores[k].cpu()
+                results[f'per_query_NDCG@{k}'] = ndcg_scores[k].cpu()
 
         return results
 

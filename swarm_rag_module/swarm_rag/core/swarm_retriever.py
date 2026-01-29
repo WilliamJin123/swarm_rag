@@ -12,12 +12,13 @@ from ..utils import LRUCache, get_device, move_to_device, tensor_like
 class StepProfiler:
     """Lightweight profiler for retrieval hot paths. Enable with SWARM_PROFILE=1."""
 
-    __slots__ = ('enabled', 'timings', '_cuda_sync')
+    __slots__ = ('enabled', 'timings', '_cuda_sync', 'max_samples')
 
-    def __init__(self, enabled: bool = False, cuda_sync: bool = True):
+    def __init__(self, enabled: bool = False, cuda_sync: bool = True, max_samples_per_section: int = 1000):
         self.enabled = enabled
         self.timings: Dict[str, List[float]] = {}
         self._cuda_sync = cuda_sync and torch.cuda.is_available()
+        self.max_samples = max_samples_per_section
 
     @contextmanager
     def section(self, name: str):
@@ -34,6 +35,9 @@ class StepProfiler:
         if name not in self.timings:
             self.timings[name] = []
         self.timings[name].append(elapsed)
+        # Keep rolling window to prevent unbounded growth
+        if len(self.timings[name]) > self.max_samples:
+            self.timings[name].pop(0)
 
     def reset(self):
         self.timings.clear()
@@ -58,6 +62,7 @@ from ..interfaces.retriever_types import (
     TraversalState,
     QueryBuilder,
 )
+from ..evolution.types.config import WeightTensors
 
 class AgentGroupConfig(TypedDict):
     """
@@ -959,6 +964,7 @@ class SwarmRetriever:
         step: int,
         max_pheromone: float,
         torch_gen: torch.Generator,
+        weight_tensors: Optional[WeightTensors] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Process all agents in one batched GPU operation.
@@ -1100,12 +1106,24 @@ class SwarmRetriever:
         normalized_pheromones = neighbor_pheromones / (max_pheromone + 1e-8)
         repulsion_scores = 1.0 - normalized_pheromones
 
-        # Combine with default weights (matching DEFAULT_PARAMS)
-        # semantic: 0.3, centrality: 0.4, diversity: 0.3
+        # Combine features using genome weights (or defaults if not provided)
+        # Movement features: [0] semantic, [1] stark_centrality (unused), [2] node_centrality, [3] pheromone_repulsion
+        if weight_tensors is not None:
+            # Use genome weights - take mean across groups for now (all agents use same weights)
+            w = weight_tensors.movement_weights.mean(dim=0)  # (n_features,)
+            w_semantic = w[0].item()
+            w_centrality = w[2].item()  # node_centrality is feature index 2
+            w_repulsion = w[3].item()   # pheromone_repulsion is feature index 3
+        else:
+            # Fallback to default weights
+            w_semantic = 0.3
+            w_centrality = 0.4
+            w_repulsion = 0.3
+
         total_scores = (
-            0.3 * semantic_scores +
-            0.4 * centrality_scores +
-            0.3 * repulsion_scores
+            w_semantic * semantic_scores +
+            w_centrality * centrality_scores +
+            w_repulsion * repulsion_scores
         )
 
         # Apply mask: set invalid neighbors to 0
@@ -1666,6 +1684,7 @@ class SwarmRetriever:
 
         return embeddings, pools, is_batch
 
+    @torch.no_grad()
     def _traverse(
         self,
         query_embeddings: torch.Tensor,
@@ -1735,6 +1754,79 @@ class SwarmRetriever:
 
         return result_ids, result_scores
 
+    def _pheromone_lookup(
+        self,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        node_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Hash-table lookup for pheromone values.
+
+        Args:
+            keys: (batch, buffer_size) - stored node IDs, -1 if empty
+            values: (batch, buffer_size) - stored pheromone values
+            node_ids: (batch, n_agents, max_degree) - node IDs to look up
+
+        Returns:
+            (batch, n_agents, max_degree) - pheromone values, 0 if not found
+        """
+        batch_size, buffer_size = keys.shape
+        n_agents, max_degree = node_ids.shape[1], node_ids.shape[2]
+
+        # Hash node IDs to buffer indices
+        hash_idx = node_ids % buffer_size  # (batch, n_agents, max_degree)
+
+        # Flatten for gather operation
+        flat_hash_idx = hash_idx.view(batch_size, -1)  # (batch, n_agents * max_degree)
+
+        # Gather stored keys and values at hash positions
+        stored_keys = torch.gather(keys, dim=1, index=flat_hash_idx)  # (batch, n_agents * max_degree)
+        stored_vals = torch.gather(values, dim=1, index=flat_hash_idx)  # (batch, n_agents * max_degree)
+
+        # Reshape back
+        stored_keys = stored_keys.view(batch_size, n_agents, max_degree)
+        stored_vals = stored_vals.view(batch_size, n_agents, max_degree)
+
+        # Only return value if key matches (collision handling)
+        matches = stored_keys == node_ids
+        return torch.where(matches, stored_vals, torch.zeros_like(stored_vals))
+
+    def _pheromone_deposit(
+        self,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        node_ids: torch.Tensor,
+        amount: float = 1.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Hash-table deposit for pheromone values.
+
+        Args:
+            keys: (batch, buffer_size) - stored node IDs, -1 if empty
+            values: (batch, buffer_size) - stored pheromone values
+            node_ids: (batch, n_agents) - node IDs to deposit to
+            amount: Amount to deposit
+
+        Returns:
+            Updated (keys, values) tensors
+        """
+        batch_size, buffer_size = keys.shape
+        n_agents = node_ids.shape[1]
+
+        # Hash node IDs to buffer indices
+        hash_idx = node_ids % buffer_size  # (batch, n_agents)
+
+        # Store keys at hash positions (overwrites on collision)
+        keys.scatter_(dim=1, index=hash_idx, src=node_ids)
+
+        # Add deposit values
+        deposit_vals = torch.full_like(node_ids, amount, dtype=values.dtype)
+        values.scatter_add_(dim=1, index=hash_idx, src=deposit_vals)
+
+        return keys, values
+
+    @torch.no_grad()
     def _init_traversal_state(
         self,
         query_embeddings: torch.Tensor,
@@ -1806,20 +1898,41 @@ class SwarmRetriever:
         )
         visit_history[:, :, 0] = agent_positions
 
-        # Initialize pheromones
-        pheromones = torch.zeros(
-            batch_size, self._pheromone_buffer_size, device=device, dtype=torch.float32
+        # Initialize compact pheromone hash table (10K buffer instead of 150K dense)
+        pheromone_buffer_size = 10000
+        pheromone_keys = torch.full(
+            (batch_size, pheromone_buffer_size), -1, device=device, dtype=torch.long
+        )
+        pheromone_values = torch.zeros(
+            batch_size, pheromone_buffer_size, device=device, dtype=torch.float32
+        )
+
+        # Initialize embedding cache (reused across steps)
+        embed_dim = query_embeddings.shape[1]
+        emb_cache_size = 2000
+        emb_id_to_idx = torch.full(
+            (self._max_node_id + 1,), -1, device=device, dtype=torch.int32
+        )
+        emb_cache = torch.zeros(
+            emb_cache_size, embed_dim, device=device, dtype=torch.float32
         )
 
         return TraversalState(
             query_embeddings=query_embeddings,
             agent_positions=agent_positions,
             visit_history=visit_history,
-            pheromones=pheromones,
             step=0,
             device=device,
+            pheromone_keys=pheromone_keys,
+            pheromone_values=pheromone_values,
+            emb_id_to_idx=emb_id_to_idx,
+            emb_cache=emb_cache,
+            emb_next_idx=0,
+            pheromone_buffer_size=pheromone_buffer_size,
+            emb_cache_size=emb_cache_size,
         )
 
+    @torch.no_grad()
     def _traverse_step(self, state: TraversalState, config: Dict) -> TraversalState:
         """
         Execute one traversal step for all queries × all agents.
@@ -1865,59 +1978,98 @@ class SwarmRetriever:
         all_neighbors = all_neighbors.view(batch_size, n_agents, max_degree)
         neighbor_mask = neighbor_mask.view(batch_size, n_agents, max_degree)
 
-        # Get neighbor embeddings
+        # Get neighbor embeddings (memory-efficient: only fetch unique IDs)
         flat_neighbors = all_neighbors.view(-1)  # (batch * n_agents * max_degree,)
-        unique_neighbors = torch.unique(flat_neighbors)
-        unique_neighbors = unique_neighbors[unique_neighbors >= 0]
+        valid_flat = flat_neighbors[flat_neighbors >= 0]
 
-        if unique_neighbors.numel() == 0:
+        if valid_flat.numel() == 0:
             state.step += 1
             return state
 
-        # Fetch embeddings for unique neighbors
-        neighbor_embeddings, valid_ids = self._fetch_embeddings(unique_neighbors)
-        # neighbor_embeddings: (n_unique, embed_dim)
+        unique_neighbors = torch.unique(valid_flat)
 
-        # Create embedding lookup table
-        embed_dim = neighbor_embeddings.shape[1]
-        embedding_table = torch.zeros(
-            self._max_node_id + 1, embed_dim, device=device, dtype=torch.float32
-        )
-        embedding_table[valid_ids] = neighbor_embeddings
+        # Check which neighbors are already in the embedding cache
+        cached_mask = state.emb_id_to_idx[unique_neighbors] >= 0
+        new_neighbors = unique_neighbors[~cached_mask]
 
-        # Look up embeddings for all neighbors
+        # Fetch embeddings only for uncached neighbors
+        if new_neighbors.numel() > 0:
+            new_embeddings, new_valid_ids = self._fetch_embeddings(new_neighbors)
+
+            if new_valid_ids.numel() > 0:
+                # Normalize embeddings
+                new_embeddings = torch.nn.functional.normalize(new_embeddings, p=2, dim=1)
+
+                # Add to cache incrementally
+                n_new = new_valid_ids.numel()
+                start_idx = state.emb_next_idx
+                end_idx = min(start_idx + n_new, state.emb_cache_size)
+                n_to_store = end_idx - start_idx
+
+                if n_to_store > 0:
+                    state.emb_cache[start_idx:end_idx] = new_embeddings[:n_to_store]
+                    state.emb_id_to_idx[new_valid_ids[:n_to_store]] = torch.arange(
+                        start_idx, end_idx, device=device, dtype=torch.int32
+                    )
+                    state.emb_next_idx = end_idx
+
+        # Use cached id_to_idx for mapping
+        id_to_idx = state.emb_id_to_idx
+
+        # Check we have any valid embeddings
+        valid_ids_mask = id_to_idx[unique_neighbors] >= 0
+        if not valid_ids_mask.any():
+            state.step += 1
+            return state
+
+        # Compute all query-embedding similarities using cached embeddings
+        # Only use the portion of the cache that's filled
+        n_cached = state.emb_next_idx
+        if n_cached == 0:
+            state.step += 1
+            return state
+
+        neighbor_embeddings = state.emb_cache[:n_cached]
+        # neighbor_embeddings: (n_cached, embed_dim)
+
+        # Compute similarities: (batch, n_cached)
+        all_sims = torch.mm(state.query_embeddings, neighbor_embeddings.t())
+
+        # Map neighbor IDs to embedding indices
         clamped_neighbors = all_neighbors.clamp(0, self._max_node_id)
-        neighbor_embeds = embedding_table[clamped_neighbors]
-        # neighbor_embeds: (batch, n_agents, max_degree, embed_dim)
+        emb_indices = id_to_idx[clamped_neighbors]  # (batch, n_agents, max_degree)
 
-        # Compute similarities: query @ neighbor embeddings
-        # query_embeddings: (batch, embed_dim)
-        # neighbor_embeds: (batch, n_agents, max_degree, embed_dim)
-        similarities = torch.einsum(
-            "bd,bnad->bna", state.query_embeddings, neighbor_embeds
-        )
+        # Initialize similarities tensor
+        similarities = torch.zeros(batch_size, n_agents, max_degree, device=device, dtype=torch.float32)
+
+        # Gather similarities using advanced indexing
+        valid_emb_mask = (emb_indices >= 0) & neighbor_mask
+        batch_idx = torch.arange(batch_size, device=device)[:, None, None].expand_as(emb_indices)
+
+        flat_emb_idx = emb_indices[valid_emb_mask]
+        flat_batch_idx = batch_idx[valid_emb_mask]
+        similarities[valid_emb_mask] = all_sims[flat_batch_idx, flat_emb_idx]
         # similarities: (batch, n_agents, max_degree)
+
+        # Free intermediate tensors to reduce memory pressure
+        del all_sims, emb_indices, valid_emb_mask, batch_idx
+        del flat_emb_idx, flat_batch_idx, neighbor_embeddings
 
         # Get degrees for centrality scoring
         degrees = self.graph_store.get_degrees_batch(flat_neighbors.clamp(0, self._max_node_id - 1))
         degrees = degrees.view(batch_size, n_agents, max_degree).float()
 
-        # Get pheromone values for neighbors
-        clamped_for_pheromone = clamped_neighbors.clamp(0, self._pheromone_buffer_size - 1)
-        # Index pheromones: (batch, buffer_size) -> (batch, n_agents, max_degree)
-        neighbor_pheromones = torch.gather(
-            state.pheromones.unsqueeze(1).expand(-1, n_agents, -1).reshape(
-                batch_size * n_agents, -1
-            ),
-            dim=1,
-            index=clamped_for_pheromone.view(batch_size * n_agents, max_degree),
-        ).view(batch_size, n_agents, max_degree)
+        # Get pheromone values for neighbors using hash-table lookup
+        neighbor_pheromones = self._pheromone_lookup(
+            state.pheromone_keys, state.pheromone_values, all_neighbors
+        )
 
         # Compute scores
-        max_pheromone = state.pheromones.max().clamp(min=1.0)
+        max_pheromone = state.pheromone_values.max().clamp(min=1.0)
 
-        # Semantic: scale to [0, 1]
+        # Semantic: scale to [0, 1] (similarities are already normalized cosine)
         semantic_scores = (similarities + 1.0) / 2.0
+        semantic_scores = torch.where(neighbor_mask, semantic_scores, torch.zeros_like(semantic_scores))
 
         # Centrality: log degree normalized
         log_degrees = torch.log(1.0 + degrees)
@@ -1949,19 +2101,13 @@ class SwarmRetriever:
         ).squeeze(-1)
         # new_positions: (batch, n_agents)
 
-        # Compute deposits (flat deposit = 1.0 for now)
-        deposit_vals = torch.ones(batch_size, n_agents, device=device, dtype=torch.float32)
-
-        # Scatter add deposits to pheromones
-        clamped_new = new_positions.clamp(0, self._pheromone_buffer_size - 1)
-        state.pheromones.scatter_add_(
-            dim=1,
-            index=clamped_new,
-            src=deposit_vals,
+        # Deposit pheromones using hash-table
+        state.pheromone_keys, state.pheromone_values = self._pheromone_deposit(
+            state.pheromone_keys, state.pheromone_values, new_positions, amount=1.0
         )
 
-        # Apply decay
-        state.pheromones *= decay
+        # Apply decay (only to values, keys stay unchanged)
+        state.pheromone_values *= decay
 
         # Update state
         state.agent_positions = new_positions
@@ -1970,6 +2116,7 @@ class SwarmRetriever:
 
         return state
 
+    @torch.no_grad()
     def _rank_traversal_results(
         self, state: TraversalState, config: Dict
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -1988,31 +2135,27 @@ class SwarmRetriever:
         top_k = config["top_k"]
         device = state.device
 
+        # Pre-allocate result tensors (avoids memory fragmentation from list building)
+        result_ids = torch.zeros(batch_size, top_k, device=device, dtype=torch.long)
+        result_scores = torch.zeros(batch_size, top_k, device=device, dtype=torch.float32)
+
         # Flatten visit history to unique visited nodes per query
         # visit_history: (batch, n_agents, steps+1)
         visited = state.visit_history.view(batch_size, -1)  # (batch, n_agents * (steps+1))
 
-        # Get unique nodes per query by processing each query
-        all_ids = []
-        all_scores = []
-
+        # Process each query
         for q_idx in range(batch_size):
             q_visited = visited[q_idx]
             q_visited = q_visited[q_visited >= 0]  # Remove -1 padding
             unique_visited = torch.unique(q_visited)
 
             if unique_visited.numel() == 0:
-                # No valid visits - return zeros
-                all_ids.append(torch.zeros(top_k, device=device, dtype=torch.long))
-                all_scores.append(torch.zeros(top_k, device=device, dtype=torch.float32))
-                continue
+                continue  # result_ids/scores already zero
 
             # Fetch embeddings for visited nodes
             node_embeddings, valid_ids = self._fetch_embeddings(unique_visited)
 
             if valid_ids.numel() == 0:
-                all_ids.append(torch.zeros(top_k, device=device, dtype=torch.long))
-                all_scores.append(torch.zeros(top_k, device=device, dtype=torch.float32))
                 continue
 
             # Compute similarities
@@ -2023,26 +2166,9 @@ class SwarmRetriever:
             k = min(top_k, similarities.numel())
             top_scores, top_indices = torch.topk(similarities, k)
 
-            # Pad if needed
-            if k < top_k:
-                pad_size = top_k - k
-                top_scores = torch.cat(
-                    [top_scores, torch.zeros(pad_size, device=device)]
-                )
-                top_indices = torch.cat(
-                    [top_indices, torch.zeros(pad_size, device=device, dtype=torch.long)]
-                )
-                top_ids = torch.cat(
-                    [valid_ids[top_indices[:k]], torch.zeros(pad_size, device=device, dtype=torch.long)]
-                )
-            else:
-                top_ids = valid_ids[top_indices]
-
-            all_ids.append(top_ids)
-            all_scores.append(top_scores)
-
-        result_ids = torch.stack(all_ids, dim=0)  # (batch, top_k)
-        result_scores = torch.stack(all_scores, dim=0)  # (batch, top_k)
+            # Write results directly (no padding needed, pre-initialized to zero)
+            result_ids[q_idx, :k] = valid_ids[top_indices]
+            result_scores[q_idx, :k] = top_scores
 
         return result_ids, result_scores
 
@@ -2154,6 +2280,7 @@ class SwarmRetriever:
         ranking_strategies: Optional[Dict] = None,
         deposit_strategies: Optional[Dict] = None,
         max_workers: Optional[int] = 4,
+        gpu_batch_size: Optional[int] = 64,
         **kwargs
     ) -> List[List[Dict]]:
         """
@@ -2216,7 +2343,7 @@ class SwarmRetriever:
                 initial_pools,
                 resolved_agents,
                 base_seed=base_seed,
-                batch_size=32,
+                batch_size=gpu_batch_size,
                 **params
             )
         elif max_workers <= 1:
@@ -2343,6 +2470,7 @@ class SwarmRetriever:
 
             return results
 
+    @torch.no_grad()
     def _retrieve_batch_multi_query_gpu(
         self,
         query_embeddings: torch.Tensor,
@@ -2540,6 +2668,7 @@ class SwarmRetriever:
 
         return all_neighbors, neighbor_mask
 
+    @torch.no_grad()
     def _compute_similarities_multi_query(
         self,
         query_vecs: torch.Tensor,       # (batch_size, dim)
@@ -2583,10 +2712,10 @@ class SwarmRetriever:
         # Compute all query-embedding similarities: (batch_size, n_unique)
         all_sims = torch.mm(query_vecs_norm, valid_embs_norm.t())
 
-        # Build ID-to-index mapping
+        # Build ID-to-index mapping (int32 to save memory)
         max_id = self._max_node_id + 1
-        id_to_idx = torch.full((max_id,), -1, device=device, dtype=torch.long)
-        id_to_idx[valid_ids] = torch.arange(valid_ids.numel(), device=device)
+        id_to_idx = torch.full((max_id,), -1, device=device, dtype=torch.int32)
+        id_to_idx[valid_ids] = torch.arange(valid_ids.numel(), device=device, dtype=torch.int32)
 
         # Map neighbor IDs to embedding indices
         clamped_neighbors = all_neighbors.clamp(0, max_id - 1)
@@ -2670,6 +2799,7 @@ class SwarmRetriever:
 
         return query_pheromones
 
+    @torch.no_grad()
     def _step_multi_query(
         self,
         agent_locations: torch.Tensor,   # (batch_size, n_agents)
@@ -2677,6 +2807,7 @@ class SwarmRetriever:
         query_pheromones: torch.Tensor,  # (batch_size, n_nodes)
         step: int,
         max_pheromone: float,
+        weight_tensors: Optional[WeightTensors] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Execute one step for all agents across all queries.
@@ -2721,11 +2852,24 @@ class SwarmRetriever:
         normalized_pheromones = pheromone_vals / (max_pheromone + 1e-8)
         repulsion_scores = 1.0 - normalized_pheromones
 
-        # Combine with default weights
+        # Combine features using genome weights (or defaults if not provided)
+        # Movement features: [0] semantic, [1] stark_centrality (unused), [2] node_centrality, [3] pheromone_repulsion
+        if weight_tensors is not None:
+            # Use genome weights - take mean across groups for now (all agents use same weights)
+            w = weight_tensors.movement_weights.mean(dim=0)  # (n_features,)
+            w_semantic = w[0].item()
+            w_centrality = w[2].item()  # node_centrality is feature index 2
+            w_repulsion = w[3].item()   # pheromone_repulsion is feature index 3
+        else:
+            # Fallback to default weights
+            w_semantic = 0.3
+            w_centrality = 0.4
+            w_repulsion = 0.3
+
         total_scores = (
-            0.3 * similarities +
-            0.4 * centrality_scores +
-            0.3 * repulsion_scores
+            w_semantic * similarities +
+            w_centrality * centrality_scores +
+            w_repulsion * repulsion_scores
         )
 
         # Apply mask

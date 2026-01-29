@@ -39,9 +39,8 @@ class ArchiveComparatorConfig:
     mode: ArchiveComparisonMode = ArchiveComparisonMode.QUALITY_ONLY
 
     # Weights for WEIGHTED_COMPOSITE mode
-    quality_weight: float = 0.7
+    quality_weight: float = 0.8
     stability_weight: float = 0.2
-    cost_weight: float = 0.1  # Cost is subtracted (lower is better)
 
     # Thresholds for METRIC_THRESHOLD mode (must meet these to compete)
     entry_thresholds: Dict[str, float] = field(default_factory=lambda: {
@@ -135,13 +134,12 @@ class ArchiveComparator:
         return challenger.fitness.quality_score > incumbent.fitness.quality_score + margin
 
     def _compare_weighted_composite(self, challenger: Genome, incumbent: Genome) -> bool:
-        """Weighted combination of quality, stability, and cost."""
+        """Weighted combination of quality and stability."""
         def score(g: Genome) -> float:
             f = g.fitness
             return (
                 self.config.quality_weight * f.quality_score +
-                self.config.stability_weight * f.stability_score -
-                self.config.cost_weight * f.cost_score
+                self.config.stability_weight * f.stability_score
             )
 
         margin = self.config.min_improvement_margin
@@ -168,10 +166,9 @@ class ArchiveComparator:
 
     def _compare_lexicographic(self, challenger: Genome, incumbent: Genome) -> bool:
         """
-        Lexicographic comparison: Quality > Stability > Cost
+        Lexicographic comparison: Quality > Stability
 
         First compares quality. If equal (within margin), compares stability.
-        If still equal, prefers lower cost.
         """
         cf = challenger.fitness
         if_ = incumbent.fitness
@@ -184,13 +181,7 @@ class ArchiveComparator:
             return False
 
         # Quality is approximately equal - check stability
-        if cf.stability_score > if_.stability_score + margin:
-            return True
-        if cf.stability_score < if_.stability_score - margin:
-            return False
-
-        # Stability also equal - prefer lower cost
-        return cf.cost_score < if_.cost_score - margin
+        return cf.stability_score > if_.stability_score + margin
 
     def get_comparison_score(self, genome: Genome) -> float:
         """
@@ -201,8 +192,7 @@ class ArchiveComparator:
         f = genome.fitness
         return (
             self.config.quality_weight * f.quality_score +
-            self.config.stability_weight * f.stability_score -
-            self.config.cost_weight * f.cost_score
+            self.config.stability_weight * f.stability_score
         )
 
 

@@ -92,6 +92,8 @@ class PopulationEvaluator:
         enable_shared_precompute: bool = True,
         enable_cross_genome_metric_batch: bool = True,
         heuristic_features: HeuristicFeatureConfig = None,
+        run_mode: str = "batched",  # "batched" or "sequential"
+        run_batch_size: int = 100,  # GPU batch size for multi-query traversal
     ):
         self.retriever = retriever
         self.evaluator = evaluator
@@ -104,6 +106,8 @@ class PopulationEvaluator:
         self.decision_sample_rate = decision_sample_rate
         self.early_exit_threshold = early_exit_threshold
         self.enable_adaptive = enable_adaptive
+        self.run_mode = run_mode
+        self.run_batch_size = run_batch_size
 
         # Compilers for both modes
         self._expression_compiler = GenomeCompiler()
@@ -235,7 +239,13 @@ class PopulationEvaluator:
         self.stats.avg_queries_per_genome = total_queries_used / max(1, len(unevaluated))
         self.stats.time_saved_estimate = 1.0 - (total_queries_used / max(1, max_queries))
 
-        logger.info(f"Evaluation complete:")
+        # GPU memory report (reading counters is ~0 overhead)
+        if torch.cuda.is_available():
+            gpu_mem_mb = torch.cuda.memory_allocated() / 1024 / 1024
+            gpu_peak_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+            logger.info(f"Evaluation complete: GPU={gpu_mem_mb:.0f}MB (peak={gpu_peak_mb:.0f}MB)")
+        else:
+            logger.info(f"Evaluation complete:")
         logger.info(f"  > Avg queries/genome: {self.stats.avg_queries_per_genome:.1f} / {len(queries)}")
         logger.info(f"  > Time saved estimate: {self.stats.time_saved_estimate:.1%}")
         if self.enable_adaptive:
@@ -312,7 +322,8 @@ class PopulationEvaluator:
             results = self.retriever.retrieve_batch_with_precomputed(
                 query_embeddings=shared_context.query_embeddings,
                 initial_pools=initial_pools,
-                max_workers=self.max_workers_per_retrieval,
+                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                gpu_batch_size=self.run_batch_size,
                 genome_id=genome.id,
                 **retriever_kwargs
             )
@@ -324,6 +335,10 @@ class PopulationEvaluator:
             genome._retrieval_time = time.time() - start_time
 
             logger.debug(f"  > Genome '{genome.id}' ({genome_idx + 1}/{n_genomes}) retrieval complete")
+
+            # Clear CUDA cache to prevent memory fragmentation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Batch compute metrics across all genomes
         if self.enable_cross_genome_metric_batch:
@@ -346,6 +361,20 @@ class PopulationEvaluator:
                     genome.evaluated = True
 
                     self.stats.tier_exits["full"] = self.stats.tier_exits.get("full", 0) + 1
+
+        # Cleanup: release memory from batched results
+        batched_results.clear()
+
+        # Cleanup: release shared context tensors
+        if shared_context.ground_truth_tensor is not None:
+            del shared_context.ground_truth_tensor
+            shared_context.ground_truth_tensor = None
+        if shared_context.gt_sizes is not None:
+            del shared_context.gt_sizes
+            shared_context.gt_sizes = None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return total_queries_used
 
@@ -394,6 +423,10 @@ class PopulationEvaluator:
                     self.stats.tier_exits[exit_tier] += 1
 
                 self._log_genome_result(genome, exit_tier, completed_count, len(batch))
+
+                # Clear CUDA cache to prevent memory fragmentation and latency creep
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             return total_queries_used
 
@@ -454,7 +487,8 @@ class PopulationEvaluator:
             first_quarter_results = self.retriever.retrieve_batch_with_precomputed(
                 query_embeddings=shared_context.query_embeddings[:quarter],
                 initial_pools=initial_pools[:quarter],
-                max_workers=self.max_workers_per_retrieval,
+                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                gpu_batch_size=self.run_batch_size,
                 genome_id=f"{genome.id}_quarter",
                 **retriever_kwargs
             )
@@ -496,7 +530,8 @@ class PopulationEvaluator:
             remaining_results = self.retriever.retrieve_batch_with_precomputed(
                 query_embeddings=shared_context.query_embeddings[quarter:],
                 initial_pools=initial_pools[quarter:],
-                max_workers=self.max_workers_per_retrieval,
+                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                gpu_batch_size=self.run_batch_size,
                 genome_id=f"{genome.id}_full",
                 **retriever_kwargs
             )
@@ -545,7 +580,8 @@ class PopulationEvaluator:
             results = self.retriever.retrieve_batch_with_precomputed(
                 query_embeddings=shared_context.query_embeddings,
                 initial_pools=initial_pools,
-                max_workers=self.max_workers_per_retrieval,
+                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                gpu_batch_size=self.run_batch_size,
                 genome_id=genome.id,
                 **retriever_kwargs
             )
@@ -553,7 +589,7 @@ class PopulationEvaluator:
             # Fallback
             results = self.retriever.retrieve_batch(
                 queries=queries,
-                max_workers=self.max_workers_per_retrieval,
+                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
                 genome_id=genome.id,
                 **retriever_kwargs
             )
@@ -736,16 +772,16 @@ class PopulationEvaluator:
         """Log evaluation result for a genome."""
         qual = genome.fitness.quality_score
         stab = genome.fitness.stability_score
-        cost = genome.fitness.cost_score
         h1 = genome.metrics.get("Hit@1", 0.0)
         h5 = genome.metrics.get("Hit@5", 0.0)
         mrr = genome.metrics.get("MRR", 0.0)
         r20 = genome.metrics.get("Recall@20", 0.0)
+        latency_ms = genome.metrics.get("latency", 0.0) * 1000  # Convert to ms
 
         logger.info(
             f"  > Finished '{genome.id}' ({completed_count}/{batch_size}) | "
-            f"Tier: {exit_tier} | Fitness(Q/S/C): {qual:.4f}/{stab:.4f}/{cost:.1f} | "
-            f"H@1: {h1:.4f} | H@5: {h5:.4f} | MRR: {mrr:.4f} | R@20: {r20:.4f}"
+            f"Tier: {exit_tier} | Lat: {latency_ms:.1f}ms | Q: {qual:.4f} | "
+            f"H@1: {h1:.2f} | H@5: {h5:.2f} | MRR: {mrr:.2f} | R@20: {r20:.2f}"
         )
 
     def _evaluate_batch(
@@ -1040,7 +1076,8 @@ class PopulationEvaluator:
                     retrieved_ids,
                     gt_sets,
                     k_values=self.evaluator.k_values,
-                    device="cuda"
+                    device="cuda",
+                    return_per_query=True
                 )
             except Exception as e:
                 logger.debug(f"GPU metrics failed, falling back to CPU: {e}")
@@ -1049,6 +1086,10 @@ class PopulationEvaluator:
                     gt_sets,
                     k_values=self.evaluator.k_values
                 )
+                # Fall back to zero variance for CPU path
+                for key in list(metrics.keys()):
+                    if not key.startswith("per_query_") and not key.startswith("var_"):
+                        metrics[f"var_{key}"] = 0.0
         else:
             # CPU batch computation
             metrics = MetricFunctions.compute_all_metrics_batch(
@@ -1056,10 +1097,30 @@ class PopulationEvaluator:
                 gt_sets,
                 k_values=self.evaluator.k_values
             )
+            # Fall back to zero variance for CPU path
+            for key in list(metrics.keys()):
+                if not key.startswith("per_query_") and not key.startswith("var_"):
+                    metrics[f"var_{key}"] = 0.0
 
-        # Add variance estimates (using simplified calculation)
-        for key in list(metrics.keys()):
-            metrics[f"var_{key}"] = 0.0  # Simplified - full variance would need per-query scores
+        # Compute variance from per-query scores if available
+        per_query_keys = [k for k in metrics.keys() if k.startswith("per_query_")]
+        for pq_key in per_query_keys:
+            base_name = pq_key.replace("per_query_", "")
+            scores_tensor = metrics[pq_key]
+            if isinstance(scores_tensor, torch.Tensor) and len(scores_tensor) > 1:
+                metrics[f"var_{base_name}"] = float(scores_tensor.var().item())
+            else:
+                metrics[f"var_{base_name}"] = 0.0
+            # Remove per-query tensors from final metrics
+            del metrics[pq_key]
+
+        # Set main variance from priority metric
+        priority_keys = ["Recall@10", "Hit@10", "MRR", "Recall@5", "Hit@5"]
+        main_key = next((k for k in priority_keys if f"var_{k}" in metrics), None)
+        if main_key:
+            metrics["variance"] = metrics[f"var_{main_key}"]
+        else:
+            metrics["variance"] = 0.0
 
         return metrics
 
@@ -1162,7 +1223,8 @@ class PopulationEvaluator:
         all_results = self.retriever.retrieve_batch_with_precomputed(
             query_embeddings=shared_context.query_embeddings,
             initial_pools=initial_pools,
-            max_workers=self.max_workers_per_retrieval,
+            max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+            gpu_batch_size=self.run_batch_size,
             genome_id=genome.id,
             **retriever_kwargs
         )

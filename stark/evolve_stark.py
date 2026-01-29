@@ -80,16 +80,17 @@ def run_evolution(args):
     print(f"\n{'='*50}")
     print(f"MAP-ELITES: {args.dataset.upper()} | Mode: {args.mode}")
     print(f"Generations: {args.gens} | Train: {args.train_ss} | Val: {args.val_ss}")
+    print(f"Run: {args.run_mode} | Batch size: {args.run_batch_size}")
     print(f"{'='*50}\n")
 
-    # Storage config
+    # Storage config - optimized for speed (less validation/checkpoint overhead)
     storage = StorageConfig(
         base_dir=os.path.join(BASE_DIR, "runs"),
         dataset=args.dataset,
         run_id=args.run_id,
         device=args.device,
-        checkpoint_frequency=25 if args.mode == "weighted_sum" else 20,
-        validation_frequency=10,
+        checkpoint_frequency=50,  # Checkpoint every 50 gens
+        validation_frequency=25,  # Validate every 25 gens
     )
     run_manager = RunManager(storage)
 
@@ -150,11 +151,12 @@ def run_evolution(args):
     )
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
 
-    # Mode-specific config
+    # Mode-specific config - optimized for speed
+    # Target: 500 gens in 3 hours (~21s/gen max)
     if args.mode == "weighted_sum":
-        initial_fill, batch_size = 100, 30
+        initial_fill, batch_size = 50, 15
     else:
-        initial_fill, batch_size = 80, 25
+        initial_fill, batch_size = 40, 12
 
     config = EvolutionConfig(
         genome_mode=args.mode,
@@ -167,6 +169,8 @@ def run_evolution(args):
             enable_shared_precompute=True,
             enable_cross_genome_metric_batch=True,
             early_exit_threshold=0.25,
+            run_mode=args.run_mode,
+            run_batch_size=args.run_batch_size,
         ),
         map_elites=MapElitesConfig(
             dimensions=["aggressiveness", "complexity"],
@@ -257,6 +261,11 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="auto",
                         choices=["auto", "cuda", "mps", "cpu"],
                         help="Device: auto (detect best), cuda, mps, or cpu")
+    parser.add_argument("--run-mode", default="batched",
+                        choices=["batched", "sequential"],
+                        help="Retrieval mode: batched (GPU multi-query) or sequential")
+    parser.add_argument("--run-batch-size", type=int, default=100,
+                        help="GPU batch size for multi-query traversal (default: 100)")
 
     args = parser.parse_args()
 

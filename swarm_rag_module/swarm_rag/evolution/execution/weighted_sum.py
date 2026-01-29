@@ -147,6 +147,9 @@ class WeightedSumCompiler:
             **genome.params,
             "agent_groups": agent_groups,
             "ranking_strategies": ranking_strategies,
+            # Pass raw weight tensors for GPU batched processing
+            "weight_tensors": wt,
+            "feature_config": self.feature_config,
         }
 
     def _create_movement_strategy(

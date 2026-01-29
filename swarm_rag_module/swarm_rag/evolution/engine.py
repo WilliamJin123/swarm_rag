@@ -157,6 +157,8 @@ class EvolutionEngine:
             device=device,  # Pass device for GPU-accelerated evaluation
             enable_shared_precompute=self.evo_config.resources.enable_shared_precompute,
             enable_cross_genome_metric_batch=self.evo_config.resources.enable_cross_genome_metric_batch,
+            run_mode=self.evo_config.resources.run_mode,
+            run_batch_size=self.evo_config.resources.run_batch_size,
         )
 
         # Initialize LLM Provider if using LLM Mutation

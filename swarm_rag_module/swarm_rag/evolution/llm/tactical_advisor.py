@@ -38,9 +38,9 @@ class TacticalContext:
     """
     genome_id: str
 
-    # Only 3 key metrics (simplified from 10+)
+    # Key metrics (simplified from 10+)
     quality_score: float
-    cost_score: float
+    stability_score: float
     recall_at_k: float
 
     # Aggregated behavioral signature (human-readable)
@@ -65,7 +65,7 @@ class TacticalContext:
         return {
             "genome_id": self.genome_id,
             "quality_score": self.quality_score,
-            "cost_score": self.cost_score,
+            "stability_score": self.stability_score,
             "recall_at_k": self.recall_at_k,
             "behavioral_signature": self.behavioral_signature,
             "strategy_summary": self.strategy_summary,
@@ -213,13 +213,13 @@ Return JSON with exactly these keys:
         """Build user prompt with tactical context."""
         # Build readable metrics
         quality_rating = "GOOD" if context.quality_score > 0.7 else "MODERATE" if context.quality_score > 0.4 else "POOR"
-        cost_rating = "LOW" if context.cost_score < 0.3 else "MODERATE" if context.cost_score < 0.6 else "HIGH"
+        stability_rating = "GOOD" if context.stability_score > 0.8 else "MODERATE" if context.stability_score > 0.5 else "POOR"
 
         prompt = f"""## Genome: {context.genome_id}
 
 **Performance** (rating in parentheses):
 - Quality Score: {context.quality_score:.4f} ({quality_rating})
-- Cost Score: {context.cost_score:.4f} ({cost_rating})
+- Stability Score: {context.stability_score:.4f} ({stability_rating})
 - Recall@K: {context.recall_at_k:.4f}
 
 **Behavioral Signature**: {context.behavioral_signature or "normal"}
@@ -334,11 +334,11 @@ Return your prescription as JSON."""
                 confidence=0.5,
             )
 
-        if context.cost_score > 0.7:
+        if context.stability_score < 0.5:
             return MutationPrescription(
-                diagnosis="High cost score",
-                primary_intent=MutationIntent.REDUCE_COST,
-                target_component=TargetComponent.PARAMS,
+                diagnosis="Low stability score",
+                primary_intent=MutationIntent.IMPROVE_QUALITY,
+                target_component=TargetComponent.ALL,
                 confidence=0.5,
             )
 
@@ -433,7 +433,7 @@ def build_tactical_context(
     return TacticalContext(
         genome_id=genome.id,
         quality_score=genome.fitness.quality_score,
-        cost_score=genome.fitness.cost_score,
+        stability_score=genome.fitness.stability_score,
         recall_at_k=genome.metrics.get("Recall@20", 0.0),
         behavioral_signature=behavioral_signature,
         strategy_summary=strategy_summary,

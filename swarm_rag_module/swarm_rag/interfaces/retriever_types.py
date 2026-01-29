@@ -79,6 +79,10 @@ class RunConfig(TypedDict, total=False):
     Execution parameters (not evolvable).
 
     Controls how retrieval is executed, not what it computes.
+    Benchmark results show batch_size=64 provides best throughput:
+      - Sequential: ~7 q/s
+      - Batch=32: ~26 q/s
+      - Batch=64: ~47 q/s (16x speedup over sequential)
     """
 
     mode: Literal["sequential", "batched"]  # default: "batched"
@@ -96,14 +100,30 @@ class TraversalState:
     Batched state for all queries in a processing chunk.
 
     All tensors are on the same device and have consistent batch dimension.
+
+    Memory-optimized design:
+    - Compact pheromone hash table (10K) instead of dense buffer (150K)
+    - Embedding cache reused across steps to avoid redundant fetches
     """
 
     query_embeddings: torch.Tensor  # (batch, embed_dim)
     agent_positions: torch.Tensor  # (batch, n_agents) - current node IDs
     visit_history: torch.Tensor  # (batch, n_agents, steps+1) - all visited nodes
-    pheromones: torch.Tensor  # (batch, n_nodes) - pheromone levels per query
     step: int  # current step number
     device: str
+
+    # Compact pheromone hash table (replaces dense pheromones tensor)
+    pheromone_keys: torch.Tensor  # (batch, buffer_size) - node IDs, -1 if empty
+    pheromone_values: torch.Tensor  # (batch, buffer_size) - pheromone values
+
+    # Embedding cache (reused across steps)
+    emb_id_to_idx: torch.Tensor  # (max_node_id+1,) - node_id -> cache_idx, -1 if not cached
+    emb_cache: torch.Tensor  # (cache_size, embed_dim) - cached embeddings
+    emb_next_idx: int  # Next free cache slot
+
+    # Config
+    pheromone_buffer_size: int = 10000
+    emb_cache_size: int = 2000
 
     @property
     def batch_size(self) -> int:

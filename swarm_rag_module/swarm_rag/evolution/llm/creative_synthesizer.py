@@ -80,7 +80,7 @@ class CreativeModeContext:
     """
     genome_id: str
     quality_score: float
-    cost_score: float
+    stability_score: float
     recall: float
 
     # Performance issues identified
@@ -286,7 +286,7 @@ class CreativeSynthesizer:
 
 ## Current Genome Performance
 - Quality: {context.quality_score:.3f}
-- Cost: {context.cost_score:.3f}
+- Stability: {context.stability_score:.3f}
 - Recall: {context.recall:.3f}
 - Issues: {', '.join(context.issues) if context.issues else 'None identified'}
 
@@ -346,7 +346,7 @@ Generate a creative {category} expression that addresses the diagnosed issues.""
 
 ## Current Genome Performance
 - Quality: {context.quality_score:.3f}
-- Cost: {context.cost_score:.3f}
+- Stability: {context.stability_score:.3f}
 - Recall: {context.recall:.3f}
 - Issues: {', '.join(context.issues) if context.issues else 'None identified'}
 
@@ -631,7 +631,7 @@ def build_creative_context(
     """
     # Extract performance metrics
     quality = genome.fitness.quality_score if genome.fitness else 0.0
-    cost = genome.fitness.cost_score if genome.fitness else 0.0
+    stability = genome.fitness.stability_score if genome.fitness else 0.0
     recall = genome.metrics.get("recall_at_20", 0.0)
 
     # Build issue list from diagnosis
@@ -654,7 +654,7 @@ def build_creative_context(
     return CreativeModeContext(
         genome_id=genome.id,
         quality_score=quality,
-        cost_score=cost,
+        stability_score=stability,
         recall=recall,
         issues=issues,
         diagnosis=prescription.diagnosis,

@@ -51,9 +51,8 @@ class FitnessConfig:
     all_thresholds_bonus: float = 0.10  # Extra bonus when all thresholds met
     min_metric_penalty_factor: float = 0.1  # Penalty factor for below-minimum
 
-    # Stability and cost weights (for hybrid scoring)
+    # Stability weight (for hybrid scoring)
     stability_weight: float = 0.1
-    cost_weight: float = 0.05
 
 
 class FitnessCalculator:
@@ -148,14 +147,12 @@ class FitnessCalculator:
         else:
             quality_score = self._weighted_sum(metrics, effective_weights)
 
-        # Calculate stability and cost
+        # Calculate stability from variance (higher stability = lower variance)
         stability = 1.0 - metrics.get("variance", 0.0)
-        cost = metrics.get("latency", 0.0) + metrics.get("complexity", 0.0) * 0.001
 
         return FitnessResult(
             quality_score=quality_score,
             stability_score=stability,
-            cost_score=cost
         )
 
     def _get_weights(self) -> Dict[str, float]:

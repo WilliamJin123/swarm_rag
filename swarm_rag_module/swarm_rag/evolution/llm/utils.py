@@ -124,7 +124,6 @@ class ParameterBounds(TypedDict, total=False):
 class GenomePerformance(TypedDict):
     """Performance metrics for a genome."""
     quality_score: float
-    cost_score: float
     stability_score: float
     recall_at_20: float
     hit_at_1: float
@@ -180,7 +179,6 @@ def genome_to_json_context(
     # 1. Performance metrics
     performance: GenomePerformance = {
         "quality_score": genome.fitness.quality_score,
-        "cost_score": genome.fitness.cost_score,
         "stability_score": genome.fitness.stability_score,
         "recall_at_20": genome.metrics.get("Recall@20", 0.0),
         "hit_at_1": genome.metrics.get("Hit@1", 0.0),

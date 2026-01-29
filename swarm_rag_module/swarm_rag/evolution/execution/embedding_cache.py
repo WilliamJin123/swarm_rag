@@ -59,6 +59,7 @@ class QueryEmbeddingCache:
         batch_embedding_fn: Callable[[List[str]], torch.Tensor] = None,
         device: str = None,
         batch_size: int = 32,
+        maxsize: int = 10000,
     ):
         """
         Initialize embedding cache.
@@ -68,10 +69,12 @@ class QueryEmbeddingCache:
             batch_embedding_fn: Optional function to embed multiple queries at once
             device: Device for storing embeddings ("cuda", "mps", or "cpu", auto-detected if None)
             batch_size: Batch size for GPU embedding
+            maxsize: Maximum number of embeddings to cache (LRU eviction when exceeded)
         """
         self.embedding_fn = embedding_fn
         self.batch_embedding_fn = batch_embedding_fn
         self.batch_size = batch_size
+        self.maxsize = maxsize
 
         # Resolve device
         if device is not None:
@@ -86,10 +89,18 @@ class QueryEmbeddingCache:
             raise RuntimeError("MPS requested but not available")
 
         self._cache: Dict[str, Any] = {}  # Stores torch.Tensor
+        self._access_order: List[str] = []  # Track LRU order for eviction
         self._embedding_dim: Optional[int] = None
         self.stats = EmbeddingCacheStats()
 
-        logger.debug(f"EmbeddingCache initialized with device={self._device}")
+        logger.debug(f"EmbeddingCache initialized with device={self._device}, maxsize={maxsize}")
+
+    def _evict_if_needed(self):
+        """Evict oldest entries if cache exceeds maxsize."""
+        while len(self._cache) > self.maxsize and self._access_order:
+            oldest = self._access_order.pop(0)
+            if oldest in self._cache:
+                del self._cache[oldest]
 
     def precompute(
         self,
@@ -160,11 +171,15 @@ class QueryEmbeddingCache:
             # Store each embedding
             for j, q in enumerate(batch):
                 self._cache[q] = storage_embeddings[j]
+                self._access_order.append(q)
                 if self._embedding_dim is None:
                     if hasattr(storage_embeddings[j], 'shape'):
                         self._embedding_dim = storage_embeddings[j].shape[0]
                     else:
                         self._embedding_dim = len(storage_embeddings[j])
+
+            # Evict oldest entries if cache exceeds maxsize
+            self._evict_if_needed()
 
     def _to_device(self, embeddings) -> torch.Tensor:
         """
@@ -204,9 +219,13 @@ class QueryEmbeddingCache:
             storage_emb = self._convert_single_to_storage_format(embedding)
 
             self._cache[q] = storage_emb
+            self._access_order.append(q)
             if self._embedding_dim is None:
                 dim = storage_emb.shape[0] if hasattr(storage_emb, 'shape') else len(storage_emb)
                 self._embedding_dim = dim
+
+            # Evict oldest entries if cache exceeds maxsize
+            self._evict_if_needed()
 
     def _convert_single_to_storage_format(self, embedding):
         """Convert single embedding to tensor on configured device. Deprecated: use _to_device."""
@@ -226,6 +245,10 @@ class QueryEmbeddingCache:
         """
         if query in self._cache:
             self.stats.cache_hits += 1
+            # Update access order for LRU
+            if query in self._access_order:
+                self._access_order.remove(query)
+            self._access_order.append(query)
             return self._cache[query]
 
         self.stats.cache_misses += 1
@@ -239,6 +262,8 @@ class QueryEmbeddingCache:
             # Store on configured device
             cache_emb = self._to_device(embedding)
             self._cache[query] = cache_emb
+            self._access_order.append(query)
+            self._evict_if_needed()
             return cache_emb
 
         return None
@@ -320,6 +345,7 @@ class QueryEmbeddingCache:
     def clear(self):
         """Clear the cache."""
         self._cache.clear()
+        self._access_order.clear()
         self._embedding_dim = None
         self.stats = EmbeddingCacheStats()
 

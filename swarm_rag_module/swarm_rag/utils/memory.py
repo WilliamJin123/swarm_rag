@@ -166,16 +166,18 @@ class MemoryProfiler:
         profiler.print_report()
     """
 
-    def __init__(self, track_cpu: bool = True, track_gpu: bool = True):
+    def __init__(self, track_cpu: bool = True, track_gpu: bool = True, maxsize: int = 1000):
         """
         Initialize memory profiler.
 
         Args:
             track_cpu: Whether to track CPU/process memory
             track_gpu: Whether to track GPU memory
+            maxsize: Maximum number of snapshots/deltas to keep (oldest are removed)
         """
         self.track_cpu = track_cpu and _PSUTIL_AVAILABLE
         self.track_gpu = track_gpu and get_device() != "cpu"
+        self.maxsize = maxsize
 
         self.snapshots: List[MemorySnapshot] = []
         self.deltas: List[MemoryDelta] = []
@@ -237,6 +239,9 @@ class MemoryProfiler:
         )
 
         self.snapshots.append(snap)
+        # Trim to maxsize to prevent unbounded growth
+        if len(self.snapshots) > self.maxsize:
+            self.snapshots.pop(0)
         return snap
 
     @contextlib.contextmanager
@@ -261,6 +266,9 @@ class MemoryProfiler:
             after = self.snapshot(f"{label}_after")
             delta = MemoryDelta(before=before, after=after, label=label)
             self.deltas.append(delta)
+            # Trim to maxsize to prevent unbounded growth
+            if len(self.deltas) > self.maxsize:
+                self.deltas.pop(0)
             logger.debug(f"Memory: {delta}")
 
     def profile(self, func: Callable) -> Callable:

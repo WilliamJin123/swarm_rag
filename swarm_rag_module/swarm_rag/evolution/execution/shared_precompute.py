@@ -330,3 +330,11 @@ class BatchedRetrievalResults:
                 row_idx += 1
 
         return self.all_retrieved_ids, self.genome_query_indices
+
+    def clear(self):
+        """Release memory from batched results."""
+        self.results_by_genome.clear()
+        if self.all_retrieved_ids is not None:
+            del self.all_retrieved_ids
+            self.all_retrieved_ids = None
+        self.genome_query_indices = None

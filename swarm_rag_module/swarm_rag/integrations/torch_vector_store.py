@@ -490,5 +490,14 @@ class TorchVectorStore(VectorStore):
         except Exception:
             pass
 
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - release resources."""
+        self.close()
+        return False
+
 
 __all__ = ['TorchVectorStore', 'TensorSearchResult']

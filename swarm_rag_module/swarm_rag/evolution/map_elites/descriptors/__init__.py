@@ -13,7 +13,7 @@ from . import builtin  # noqa: F401
 from .builtin import (
     ComplexityDescriptor,
     NAgentsDescriptor,
-    CostDescriptor,
+    StabilityDescriptor,
     QualityDescriptor,
     RecallDescriptor,
     AggressivenessDescriptor,
@@ -39,7 +39,7 @@ __all__ = [
     # Built-in descriptors
     "ComplexityDescriptor",
     "NAgentsDescriptor",
-    "CostDescriptor",
+    "StabilityDescriptor",
     "QualityDescriptor",
     "RecallDescriptor",
     "AggressivenessDescriptor",

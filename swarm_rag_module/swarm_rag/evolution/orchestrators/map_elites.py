@@ -249,7 +249,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         # Print profiler summary and save data
         if self._profiler.enabled:
             self.logger.info(self._profiler.summary())
-            profiler_path = os.path.join(self._run_manager.config.log_dir, "profiler_data.json")
+            profiler_path = os.path.join(self.run_manager.config.log_dir, "profiler_data.json")
             self._profiler.save(profiler_path)
             self.logger.info(f"Profiler data saved to {profiler_path}")
 

@@ -39,11 +39,12 @@ class GenerationProfiler:
 
     __slots__ = (
         'enabled', 'generation_timings', 'generation_memory',
-        'current_gen', '_has_cuda', '_gen_start_mem'
+        'current_gen', '_has_cuda', '_gen_start_mem', 'max_generations'
     )
 
-    def __init__(self, enabled: bool = False):
+    def __init__(self, enabled: bool = False, max_generations: int = 100):
         self.enabled = enabled
+        self.max_generations = max_generations
         self.generation_timings: Dict[int, Dict[str, float]] = {}
         self.generation_memory: Dict[int, Dict[str, Tuple[int, int]]] = {}  # (before, after) bytes
         self.current_gen: int = 0
@@ -68,6 +69,13 @@ class GenerationProfiler:
         self.generation_timings[gen] = {}
         self.generation_memory[gen] = {}
         self._gen_start_mem = self._get_gpu_mem()
+
+        # Trim old generations to prevent unbounded growth
+        if len(self.generation_timings) > self.max_generations:
+            oldest = min(self.generation_timings.keys())
+            del self.generation_timings[oldest]
+            if oldest in self.generation_memory:
+                del self.generation_memory[oldest]
 
     @contextmanager
     def section(self, name: str):
@@ -311,3 +319,8 @@ class GenerationProfiler:
                     }
 
         return result
+
+    def clear(self):
+        """Reset all profiling data."""
+        self.generation_timings.clear()
+        self.generation_memory.clear()

@@ -15,13 +15,11 @@ class FitnessResult:
     Attributes:
         quality_score: Primary fitness metric (higher is better)
         stability_score: Consistency across evaluations (higher is better)
-        cost_score: Computational cost (lower is better)
         metrics: Optional dict of raw metric values (Hit@1, MRR, etc.)
         sort_key: Custom sort key for comparison strategies
     """
     quality_score: float = field(default=-math.inf, compare=True)   # maximise
     stability_score: float = field(default=-math.inf, compare=True) # maximise
-    cost_score: float = field(default=math.inf, compare=True)      # minimise
 
     # Raw metric values (optional, used by archive comparator for threshold checks)
     metrics: Optional[Dict[str, float]] = field(default=None, compare=False)
@@ -37,7 +35,7 @@ class FitnessResult:
             stability_prec = FitnessResult._precision_from_tolerance(STABILITY_TOLERANCE)
             quality = round(self.quality_score, quality_prec)
             stability = round(self.stability_score, stability_prec)
-            self.sort_key = (quality, stability, -self.cost_score)
+            self.sort_key = (quality, stability)
         else:
             # Other modes should set sort_key directly via strategy
             pass
@@ -79,12 +77,31 @@ class FitnessResult:
         result = {
             "quality_score": self.quality_score,
             "stability_score": self.stability_score,
-            "cost_score": self.cost_score,
             "sort_key": self.sort_key
         }
         if self.metrics is not None:
             result["metrics"] = self.metrics
         return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, float]) -> 'FitnessResult':
+        """
+        Deserializes a FitnessResult from a dictionary.
+
+        Handles backward compatibility by ignoring cost_score from old checkpoints.
+
+        Args:
+            data: Dictionary with fitness scores
+
+        Returns:
+            FitnessResult instance
+        """
+        return cls(
+            quality_score=data.get("quality_score", -math.inf),
+            stability_score=data.get("stability_score", -math.inf),
+            metrics=data.get("metrics"),
+            sort_key=data.get("sort_key"),
+        )
 
     @staticmethod
     def _precision_from_tolerance(tol: float) -> int:

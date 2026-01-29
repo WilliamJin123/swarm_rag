@@ -9,25 +9,25 @@ from swarm_rag.core.heuristics import HeuristicContext
 
 def test_fitness_logic():
     print("\n--- Testing FitnessResult (Lexicographic Sorting) ---")
-    
+
     # 1. Quality Dominates
-    f1 = FitnessResult(quality_score=0.8, stability_score=0.5, cost_score=100)
-    f2 = FitnessResult(quality_score=0.6, stability_score=0.9, cost_score=50) 
+    f1 = FitnessResult(quality_score=0.8, stability_score=0.5)
+    f2 = FitnessResult(quality_score=0.6, stability_score=0.9)
     assert f1 > f2, "High quality should beat low quality"
     print("  ✓ Quality dominance check passed")
 
     # 2. Stability Tie-Breaker (Quality equal within tolerance)
-    f3 = FitnessResult(quality_score=0.8001, stability_score=0.9, cost_score=100)
-    f4 = FitnessResult(quality_score=0.8002, stability_score=0.1, cost_score=100)
+    f3 = FitnessResult(quality_score=0.8001, stability_score=0.9)
+    f4 = FitnessResult(quality_score=0.8002, stability_score=0.1)
     # 0.8001 and 0.8002 are within epsilon 0.005, so Stability decides
     assert f3 > f4, "Stability should break ties when quality is similar"
     print("  ✓ Stability tie-breaker check passed")
 
-    # 3. Cost Tie-Breaker (Quality & Stability equal)
-    f5 = FitnessResult(quality_score=0.8, stability_score=0.5, cost_score=200) # High cost
-    f6 = FitnessResult(quality_score=0.8, stability_score=0.5, cost_score=50)  # Low cost
-    assert f6 > f5, "Lower cost should win when others are equal"
-    print("  ✓ Cost tie-breaker check passed")
+    # 3. Stability Tie-Breaker (Quality & Stability different)
+    f5 = FitnessResult(quality_score=0.8, stability_score=0.3) # Low stability
+    f6 = FitnessResult(quality_score=0.8, stability_score=0.7)  # High stability
+    assert f6 > f5, "Higher stability should win when quality is equal"
+    print("  ✓ Stability comparison check passed")
 
 def test_expression_evaluation():
     print("\n--- Testing Expression Trees ---")

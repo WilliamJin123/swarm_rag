@@ -31,15 +31,15 @@ class NAgentsDescriptor(GenotypicDescriptor):
 
 
 @DescriptorRegistry.register
-class CostDescriptor(PhenotypicDescriptor):
-    """Phenotypic: Cost score from fitness."""
+class StabilityDescriptor(PhenotypicDescriptor):
+    """Phenotypic: Stability score from fitness."""
 
     @property
     def name(self) -> str:
-        return "cost"
+        return "stability"
 
     def calculate(self, genome: Genome) -> float:
-        return genome.fitness.cost_score
+        return genome.fitness.stability_score
 
 
 @DescriptorRegistry.register

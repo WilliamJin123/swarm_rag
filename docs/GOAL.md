@@ -1,3 +1,5 @@
+Found a genome that has:
+
 Hit@1 > 60%
 Hit@5 > 75%
 Recall@20 > 80%

@@ -133,7 +133,6 @@ class FitnessMetrics(TypedDict, total=False):
     These are the primary metrics used for selection and comparison.
     """
     quality_score: float   # Primary quality metric (higher is better)
-    cost_score: float      # Cost/latency metric (lower is better)
     stability_score: float # Consistency metric (higher is better)
 
 

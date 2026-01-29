@@ -310,6 +310,14 @@ class ResourceConfig:
     # Early exit threshold at halfway checkpoint (quality score threshold)
     early_exit_threshold: float = 0.30
 
+    # Retrieval execution mode (for SwarmRetriever)
+    # "batched" (default): Multi-query GPU batching for throughput
+    # "sequential": Process queries one at a time
+    run_mode: Literal["batched", "sequential"] = "batched"
+    # Number of queries per GPU batch (only used when run_mode="batched")
+    # Benchmark results: batch_size=64 gives ~47 q/s, batch_size=100 gives ~52 q/s
+    run_batch_size: int = 100
+
 
 @dataclass
 class MapElitesConfig:

@@ -29,20 +29,18 @@ class ParetoStrategy(FitnessStrategy):
     NSGA-II inspired Non-Dominated Sorting.
     """
     def assign_fitness(self, population: List[Genome], generation: int = 0) -> None:
-        # 1. Extract objectives (Negate minimization objectives for maximization logic)
-        # Objectives: Quality (max), Stability (max), Cost (min)
-        # We convert all to MAXIMIZATION problems for sorting
+        # 1. Extract objectives (all maximization)
+        # Objectives: Quality (max), Stability (max)
 
         pop_size = len(population)
         if pop_size == 0: return
 
-        # Shape: (N, 3) -> [Quality, Stability, -Cost]
-        objectives = torch.zeros((pop_size, 3))
+        # Shape: (N, 2) -> [Quality, Stability]
+        objectives = torch.zeros((pop_size, 2))
         for i, g in enumerate(population):
             objectives[i] = torch.as_tensor([
                 g.fitness.quality_score,
                 g.fitness.stability_score,
-                -g.fitness.cost_score
             ])
 
         # 2. Non-Dominated Sort
@@ -77,7 +75,7 @@ class ParetoStrategy(FitnessStrategy):
             cd = crowding_distances[i]
             # Primary: Lower Rank is better (so -rank is higher)
             # Secondary: Higher Crowding Distance is better (more diversity)
-            g.fitness.sort_key = (-rank, cd, 0.0) 
+            g.fitness.sort_key = (-rank, cd) 
 
     def _fast_non_dominated_sort(self, objectives: torch.Tensor) -> List[List[int]]:
         """

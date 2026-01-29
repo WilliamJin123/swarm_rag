@@ -270,6 +270,12 @@ class EvolutionJournal:
         )
 
         self.generation_summaries.append(summary)
+
+        # Trim generation_summaries to prevent unbounded growth
+        max_summaries = min(self.max_records // 10, 200)
+        if len(self.generation_summaries) > max_summaries:
+            self.generation_summaries.pop(0)
+
         self._qd_score_history.append(qd_score)
 
         # Keep only recent history (bound to max_records to prevent unbounded growth)
