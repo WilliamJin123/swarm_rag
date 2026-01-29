@@ -157,7 +157,8 @@ class SwarmRetriever:
         # Cache max_node_id for dense pheromone tensor building
         self._max_node_id = self.graph_store.n_nodes
         # Pheromone buffer size with headroom for out-of-bounds IDs
-        self._pheromone_buffer_size = max(self._max_node_id + 1024, 150000)
+        # Use actual graph size without arbitrary minimum to prevent memory bloat
+        self._pheromone_buffer_size = self._max_node_id + 1
 
         self.cache_neighbors = cache_neighbors
         if self.cache_neighbors:
@@ -193,6 +194,15 @@ class SwarmRetriever:
         self._graph_buffers = None
         self._graph_n_agents = None
         self._graph_max_degree = None
+
+        # Pre-allocated buffers to prevent GPU memory fragmentation
+        # These are reused across steps within a query
+        self._id_to_idx_buffer: Optional[torch.Tensor] = None
+        self._jitter_buffer: Optional[torch.Tensor] = None
+        self._jitter_buffer_shape: Optional[Tuple[int, int]] = None
+        # Separate buffer for multi-query batched mode (3D: batch, agents, degree)
+        self._jitter_buffer_3d: Optional[torch.Tensor] = None
+        self._jitter_buffer_3d_shape: Optional[Tuple[int, int, int]] = None
 
     def enable_compiled_mode(self) -> bool:
         """
@@ -1090,7 +1100,12 @@ class SwarmRetriever:
             with prof.section("step.id_mapping"):
                 if valid_unique_ids.numel() > 0:
                     mapping_size = self._max_node_id + 1
-                    id_to_idx_tensor = torch.full((mapping_size,), -1, device=device, dtype=torch.long)
+                    # Reuse pre-allocated buffer to prevent memory fragmentation
+                    if self._id_to_idx_buffer is None or self._id_to_idx_buffer.size(0) < mapping_size:
+                        self._id_to_idx_buffer = torch.full((mapping_size,), -1, device=device, dtype=torch.long)
+                    else:
+                        self._id_to_idx_buffer.fill_(-1)
+                    id_to_idx_tensor = self._id_to_idx_buffer[:mapping_size]
                     id_to_idx_tensor[valid_unique_ids] = torch.arange(valid_unique_ids.numel(), device=device)
 
                     valid_neighbor_ids = all_neighbors[neighbor_mask]
@@ -1137,6 +1152,14 @@ class SwarmRetriever:
         normalized_pheromones = neighbor_pheromones / (max_pheromone + 1e-8)
         repulsion_scores = 1.0 - normalized_pheromones
 
+        # Pre-allocate or reuse jitter buffer to prevent memory fragmentation
+        jitter_shape = semantic_scores.shape
+        if self._jitter_buffer is None or self._jitter_buffer_shape != jitter_shape:
+            self._jitter_buffer = torch.empty(jitter_shape, device=device, dtype=torch.float32)
+            self._jitter_buffer_shape = jitter_shape
+        # Generate random values in-place
+        self._jitter_buffer.uniform_(0.0, 0.1)
+
         # Feature computation registry (batched versions)
         feature_registry = {
             "semantic_similarity_unnormalized": semantic_scores,
@@ -1144,7 +1167,7 @@ class SwarmRetriever:
             "stark_centrality": centrality_scores,  # Same as node_centrality for batched
             "node_centrality": centrality_scores,
             "pheromone_repulsion": repulsion_scores,
-            "random_jitter": torch.rand_like(semantic_scores) * 0.1,
+            "random_jitter": self._jitter_buffer,
         }
 
         # Get weights for each feature in order (mean across groups)
@@ -2895,6 +2918,14 @@ class SwarmRetriever:
         normalized_pheromones = pheromone_vals / (max_pheromone + 1e-8)
         repulsion_scores = 1.0 - normalized_pheromones
 
+        # Pre-allocate or reuse 3D jitter buffer for multi-query mode
+        jitter_shape_3d = semantic_scores.shape
+        if self._jitter_buffer_3d is None or self._jitter_buffer_3d_shape != jitter_shape_3d:
+            self._jitter_buffer_3d = torch.empty(jitter_shape_3d, device=device, dtype=torch.float32)
+            self._jitter_buffer_3d_shape = jitter_shape_3d
+        # Generate random values in-place
+        self._jitter_buffer_3d.uniform_(0.0, 0.1)
+
         # Feature computation registry (batched versions)
         feature_registry = {
             "semantic_similarity_unnormalized": semantic_scores,
@@ -2902,7 +2933,7 @@ class SwarmRetriever:
             "stark_centrality": centrality_scores,  # Same as node_centrality for batched
             "node_centrality": centrality_scores,
             "pheromone_repulsion": repulsion_scores,
-            "random_jitter": torch.rand_like(semantic_scores) * 0.1,
+            "random_jitter": self._jitter_buffer_3d,
         }
 
         # Get weights for each feature in order (mean across groups)

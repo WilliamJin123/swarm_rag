@@ -708,6 +708,16 @@ class PopulationEvaluator:
                 k_values=self.evaluator.k_values
             )
 
+        # Cleanup: release expanded GT tensors to free GPU memory
+        if has_precomputed_gt and self.device != "cpu":
+            try:
+                del gt_tensor_expanded
+                del gt_sizes_expanded
+            except NameError:
+                pass  # Variables not created if exception occurred
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
         # Assign metrics back to individual genomes
         genome_id_to_genome = {g.id: g for g in genomes}
 

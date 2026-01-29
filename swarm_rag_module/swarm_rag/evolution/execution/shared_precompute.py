@@ -338,3 +338,6 @@ class BatchedRetrievalResults:
             del self.all_retrieved_ids
             self.all_retrieved_ids = None
         self.genome_query_indices = None
+        # Release CUDA cache to actually free GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
