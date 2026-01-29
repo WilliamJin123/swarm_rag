@@ -59,17 +59,13 @@ class FitnessCalculator:
     """
     Unified fitness calculator with multiple modes.
 
-    Supports two initialization patterns:
-    1. Simple weights dict (legacy): FitnessCalculator(weights={"Recall@20": 1.0})
-    2. Full config (advanced): FitnessCalculator(config=FitnessConfig(...))
-
     Modes: WEIGHTED_SUM, MIN_METRIC, GEOMETRIC_MEAN, THRESHOLD_BONUS, HYBRID
 
     Example:
-        # Legacy simple weights
-        calc = FitnessCalculator(weights={"Recall@20": 0.7, "MRR": 0.3})
+        # Simple weights (via factory)
+        calc = FitnessCalculator.from_weights({"Recall@20": 0.7, "MRR": 0.3})
 
-        # Full config
+        # Full config (recommended)
         config = FitnessConfig(mode=FitnessMode.HYBRID)
         calc = FitnessCalculator(config=config)
 
@@ -79,26 +75,54 @@ class FitnessCalculator:
 
     def __init__(
         self,
+        config: FitnessConfig = None,
+        *,
         weights: Optional[Dict[str, float]] = None,
-        config: Optional[FitnessConfig] = None,
     ):
         """
         Initialize fitness calculator.
 
         Args:
-            weights: Simple weights dict (creates WEIGHTED_SUM mode config)
-            config: Full FitnessConfig for advanced modes
+            config: FitnessConfig for all modes (recommended)
+            weights: DEPRECATED - use FitnessCalculator.from_weights() instead.
+                     Simple weights dict for backward compatibility only.
 
-        Note: Provide either weights OR config, not both.
+        Note: If both config and weights are provided, config takes precedence.
         """
         if config is not None:
             self.config = config
         elif weights is not None:
-            # Convert weights dict to FitnessConfig (legacy compatibility)
+            # Deprecated path - convert weights dict to FitnessConfig
+            import warnings
+            warnings.warn(
+                "FitnessCalculator(weights=...) is deprecated. "
+                "Use FitnessCalculator.from_weights(...) or pass a FitnessConfig instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
             self.config = self._config_from_weights(weights)
         else:
             # Default config
             self.config = FitnessConfig()
+
+    @classmethod
+    def from_weights(cls, weights: Dict[str, float]) -> "FitnessCalculator":
+        """
+        Create a fitness calculator from simple weights dict.
+
+        This is the recommended way to create a simple weighted-sum calculator.
+
+        Args:
+            weights: Dictionary mapping metric names to weights
+
+        Returns:
+            FitnessCalculator configured for weighted sum mode
+
+        Example:
+            calc = FitnessCalculator.from_weights({"Recall@20": 0.7, "MRR": 0.3})
+        """
+        config = cls._config_from_weights(weights)
+        return cls(config=config)
 
     @staticmethod
     def _config_from_weights(weights: Dict[str, float]) -> FitnessConfig:
