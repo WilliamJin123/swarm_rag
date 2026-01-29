@@ -22,7 +22,7 @@ from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
 from .fitness import FitnessCalculator
 from ..types.genome import GenomeCompiler, Genome
-from ..types.config import HeuristicFeatureConfig
+from ..types.config import HeuristicFeatureConfig, GenomeMode
 from .shared_precompute import (
     SharedPrecomputeContext,
     prepare_shared_context,
@@ -152,7 +152,7 @@ class PopulationEvaluator:
 
     def _get_compiler_for_genome(self, genome: Genome):
         """Get the appropriate compiler for a genome based on its mode."""
-        if genome.mode == "weighted_sum":
+        if genome.mode == GenomeMode.WEIGHTED_SUM:
             if self._weighted_sum_compiler is None:
                 # Try to initialize with default features
                 if self._heuristic_features is None:

@@ -3,7 +3,7 @@ from typing import Dict, List, Callable
 
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ..types.genome import DEFAULT_PARAMS, Genome, SwarmParams
-from ..types.config import EvolutionContext, WeightTensors, MutationSigmas
+from ..types.config import EvolutionContext, WeightTensors, MutationSigmas, GenomeMode
 from .strategies import GeneticRegistry
 
 
@@ -24,7 +24,7 @@ class GenomeFactory:
             count = self.config.map_elites.batch_size
 
         # Select strategy based on genome mode
-        if self.config.genome_mode == "weighted_sum":
+        if self.config.genome_mode == GenomeMode.WEIGHTED_SUM:
             # Use weighted sum seeded strategy for weighted_sum mode
             strategy_name = "weighted_sum_seeded"
             # Ensure the weighted_sum module is imported to register strategies

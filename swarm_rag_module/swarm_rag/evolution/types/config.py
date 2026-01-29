@@ -7,12 +7,28 @@ Supports dual-mode evolution: weighted_sum (linear) and expression_tree (symboli
 """
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING, Literal
+from enum import Enum
 import os
 import math
 import torch
 
 if TYPE_CHECKING:
     from .genome import Genome
+
+
+# =============================================================================
+# Genome Mode Enum (defined here to avoid circular imports)
+# =============================================================================
+
+class GenomeMode(Enum):
+    """
+    Genome evolution modes.
+
+    - WEIGHTED_SUM: Linear heuristic combinations (fast, GPU-optimized)
+    - EXPRESSION_TREE: Nonlinear symbolic expressions (expressive, default)
+    """
+    WEIGHTED_SUM = "weighted_sum"
+    EXPRESSION_TREE = "expression_tree"
 
 
 def _get_optimal_concurrency() -> int:
@@ -564,25 +580,25 @@ class EvolutionConfig:
     MAP-Elites is the default and only evolution paradigm.
 
     Supports dual-mode evolution:
-    - "expression_tree": Nonlinear symbolic expressions (current system, expressive)
-    - "weighted_sum": Linear heuristic combinations (fast, interpretable)
+    - GenomeMode.EXPRESSION_TREE: Nonlinear symbolic expressions (current system, expressive)
+    - GenomeMode.WEIGHTED_SUM: Linear heuristic combinations (fast, interpretable)
 
     Example:
         # Weighted sum mode for fast evolution
         config = EvolutionConfig(
-            genome_mode="weighted_sum",
+            genome_mode=GenomeMode.WEIGHTED_SUM,
             heuristic_features=STARK_FEATURES,
             n_generations=1000,
         )
 
         # Expression tree mode (default, existing behavior)
         config = EvolutionConfig(
-            genome_mode="expression_tree",
+            genome_mode=GenomeMode.EXPRESSION_TREE,
             n_generations=100,
         )
     """
     # === Mode Selection ===
-    genome_mode: Literal["weighted_sum", "expression_tree"] = "expression_tree"
+    genome_mode: GenomeMode = GenomeMode.EXPRESSION_TREE
 
     # === Feature Configuration (weighted_sum mode) ===
     heuristic_features: HeuristicFeatureConfig = field(

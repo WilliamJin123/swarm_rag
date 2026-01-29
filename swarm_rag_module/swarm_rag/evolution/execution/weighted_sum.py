@@ -23,6 +23,7 @@ from ..types.config import (
     HeuristicFeatureConfig,
     EvolutionContext,
     SwarmParamRanges,
+    GenomeMode,
 )
 from ..types.fitness_results import FitnessResult
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
@@ -93,7 +94,7 @@ class WeightedSumCompiler:
         Returns:
             Dictionary of kwargs for SwarmRetriever.retrieve()
         """
-        if genome.mode != "weighted_sum":
+        if genome.mode != GenomeMode.WEIGHTED_SUM:
             raise ValueError(f"Cannot compile non-weighted_sum genome: {genome.mode}")
 
         if genome.weight_tensors is None:
@@ -312,7 +313,7 @@ class WeightedSumMutator:
         Returns:
             Mutated genome (same object, modified)
         """
-        if genome.mode != "weighted_sum":
+        if genome.mode != GenomeMode.WEIGHTED_SUM:
             raise ValueError(f"Cannot mutate non-weighted_sum genome: {genome.mode}")
 
         # Step 1: Adapt sigmas (ES-style)
@@ -801,7 +802,7 @@ class WeightedSumSeeder:
 
         return Genome(
             id=genome_id,
-            mode="weighted_sum",
+            mode=GenomeMode.WEIGHTED_SUM,
             params=params,
             group_ratios={"g0": 1.0},
             strategies={},  # Empty for weighted_sum mode
@@ -851,7 +852,7 @@ def register_weighted_sum_strategies():
     @GeneticRegistry.register_mutation("self_adaptive_es")
     def self_adaptive_es_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:
         """Self-adaptive ES-style mutation for weighted sum genomes."""
-        if genome.mode != "weighted_sum":
+        if genome.mode != GenomeMode.WEIGHTED_SUM:
             # Fallback to expression tree mutation
             mutation_fn = GeneticRegistry.get_mutation("guided_mutation")
             return mutation_fn(genome, ctx)

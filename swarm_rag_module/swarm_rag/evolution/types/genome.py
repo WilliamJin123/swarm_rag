@@ -1,4 +1,4 @@
-from typing import Dict, Callable, Any, List, Set, TypedDict, Tuple, Optional, Literal
+from typing import Dict, Callable, Any, List, Set, Tuple, Optional
 from dataclasses import dataclass, field
 import torch
 import random
@@ -9,12 +9,14 @@ except ImportError:
     from typing_extensions import NotRequired
 
 from .fitness_results import FitnessResult
-from .config import WeightTensors, MutationSigmas
+from .config import WeightTensors, MutationSigmas, GenomeMode
 
 from .expressions import ExpressionNode
 
 from ...core.heuristics import HeuristicContext, HeuristicRegistry
 from ...interfaces.types import AgentGroupConfig
+# Import shared constants from centralized source
+from ...utils.constants import SwarmParams, DEFAULT_SWARM_PARAMS
 
 
 # =============================================================================
@@ -29,36 +31,19 @@ FIXED_PARAMS: Dict[str, Any] = {
 }
 
 
-class CompiledStrategies(TypedDict, total=False):
+class CompiledStrategies:
     """
     Type definition for the compiled function cache.
-    total=False means keys can be missing (e.g. if 'deposit' isn't compiled yet).
+    Using class instead of TypedDict for backward compatibility.
     """
     movement: Callable
     ranking: Callable
     deposit: Callable
 
-class SwarmParams(TypedDict):
-    """
-    Defines the contract for Swarm Hyperparameters.
-    Acts as a Dictionary at runtime, but provides IDE autocompletion.
-    """
-    n_agents: int
-    steps: int
-    drop_zone_inc: float
-    decay: float
-    initial_pool_size: int
-    start_subset: int
-    
 
-DEFAULT_PARAMS: SwarmParams = {
-    "n_agents": 20,
-    "steps": 4,
-    "decay": 0.5,
-    "drop_zone_inc": 0.05,
-    "initial_pool_size": 30,
-    "start_subset": 10,
-}
+# Re-export DEFAULT_PARAMS for backward compatibility
+# The single source of truth is in utils.constants.DEFAULT_SWARM_PARAMS
+DEFAULT_PARAMS: SwarmParams = DEFAULT_SWARM_PARAMS
 
 @dataclass
 class Genome:
@@ -67,14 +52,14 @@ class Genome:
     and expression trees in one genome.
 
     Supports dual-mode evolution:
-    - "expression_tree": Nonlinear symbolic expressions (expressive, default)
-    - "weighted_sum": Linear heuristic combinations (fast, GPU-optimized)
+    - GenomeMode.EXPRESSION_TREE: Nonlinear symbolic expressions (expressive, default)
+    - GenomeMode.WEIGHTED_SUM: Linear heuristic combinations (fast, GPU-optimized)
     """
     id: str
     mutation_rate: float = 0.1
 
     # === Mode Selection ===
-    mode: Literal["weighted_sum", "expression_tree"] = "expression_tree"
+    mode: GenomeMode = GenomeMode.EXPRESSION_TREE
 
     # === Shared Fields ===
     params: SwarmParams = field(default_factory=lambda: DEFAULT_PARAMS.copy())
@@ -136,7 +121,10 @@ class Genome:
 
         # Backward compatibility: set defaults for new fields
         if 'mode' not in self.__dict__:
-            self.mode = "expression_tree"
+            self.mode = GenomeMode.EXPRESSION_TREE
+        elif isinstance(self.mode, str):
+            # Convert legacy string modes to enum
+            self.mode = GenomeMode(self.mode)
         if 'weight_tensors' not in self.__dict__:
             self.weight_tensors = None
         if 'mutation_sigmas' not in self.__dict__:
@@ -151,7 +139,7 @@ class Genome:
         For expression_tree mode: Sum of the size of all expression trees.
         For weighted_sum mode: Total number of weight parameters.
         """
-        if self.mode == "weighted_sum" and self.weight_tensors is not None:
+        if self.mode == GenomeMode.WEIGHTED_SUM and self.weight_tensors is not None:
             return self.weight_tensors.total_params
         return sum(tree.size() for tree in self.strategies.values())
     
@@ -231,6 +219,10 @@ class Genome:
         # Exclude the non-serializable compiled cache
         d.pop('_compiled_cache', None)
 
+        # Serialize mode enum to string for JSON compatibility
+        if 'mode' in d and isinstance(d['mode'], GenomeMode):
+            d['mode'] = d['mode'].value
+
         # Serialize nested, complex objects.
         if 'strategies' in d and d['strategies']:
             d['strategies'] = {key: node.to_dict() for key, node in d['strategies'].items()}
@@ -286,7 +278,7 @@ class Genome:
                 printer(f"  • {k:<5} : {v:.2%} ({v:.4f})")
 
         # 4a. Strategies (Expression Tree Mode)
-        if self.mode == "expression_tree" and self.strategies:
+        if self.mode == GenomeMode.EXPRESSION_TREE and self.strategies:
             printer(separator)
             printer("Evolved Strategies (Expression Trees):")
             for name, tree in sorted(self.strategies.items()):
@@ -297,7 +289,7 @@ class Genome:
                 printer("")  # Empty line between strategies for readability
 
         # 4b. Weight Tensors (Weighted Sum Mode)
-        if self.mode == "weighted_sum" and self.weight_tensors is not None:
+        if self.mode == GenomeMode.WEIGHTED_SUM and self.weight_tensors is not None:
             printer(separator)
             printer("Weight Tensors (Weighted Sum):")
             wt = self.weight_tensors
