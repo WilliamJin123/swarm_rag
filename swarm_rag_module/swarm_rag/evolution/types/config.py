@@ -322,6 +322,11 @@ class ResourceConfig:
     # Benchmark results: batch_size=64 gives ~47 q/s, batch_size=100 gives ~52 q/s
     run_batch_size: int = 100
 
+    # Profiler settings (for StepProfiler in SwarmRetriever)
+    # Maximum samples per profiler section before rolling window kicks in
+    # Can also be set via SWARM_PROFILE_SAMPLES environment variable
+    profiler_max_samples: int = 1000
+
 
 @dataclass
 class MapElitesConfig:
@@ -410,6 +415,15 @@ class GeneticConfig:
     initial_ratio_sigma: float = 0.10
     initial_hyperparam_sigma: float = 0.15
     sigma_tau: float = 0.1  # Sigma learning rate
+
+    # === Mutation Operator Probabilities (weighted sum mode) ===
+    # These control how often each mutation type is applied
+    # Must sum to 1.0
+    mutation_prob_weight: float = 0.60      # Weight perturbation
+    mutation_prob_bias: float = 0.15        # Bias perturbation
+    mutation_prob_ratio: float = 0.10       # Group ratio shift
+    mutation_prob_hyperparam: float = 0.10  # Hyperparameter mutation
+    mutation_prob_group_change: float = 0.05  # Add/remove agent groups
 
 
 @dataclass
