@@ -27,10 +27,12 @@ class SharedPrecomputeContext:
         query_embeddings: Pre-computed query embeddings tensor (n_queries, dim)
         initial_pools: Dict mapping pool_size -> List[List[int]] of candidate IDs per query
         ground_truth_sets: Pre-converted ground truth as sets for fast lookup (CPU fallback)
-        ground_truth_tensor: Pre-computed ground truth as GPU tensor (n_queries, max_gt_size)
-        gt_sizes: Tensor of ground truth sizes per query (n_queries,)
         queries: Original query strings (for reference)
         device: Device where tensors are stored
+
+    GPU-only attributes (use has_gpu_ground_truth property before accessing):
+        ground_truth_tensor: Pre-computed ground truth as GPU tensor (n_queries, max_gt_size)
+        gt_sizes: Tensor of ground truth sizes per query (n_queries,)
     """
     query_embeddings: torch.Tensor
     initial_pools: Dict[int, List[List[int]]]
@@ -39,6 +41,7 @@ class SharedPrecomputeContext:
     device: str = "cpu"
 
     # GPU-precomputed ground truth tensors (None if CPU-only)
+    # Use has_gpu_ground_truth property to check availability before accessing
     ground_truth_tensor: Optional[torch.Tensor] = None  # (n_queries, max_gt_size) padded with -1
     gt_sizes: Optional[torch.Tensor] = None  # (n_queries,) number of relevant items per query
 
@@ -46,6 +49,49 @@ class SharedPrecomputeContext:
     n_queries: int = 0
     n_pool_sizes: int = 0
     precompute_time_sec: float = 0.0
+
+    @property
+    def has_gpu_ground_truth(self) -> bool:
+        """
+        Check if GPU-accelerated ground truth tensors are available.
+
+        Returns True if both ground_truth_tensor and gt_sizes are set.
+        Use this before accessing GPU tensors to ensure type safety.
+
+        Example:
+            if ctx.has_gpu_ground_truth:
+                # Safe to use ctx.ground_truth_tensor and ctx.gt_sizes
+                metrics = compute_gpu_metrics(ctx.ground_truth_tensor, ctx.gt_sizes)
+            else:
+                # Fall back to CPU computation with ctx.ground_truth_sets
+                metrics = compute_cpu_metrics(ctx.ground_truth_sets)
+        """
+        return self.ground_truth_tensor is not None and self.gt_sizes is not None
+
+    @property
+    def is_gpu_context(self) -> bool:
+        """Check if this context was created for GPU execution."""
+        return self.device != "cpu"
+
+    def get_gpu_ground_truth(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get GPU ground truth tensors with explicit type checking.
+
+        Raises:
+            RuntimeError: If GPU ground truth tensors are not available.
+
+        Returns:
+            Tuple of (ground_truth_tensor, gt_sizes)
+        """
+        if not self.has_gpu_ground_truth:
+            raise RuntimeError(
+                "GPU ground truth tensors not available. "
+                f"Context device is '{self.device}', "
+                "or ground truth could not be converted to integers. "
+                "Use ground_truth_sets for CPU fallback."
+            )
+        # Type narrowing: we've verified these are not None
+        return self.ground_truth_tensor, self.gt_sizes  # type: ignore[return-value]
 
 
 def prepare_shared_context(
