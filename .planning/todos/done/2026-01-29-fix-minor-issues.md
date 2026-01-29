@@ -32,3 +32,5 @@ Five minor issues:
 - Use `from __future__ import annotations` at module level
 - GPU failures should fail explicitly without silent CPU fallback (cpu<->gpu overhead too much anyway)
 - Use `min(max_workers, os.cpu_count() or 4)`
+
+- Ensure downstream usage is chnaged accordingly
