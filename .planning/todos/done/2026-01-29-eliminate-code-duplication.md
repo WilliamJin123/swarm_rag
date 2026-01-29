@@ -28,3 +28,5 @@ Three areas of code duplication:
 - Create single source of seed configurations and convert to appropriate format at runtime
 - Single authoritative source for defaults in swarm_retriever, import where needed elsewhere
 - Use single `get_device()` from utils everywhere
+
+- Ensure downstream usage is chnaged accordingly
