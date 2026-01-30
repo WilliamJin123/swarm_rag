@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-29)
 ## Current Position
 
 Phase: 3 of 7 (Embedding Cache)
-Plan: 1 of 1 in current phase complete
-Status: Plan 03-01 complete, awaiting phase verification
-Last activity: 2026-01-30 - Completed 03-01-PLAN.md
+Plan: 2 of 2 in current phase complete
+Status: Phase 03 complete, awaiting phase verification
+Last activity: 2026-01-30 - Completed 03-02-PLAN.md
 
-Progress: [======-----] 55%
+Progress: [======-----] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 9min
-- Total execution time: 0.9 hours
+- Total execution time: 1.0 hours
 
 **By Phase:**
 
@@ -29,11 +29,11 @@ Progress: [======-----] 55%
 |-------|-------|-------|----------|
 | 01-memory-hardening | 4 | 37min | 9min |
 | 02-fitness-caching | 1 | 8min | 8min |
-| 03-embedding-cache | 1 | 12min | 12min |
+| 03-embedding-cache | 2 | 17min | 9min |
 
 **Recent Trend:**
-- Last 5 plans: 03-01 (12min), 02-01 (8min), 01-04 (8min), 01-03 (6min), 01-02 (8min)
-- Trend: stable (8-12min average)
+- Last 5 plans: 03-02 (5min), 03-01 (12min), 02-01 (8min), 01-04 (8min), 01-03 (6min)
+- Trend: stable (5-12min average)
 
 *Updated after each plan completion*
 
@@ -66,6 +66,8 @@ Recent decisions affecting current work:
 - [03-01]: Lazy integration: prepare_shared_context uses cache if exists
 - [03-01]: Detach tensors before caching to prevent memory leaks
 - [03-01]: Per-generation stats separate from cumulative stats
+- [03-02]: Log format: 'Embedding cache: N lookups, Xs saved' consistent with fitness cache
+- [03-02]: Null-safe: only log if EmbeddingCacheProvider.get() returns non-None
 
 ### Pending Todos
 
@@ -79,5 +81,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 03-01-PLAN.md
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
