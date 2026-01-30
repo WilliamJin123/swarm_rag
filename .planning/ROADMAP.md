@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Memory Hardening** - Establish stable memory management to prevent crashes during long runs
 - [x] **Phase 2: Fitness Caching** - Cache evaluated genomes to skip redundant fitness computation
 - [x] **Phase 3: Embedding Cache** - Persist query embeddings across generations to eliminate recomputation
-- [ ] **Phase 4: Convergence Detection** - Detect stagnation and stop early when evolution plateaus
+- [x] **Phase 4: Convergence Detection** - Detect stagnation and stop early when evolution plateaus
 - [ ] **Phase 5: Async Checkpointing** - Non-blocking checkpoint saves during evolution
 - [ ] **Phase 6: Performance Validation** - Validate 500 gen / 3 hour target with full optimization stack
 - [ ] **Phase 7: SOTA Evolution** - Run evolution to discover genome achieving SOTA metrics
@@ -81,7 +81,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 04-01-PLAN.md - ConvergenceDetector module with sliding window analysis and orchestrator integration
+- [x] 04-01-PLAN.md - ConvergenceDetector module with sliding window analysis and orchestrator integration
 
 ### Phase 5: Async Checkpointing
 **Goal**: Checkpoint saves happen without blocking evolution loop
@@ -137,7 +137,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 1. Memory Hardening | 4/4 | ✓ Complete | 2026-01-29 |
 | 2. Fitness Caching | 1/1 | ✓ Complete | 2026-01-29 |
 | 3. Embedding Cache | 2/2 | ✓ Complete | 2026-01-30 |
-| 4. Convergence Detection | 0/1 | Planned | - |
+| 4. Convergence Detection | 1/1 | ✓ Complete | 2026-01-30 |
 | 5. Async Checkpointing | 0/1 | Not started | - |
 | 6. Performance Validation | 0/1 | Not started | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
@@ -153,5 +153,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 3 gap closure planned: 2026-01-30*
 *Phase 3 complete: 2026-01-30*
 *Phase 4 planned: 2026-01-30*
+*Phase 4 complete: 2026-01-30*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*

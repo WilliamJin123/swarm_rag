@@ -34,8 +34,8 @@ Requirements for achieving SOTA metrics with performant evolution loop.
 
 ### Convergence
 
-- [ ] **CONV-01**: Early stopping based on QD-score stagnation (sliding window detection)
-- [ ] **CONV-02**: Configurable convergence threshold and window size
+- [x] **CONV-01**: Early stopping based on QD-score stagnation (sliding window detection)
+- [x] **CONV-02**: Configurable convergence threshold and window size
 
 ### Checkpointing
 
@@ -84,8 +84,8 @@ Deferred to future if v1 doesn't achieve targets.
 | MEM-01 | Phase 1 | Complete |
 | MEM-02 | Phase 1 | Complete |
 | MEM-03 | Phase 1 | Complete |
-| CONV-01 | Phase 4 | Pending |
-| CONV-02 | Phase 4 | Pending |
+| CONV-01 | Phase 4 | Complete |
+| CONV-02 | Phase 4 | Complete |
 | CKPT-01 | Phase 5 | Pending |
 
 **Coverage:**
@@ -95,4 +95,4 @@ Deferred to future if v1 doesn't achieve targets.
 
 ---
 *Requirements defined: 2026-01-29*
-*Last updated: 2026-01-30 after Phase 3 completion*
+*Last updated: 2026-01-30 after Phase 4 completion*
