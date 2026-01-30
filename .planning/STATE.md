@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-29)
 ## Current Position
 
 Phase: 1 of 7 (Memory Hardening)
-Plan: 2 of 3 in current phase
+Plan: 2 of 3 in current phase complete
 Status: In progress
-Last activity: 2026-01-30 - Completed 01-02-PLAN.md (Memory Logger)
+Last activity: 2026-01-30 - Completed 01-01-PLAN.md (MemoryGuard)
 
-Progress: [=---------] 10%
+Progress: [==---------] 20%
 
 ## Performance Metrics
 
@@ -30,7 +30,7 @@ Progress: [=---------] 10%
 | 01-memory-hardening | 1 | 8min | 8min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (8min)
+- Last 5 plans: 01-02 (8min), 01-01 (15min)
 - Trend: baseline established
 
 *Updated after each plan completion*
@@ -44,7 +44,9 @@ Recent decisions affecting current work:
 
 - [Roadmap]: Memory hardening before caching (caching increases memory pressure)
 - [Roadmap]: 7 phases derived from requirement clusters (not imposed template)
-- [01-02]: Warning threshold at 70%, hard stop at 85% for memory monitoring
+- [01-01]: Use memory_allocated() not memory_reserved() for thresholds
+- [01-01]: Default thresholds 70% warning, 85% hard stop
+- [01-01]: Environment variable override for thresholds
 - [01-02]: Memory stats logged at START of generation (before operations)
 - [01-02]: Peak memory reset each generation for accurate per-gen peaks
 
@@ -60,5 +62,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 01-02-PLAN.md
+Stopped at: Completed 01-01-PLAN.md (MemoryGuard)
 Resume file: None
