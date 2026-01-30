@@ -37,6 +37,11 @@ from .shared_precompute import (
     get_unique_pool_sizes,
     BatchedRetrievalResults,
 )
+from .fitness_cache import (
+    FitnessCache,
+    CacheStats,
+    hash_genome,
+)
 
 __all__ = [
     # Core
@@ -66,4 +71,8 @@ __all__ = [
     "prepare_shared_context",
     "get_unique_pool_sizes",
     "BatchedRetrievalResults",
+    # Fitness caching
+    "FitnessCache",
+    "CacheStats",
+    "hash_genome",
 ]
