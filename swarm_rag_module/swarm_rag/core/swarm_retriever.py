@@ -81,6 +81,121 @@ class AgentGroupConfig(TypedDict):
 logger = logging.getLogger(__name__)
 
 
+class TraversalBufferPool:
+    """
+    Pre-allocated buffers for graph traversal operations.
+
+    Prevents GPU memory fragmentation by reusing fixed-size buffers
+    instead of allocating new tensors per-step.
+
+    Usage:
+        pool = TraversalBufferPool(max_pool_size=1000, device="cuda")
+        score_buf = pool.get_score_buffer(actual_size)  # Returns view
+        pool.clear()  # Zero out for next use
+    """
+
+    def __init__(
+        self,
+        max_pool_size: int,
+        max_agents: int = 50,
+        max_degree: int = 100,
+        device: str = "cuda"
+    ):
+        """
+        Initialize buffer pool with maximum sizes.
+
+        Args:
+            max_pool_size: Maximum number of nodes in candidate pool
+            max_agents: Maximum number of agents per traversal
+            max_degree: Maximum node degree (neighbors per node)
+            device: Target device for tensors
+        """
+        self.device = device
+        self.max_pool_size = max_pool_size
+        self.max_agents = max_agents
+        self.max_degree = max_degree
+
+        # Pre-allocate scoring buffer (reused for each step)
+        self._score_buffer = torch.zeros(
+            max_pool_size, dtype=torch.float32, device=device
+        )
+        # Pre-allocate index buffer for top-k selection
+        self._index_buffer = torch.zeros(
+            max_pool_size, dtype=torch.long, device=device
+        )
+        # Pre-allocate agent position buffer
+        self._position_buffer = torch.zeros(
+            max_agents, dtype=torch.long, device=device
+        )
+        # Pre-allocate neighbor score buffer (agents x max_degree)
+        self._neighbor_scores = torch.zeros(
+            (max_agents, max_degree), dtype=torch.float32, device=device
+        )
+
+        self._allocated = True
+
+    def get_score_buffer(self, size: int) -> torch.Tensor:
+        """Return a view into the pre-allocated score buffer."""
+        if size > self.max_pool_size:
+            # Fallback: allocate new buffer (log warning)
+            logger.warning(
+                f"Requested buffer size {size} exceeds max {self.max_pool_size}, "
+                "allocating new tensor"
+            )
+            return torch.zeros(size, dtype=torch.float32, device=self.device)
+        return self._score_buffer[:size]
+
+    def get_index_buffer(self, size: int) -> torch.Tensor:
+        """Return a view into the pre-allocated index buffer."""
+        if size > self.max_pool_size:
+            return torch.zeros(size, dtype=torch.long, device=self.device)
+        return self._index_buffer[:size]
+
+    def get_position_buffer(self, n_agents: int) -> torch.Tensor:
+        """Return a view into the pre-allocated position buffer."""
+        if n_agents > self.max_agents:
+            return torch.zeros(n_agents, dtype=torch.long, device=self.device)
+        return self._position_buffer[:n_agents]
+
+    def get_neighbor_scores(self, n_agents: int, degree: int) -> torch.Tensor:
+        """Return a view into the pre-allocated neighbor scores buffer."""
+        if n_agents > self.max_agents or degree > self.max_degree:
+            return torch.zeros(
+                (n_agents, degree), dtype=torch.float32, device=self.device
+            )
+        return self._neighbor_scores[:n_agents, :degree]
+
+    def clear(self):
+        """Zero out all buffers for next use (keeps memory allocated)."""
+        self._score_buffer.zero_()
+        self._index_buffer.zero_()
+        self._position_buffer.zero_()
+        self._neighbor_scores.zero_()
+
+    def release(self):
+        """Release all buffer memory (call at end of generation)."""
+        del self._score_buffer
+        del self._index_buffer
+        del self._position_buffer
+        del self._neighbor_scores
+        self._allocated = False
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    @property
+    def memory_mb(self) -> float:
+        """Estimate total memory used by buffers in MB."""
+        if not self._allocated:
+            return 0.0
+        # float32 = 4 bytes, long = 8 bytes
+        score_bytes = self.max_pool_size * 4
+        index_bytes = self.max_pool_size * 8
+        position_bytes = self.max_agents * 8
+        neighbor_bytes = self.max_agents * self.max_degree * 4
+        total_bytes = score_bytes + index_bytes + position_bytes + neighbor_bytes
+        return total_bytes / (1024 * 1024)
+
+
 class SwarmRetriever:
     # Swarm hyperparameter defaults imported from single source of truth (utils.constants)
     # Extended with retriever-specific strategy defaults
@@ -213,6 +328,44 @@ class SwarmRetriever:
         # Separate buffer for multi-query batched mode (3D: batch, agents, degree)
         self._jitter_buffer_3d: Optional[torch.Tensor] = None
         self._jitter_buffer_3d_shape: Optional[Tuple[int, int, int]] = None
+
+        # Buffer pool for traversal operations (lazily initialized)
+        self._buffer_pool: Optional[TraversalBufferPool] = None
+
+    def init_buffer_pool(
+        self,
+        max_pool_size: int = 1000,
+        max_agents: int = 50,
+        max_degree: int = 100
+    ) -> TraversalBufferPool:
+        """
+        Initialize or reinitialize the buffer pool.
+
+        Call at the start of each generation with the maximum expected sizes
+        to prevent per-step allocations.
+
+        Args:
+            max_pool_size: Maximum candidate pool size across all genomes
+            max_agents: Maximum agents across all genomes
+            max_degree: Maximum node degree in graph
+
+        Returns:
+            The initialized buffer pool
+        """
+        if self._buffer_pool is not None:
+            self._buffer_pool.release()
+
+        self._buffer_pool = TraversalBufferPool(
+            max_pool_size=max_pool_size,
+            max_agents=max_agents,
+            max_degree=max_degree,
+            device=self._device
+        )
+        logger.debug(
+            f"Initialized buffer pool: {self._buffer_pool.memory_mb:.2f} MB "
+            f"(pool={max_pool_size}, agents={max_agents}, degree={max_degree})"
+        )
+        return self._buffer_pool
 
     def enable_compiled_mode(self) -> bool:
         """
