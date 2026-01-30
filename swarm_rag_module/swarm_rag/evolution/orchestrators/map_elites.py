@@ -24,6 +24,7 @@ from ..execution.fitness_strategies import FitnessStrategy
 from ..execution.profiler import GenerationProfiler
 from ..execution.memory_logger import MemoryLogger
 from ..llm.evolution_journal import EvolutionJournal
+from ..convergence import ConvergenceDetector, TerminationReason
 
 
 class MAPElitesOrchestrator(BaseOrchestrator):
@@ -100,6 +101,16 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             warning_threshold=0.70  # Could make configurable via context.config
         )
 
+        # Initialize convergence detector (if enabled)
+        self._convergence_detector = (
+            ConvergenceDetector(context.config.convergence)
+            if context.config.convergence.enabled
+            else None
+        )
+
+        # Track termination reason (default: ran to completion)
+        self._termination_reason = TerminationReason.MAX_GENERATIONS
+
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
         """
         Run MAP-Elites optimization.
@@ -165,6 +176,7 @@ class MAPElitesOrchestrator(BaseOrchestrator):
                         extra_state=self._serialize_archive_state(),
                     )
                     self._memory_logger.export_stats()
+                    self._termination_reason = TerminationReason.MEMORY_LIMIT
                     raise MemoryError(
                         f"GPU memory exceeded hard stop threshold: "
                         f"{mem_stats.allocated_mb:.1f}MB ({mem_stats.usage_ratio:.1%})"
@@ -216,6 +228,20 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             # STATS & LOGGING
             with self._profiler.section("stats"):
                 stats = self.archive.stats()
+
+            # CONVERGENCE CHECK
+            with self._profiler.section("convergence"):
+                if self._convergence_detector:
+                    self._convergence_detector.record(stats["qd_score"])
+
+                    if self._convergence_detector.is_converged():
+                        self._termination_reason = TerminationReason.CONVERGENCE
+                        self.logger.info(
+                            f"Convergence detected at generation {gen}. "
+                            f"QD-score: {stats['qd_score']:.2f}, "
+                            f"Window: {self._convergence_detector.get_window_stats()}"
+                        )
+                        break  # Exit main loop
 
             # FINALIZE JOURNAL GENERATION
             with self._profiler.section("journal"):
@@ -273,6 +299,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         # Cleanup
         pbar.close()
 
+        # Log termination summary
+        self.logger.info(
+            f"Evolution terminated: {self._termination_reason.value} "
+            f"at generation {gen}"
+        )
+
         # Print profiler summary and save data
         if self._profiler.enabled:
             self.logger.info(self._profiler.summary())
@@ -309,6 +341,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             "archive_ranges": self.archive.ranges,
             "archive_grid_keys": list(self.archive.grid.keys()),
             "evolution_journal": self.evolution_journal.to_dict(),
+            "termination_reason": self._termination_reason.value,
+            "convergence_stats": (
+                self._convergence_detector.get_stats()
+                if self._convergence_detector
+                else None
+            ),
         }
 
     def _restore_journal_state(self, extra_state: dict):

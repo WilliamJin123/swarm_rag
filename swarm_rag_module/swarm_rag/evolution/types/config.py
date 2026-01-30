@@ -12,6 +12,8 @@ import os
 import math
 import torch
 
+from ..convergence import ConvergenceConfig
+
 if TYPE_CHECKING:
     from .genome import Genome
 
@@ -613,6 +615,7 @@ class EvolutionConfig:
     genetic: GeneticConfig = field(default_factory=GeneticConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     creative_mode: CreativeModeConfig = field(default_factory=CreativeModeConfig)
+    convergence: ConvergenceConfig = field(default_factory=ConvergenceConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
 
 
