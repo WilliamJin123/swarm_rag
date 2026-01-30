@@ -11,7 +11,10 @@ import time
 import logging
 import torch
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .fitness_cache import CacheStats
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +31,23 @@ class GenerationMemoryStats:
     peak_mb: float           # torch.cuda.max_memory_allocated() / MB
     delta_mb: float          # Change from previous generation
     total_vram_mb: float     # Total GPU memory
+    # Fitness cache stats (optional)
+    cache_hits: int = 0
+    cache_total: int = 0
 
     @property
     def usage_ratio(self) -> float:
         """Current allocation as ratio of total VRAM."""
         return self.allocated_mb / self.total_vram_mb if self.total_vram_mb > 0 else 0.0
 
+    @property
+    def cache_hit_rate(self) -> float:
+        """Cache hit rate as ratio (0.0 to 1.0)."""
+        return self.cache_hits / self.cache_total if self.cache_total > 0 else 0.0
+
     def to_log_line(self) -> str:
         """Format as single log line."""
-        return (
+        line = (
             f"gen={self.generation:04d} "
             f"alloc={self.allocated_mb:7.1f}MB "
             f"cached={self.cached_mb:7.1f}MB "
@@ -44,10 +55,14 @@ class GenerationMemoryStats:
             f"delta={self.delta_mb:+7.1f}MB "
             f"usage={self.usage_ratio:.1%}"
         )
+        # Append cache stats if present
+        if self.cache_total > 0:
+            line += f" cache={self.cache_hits}/{self.cache_total}({self.cache_hit_rate:.0%})"
+        return line
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON export."""
-        return {
+        d = {
             'generation': self.generation,
             'timestamp': self.timestamp,
             'allocated_mb': self.allocated_mb,
@@ -57,6 +72,12 @@ class GenerationMemoryStats:
             'total_vram_mb': self.total_vram_mb,
             'usage_ratio': self.usage_ratio,
         }
+        # Include cache stats if present
+        if self.cache_total > 0:
+            d['cache_hits'] = self.cache_hits
+            d['cache_total'] = self.cache_total
+            d['cache_hit_rate'] = self.cache_hit_rate
+        return d
 
 
 class MemoryLogger:
@@ -97,12 +118,27 @@ class MemoryLogger:
             return 0.0
         return torch.cuda.get_device_properties(0).total_memory / (1024 * 1024)
 
-    def log_generation(self, generation: int) -> GenerationMemoryStats:
+    def log_generation(
+        self,
+        generation: int,
+        cache_stats: Optional['CacheStats'] = None
+    ) -> GenerationMemoryStats:
         """
         Log memory stats for a generation.
 
         Call at the START of each generation to track memory before/after.
+
+        Args:
+            generation: Generation number
+            cache_stats: Optional fitness cache stats for this generation
+
+        Returns:
+            GenerationMemoryStats for this generation
         """
+        # Extract cache stats if provided
+        cache_hits = cache_stats.hits if cache_stats else 0
+        cache_total = cache_stats.total if cache_stats else 0
+
         if not torch.cuda.is_available():
             # Return placeholder stats for CPU mode
             stats = GenerationMemoryStats(
@@ -113,6 +149,8 @@ class MemoryLogger:
                 peak_mb=0.0,
                 delta_mb=0.0,
                 total_vram_mb=0.0,
+                cache_hits=cache_hits,
+                cache_total=cache_total,
             )
             self._stats_history.append(stats)
             return stats
@@ -130,6 +168,8 @@ class MemoryLogger:
             peak_mb=peak_mb,
             delta_mb=delta_mb,
             total_vram_mb=self._total_vram_mb,
+            cache_hits=cache_hits,
+            cache_total=cache_total,
         )
 
         # Write to log file
