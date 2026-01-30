@@ -30,6 +30,7 @@ from .shared_precompute import (
     get_unique_pool_sizes,
     BatchedRetrievalResults
 )
+from .fitness_cache import FitnessCache, CacheStats
 
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,9 @@ class PopulationEvaluator:
         # Cached shared context (reused within a generation)
         self._shared_context: Optional[SharedPrecomputeContext] = None
 
+        # Fitness cache for skipping duplicate genome evaluations
+        self._fitness_cache = FitnessCache()
+
     def _init_weighted_sum_compiler(self, heuristic_features: HeuristicFeatureConfig):
         """Initialize the weighted sum compiler with feature configuration."""
         try:
@@ -357,7 +361,8 @@ class PopulationEvaluator:
         self,
         population: List[Genome],
         queries: List[str] = None,
-        ground_truth: List[List[Any]] = None
+        ground_truth: List[List[Any]] = None,
+        generation: int = 0
     ) -> EvaluationStats:
         """
         Evaluates the population in-place using adaptive progressive sampling.
@@ -377,10 +382,32 @@ class PopulationEvaluator:
         if not unevaluated:
             return self.stats
 
+        # Check cache for each unevaluated genome
+        # Duplicates and elites from previous gens may have cached fitness
+        from ..types.fitness_results import FitnessResult
+        cache_restored = []
+        still_unevaluated = []
+        for genome in unevaluated:
+            cached_fitness = self._fitness_cache.get(genome)
+            if cached_fitness is not None:
+                # Restore from cache without re-evaluation
+                genome.fitness = FitnessResult(quality_score=cached_fitness)
+                genome.evaluated = True
+                cache_restored.append(genome)
+            else:
+                still_unevaluated.append(genome)
+        unevaluated = still_unevaluated
+
+        if not unevaluated:
+            # All genomes hit cache - finalize and return
+            cache_stats = self._fitness_cache.finalize_generation(generation)
+            logger.info(f"All {len(cache_restored)} genomes restored from cache (100% hit rate)")
+            return self.stats
+
         self.stats.total_genomes = len(unevaluated)
         batch_size = self.concurrent_evaluations
 
-        logger.info(f"Evaluating {len(unevaluated)} genomes...")
+        logger.info(f"Evaluating {len(unevaluated)} genomes ({len(cache_restored)} restored from cache)...")
         logger.info(f"  > Concurrency: {batch_size} | Adaptive: {self.enable_adaptive}")
         logger.info(f"  > Shared precompute: {self.enable_shared_precompute} | Cross-genome batch: {self.enable_cross_genome_metric_batch}")
         if self.enable_adaptive:
@@ -459,6 +486,10 @@ class PopulationEvaluator:
         logger.info(f"  > Time saved estimate: {self.stats.time_saved_estimate:.1%}")
         if self.enable_adaptive:
             logger.info(f"  > Tier exits: {self.stats.tier_exits}")
+
+        # Finalize cache stats for this generation
+        cache_stats = self._fitness_cache.finalize_generation(generation)
+        logger.info(f"  > Cache: {cache_stats.hits}/{cache_stats.total} hits ({cache_stats.hit_rate:.1%})")
 
         return self.stats
 
@@ -725,6 +756,9 @@ class PopulationEvaluator:
             genome.fitness = quarter_fitness
             genome.evaluated = True
 
+            # Cache the fitness for future lookups
+            self._fitness_cache.put(genome, genome.fitness.quality_score)
+
             if decision_tracker is not None:
                 genome.decision_context = decision_tracker.to_summary_dict()
 
@@ -763,6 +797,9 @@ class PopulationEvaluator:
         genome.metrics = final_metrics
         genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
         genome.evaluated = True
+
+        # Cache the fitness for future lookups
+        self._fitness_cache.put(genome, genome.fitness.quality_score)
 
         if decision_tracker is not None:
             genome.decision_context = decision_tracker.to_summary_dict()
@@ -816,6 +853,9 @@ class PopulationEvaluator:
                 genome.metrics = metrics
                 genome.fitness = self.fitness_calc.calculate(metrics, genome)
                 genome.evaluated = True
+
+                # Cache the fitness for future lookups
+                self._fitness_cache.put(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -977,6 +1017,9 @@ class PopulationEvaluator:
             genome.fitness = self.fitness_calc.calculate(aggregated, genome)
             genome.evaluated = True
 
+            # Cache the fitness for future lookups
+            self._fitness_cache.put(genome, genome.fitness.quality_score)
+
             self.stats.tier_exits["full"] = self.stats.tier_exits.get("full", 0) + 1
 
         logger.info(f"  > Batch metrics computed for {len(genomes)} genomes")
@@ -1137,6 +1180,9 @@ class PopulationEvaluator:
                     genome.fitness = quarter_fitness
                     genome.evaluated = True
 
+                    # Cache the fitness for future lookups
+                    self._fitness_cache.put(genome, genome.fitness.quality_score)
+
                     if decision_tracker is not None:
                         genome.decision_context = decision_tracker.to_summary_dict()
 
@@ -1165,6 +1211,9 @@ class PopulationEvaluator:
                 genome.metrics = final_metrics
                 genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
                 genome.evaluated = True
+
+                # Cache the fitness for future lookups
+                self._fitness_cache.put(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -1225,6 +1274,9 @@ class PopulationEvaluator:
                 genome.metrics = metrics
                 genome.fitness = self.fitness_calc.calculate(metrics, genome)
                 genome.evaluated = True
+
+                # Cache the fitness for future lookups
+                self._fitness_cache.put(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -1488,6 +1540,9 @@ class PopulationEvaluator:
                     genome.fitness = quarter_fitness
                     genome.evaluated = True
 
+                    # Cache the fitness for future lookups
+                    self._fitness_cache.put(genome, genome.fitness.quality_score)
+
                     if decision_tracker is not None:
                         genome.decision_context = decision_tracker.to_summary_dict()
 
@@ -1508,6 +1563,9 @@ class PopulationEvaluator:
                 genome.metrics = final_metrics
                 genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
                 genome.evaluated = True
+
+                # Cache the fitness for future lookups
+                self._fitness_cache.put(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
