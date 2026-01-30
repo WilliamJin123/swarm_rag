@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-29)
 
 **Core value:** Find a genome configuration that hits SOTA metrics on STARK Prime (Hit@1 > 60%, Hit@5 > 80%, Recall@20 > 85%, MRR > 80%)
-**Current focus:** Phase 4 - Convergence Detection (not started)
+**Current focus:** Phase 4 - Convergence Detection (plan 01 complete)
 
 ## Current Position
 
-Phase: 3 of 7 complete (Embedding Cache)
-Plan: All plans complete, phase verified
-Status: Phase 03 verified and complete
-Last activity: 2026-01-30 - Phase 3 verified, ready for Phase 4
+Phase: 4 of 7 (Convergence Detection)
+Plan: 1 of 1 complete
+Status: Phase 04 plan 01 complete
+Last activity: 2026-01-30 - Completed 04-01-PLAN.md
 
-Progress: [======-----] 60%
+Progress: [=======----] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
-- Average duration: 9min
-- Total execution time: 1.0 hours
+- Total plans completed: 8
+- Average duration: 8min
+- Total execution time: 1.1 hours
 
 **By Phase:**
 
@@ -30,9 +30,10 @@ Progress: [======-----] 60%
 | 01-memory-hardening | 4 | 37min | 9min |
 | 02-fitness-caching | 1 | 8min | 8min |
 | 03-embedding-cache | 2 | 17min | 9min |
+| 04-convergence-detection | 1 | 5min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (5min), 03-01 (12min), 02-01 (8min), 01-04 (8min), 01-03 (6min)
+- Last 5 plans: 04-01 (5min), 03-02 (5min), 03-01 (12min), 02-01 (8min), 01-04 (8min)
 - Trend: stable (5-12min average)
 
 *Updated after each plan completion*
@@ -68,6 +69,10 @@ Recent decisions affecting current work:
 - [03-01]: Per-generation stats separate from cumulative stats
 - [03-02]: Log format: 'Embedding cache: N lookups, Xs saved' consistent with fitness cache
 - [03-02]: Null-safe: only log if EmbeddingCacheProvider.get() returns non-None
+- [04-01]: Window size 40 default (conservative 30-50 range)
+- [04-01]: Grace period 20 generations before detection activates
+- [04-01]: Threshold 0.1% relative improvement required
+- [04-01]: Adaptive window: expand when improving, shrink when flat
 
 ### Pending Todos
 
@@ -81,5 +86,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Phase 3 complete, ready for Phase 4
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
