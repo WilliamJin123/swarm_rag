@@ -32,12 +32,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Per-genome evaluation cleans up all intermediate tensors (no gradients retained)
   4. Traversal buffers are pre-allocated and reused, not created per-step
   5. VRAM usage stays under 4GB for STARK Prime throughout run
-**Plans**: TBD
+**Plans**: 3 plans in 2 waves
 
 Plans:
-- [ ] 01-01: Tensor lifecycle guards and cleanup patterns
-- [ ] 01-02: Memory monitoring and alerting
-- [ ] 01-03: Buffer pre-allocation and reuse
+- [ ] 01-01-PLAN.md - MemoryGuard context manager with threshold enforcement
+- [ ] 01-02-PLAN.md - MemoryLogger for per-generation tracking and alerting
+- [ ] 01-03-PLAN.md - Buffer pre-allocation and MemoryGuard integration
 
 ### Phase 2: Fitness Caching
 **Goal**: Duplicate and elite genomes skip evaluation via content-hash caching (30-70% eval savings)
@@ -132,7 +132,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Memory Hardening | 0/3 | Not started | - |
+| 1. Memory Hardening | 0/3 | Planned | - |
 | 2. Fitness Caching | 0/1 | Not started | - |
 | 3. Embedding Cache | 0/1 | Not started | - |
 | 4. Convergence Detection | 0/1 | Not started | - |
@@ -142,5 +142,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 
 ---
 *Roadmap created: 2026-01-29*
+*Phase 1 planned: 2026-01-29*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
