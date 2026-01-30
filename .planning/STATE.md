@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-01-29)
 ## Current Position
 
 Phase: 1 of 7 (Memory Hardening)
-Plan: 0 of 3 in current phase
-Status: Ready to plan
-Last activity: 2026-01-29 - Roadmap created
+Plan: 2 of 3 in current phase
+Status: In progress
+Last activity: 2026-01-30 - Completed 01-02-PLAN.md (Memory Logger)
 
-Progress: [----------] 0%
+Progress: [=---------] 10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 8min
+- Total execution time: 0.13 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-memory-hardening | 1 | 8min | 8min |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 01-02 (8min)
+- Trend: baseline established
 
 *Updated after each plan completion*
 
@@ -44,6 +44,9 @@ Recent decisions affecting current work:
 
 - [Roadmap]: Memory hardening before caching (caching increases memory pressure)
 - [Roadmap]: 7 phases derived from requirement clusters (not imposed template)
+- [01-02]: Warning threshold at 70%, hard stop at 85% for memory monitoring
+- [01-02]: Memory stats logged at START of generation (before operations)
+- [01-02]: Peak memory reset each generation for accurate per-gen peaks
 
 ### Pending Todos
 
@@ -56,6 +59,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-29
-Stopped at: Roadmap creation complete
+Last session: 2026-01-30
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
