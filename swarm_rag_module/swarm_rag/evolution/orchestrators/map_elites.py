@@ -22,6 +22,7 @@ from ..execution.evaluator import PopulationEvaluator
 from ..execution.tracker import ProgressTracker
 from ..execution.fitness_strategies import FitnessStrategy
 from ..execution.profiler import GenerationProfiler
+from ..execution.memory_logger import MemoryLogger
 from ..llm.evolution_journal import EvolutionJournal
 
 
@@ -93,6 +94,12 @@ class MAPElitesOrchestrator(BaseOrchestrator):
         # Initialize generation profiler (enable with EVOLUTION_PROFILE=1)
         self._profiler = GenerationProfiler.from_env()
 
+        # Initialize memory logger (uses run_manager's log_dir)
+        self._memory_logger = MemoryLogger(
+            log_dir=run_manager.config.log_dir,
+            warning_threshold=0.70  # Could make configurable via context.config
+        )
+
     def optimize(self, initial_population: List[Genome] = None) -> Genome:
         """
         Run MAP-Elites optimization.
@@ -142,6 +149,26 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             # Set generation (single source of truth)
             self.context.generation = gen
             self._profiler.start_generation(gen)
+
+            # Log memory stats at generation start
+            with self._profiler.section("memory_log"):
+                mem_stats = self._memory_logger.log_generation(gen)
+                if mem_stats.usage_ratio >= 0.85:  # Hard stop threshold
+                    self.logger.error(
+                        f"Memory hard stop at gen {gen}: {mem_stats.usage_ratio:.1%}"
+                    )
+                    # Save checkpoint before exiting
+                    self.save_checkpoint(
+                        population=self.archive.as_population(),
+                        best_genome=best_genome,
+                        generation=gen,
+                        extra_state=self._serialize_archive_state(),
+                    )
+                    self._memory_logger.export_stats()
+                    raise MemoryError(
+                        f"GPU memory exceeded hard stop threshold: "
+                        f"{mem_stats.allocated_mb:.1f}MB ({mem_stats.usage_ratio:.1%})"
+                    )
 
             # STRATEGIC ORACLE: Update directive if needed
             with self._profiler.section("strategic_oracle"):
@@ -252,6 +279,10 @@ class MAPElitesOrchestrator(BaseOrchestrator):
             profiler_path = os.path.join(self.run_manager.config.log_dir, "profiler_data.json")
             self._profiler.save(profiler_path)
             self.logger.info(f"Profiler data saved to {profiler_path}")
+
+        # Export memory stats
+        memory_stats_path = self._memory_logger.export_stats()
+        self.logger.info(f"Memory stats saved to {memory_stats_path}")
 
         self.cleanup_logging()
         self.save_checkpoint(
