@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
+from .memory_guard import MemoryGuard, MemoryThresholdExceeded
 from .fitness import FitnessCalculator
 from ..types.genome import GenomeCompiler, Genome
 from ..types.config import HeuristicFeatureConfig, GenomeMode
@@ -750,44 +751,47 @@ class PopulationEvaluator:
         """Full evaluation using shared pre-computed context."""
         retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
         pool_size = retriever_kwargs.get('initial_pool_size', 30)
-        decision_tracker = self._create_decision_tracker()
 
-        start_time = time.time()
+        # Wrap evaluation with memory guard
+        with MemoryGuard(label=f"eval_full_{genome.id}", cleanup_on_exit=True):
+            decision_tracker = self._create_decision_tracker()
 
-        initial_pools = shared_context.initial_pools.get(pool_size, [])
+            start_time = time.time()
 
-        if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
-            results = self.retriever.retrieve_batch_with_precomputed(
-                query_embeddings=shared_context.query_embeddings,
-                initial_pools=initial_pools,
-                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
-                gpu_batch_size=self.run_batch_size,
-                genome_id=genome.id,
-                **retriever_kwargs
-            )
-        else:
-            # Fallback
-            results = self.retriever.retrieve_batch(
-                queries=queries,
-                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
-                genome_id=genome.id,
-                **retriever_kwargs
-            )
+            initial_pools = shared_context.initial_pools.get(pool_size, [])
 
-        total_latency = time.time() - start_time
+            if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+                results = self.retriever.retrieve_batch_with_precomputed(
+                    query_embeddings=shared_context.query_embeddings,
+                    initial_pools=initial_pools,
+                    max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                    gpu_batch_size=self.run_batch_size,
+                    genome_id=genome.id,
+                    **retriever_kwargs
+                )
+            else:
+                # Fallback
+                results = self.retriever.retrieve_batch(
+                    queries=queries,
+                    max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                    genome_id=genome.id,
+                    **retriever_kwargs
+                )
 
-        metrics = self._compute_metrics_cumulative(results, ground_truth)
-        metrics['latency'] = total_latency / max(1, len(queries))
-        metrics['complexity'] = float(genome.complexity())
+            total_latency = time.time() - start_time
 
-        genome.metrics = metrics
-        genome.fitness = self.fitness_calc.calculate(metrics, genome)
-        genome.evaluated = True
+            metrics = self._compute_metrics_cumulative(results, ground_truth)
+            metrics['latency'] = total_latency / max(1, len(queries))
+            metrics['complexity'] = float(genome.complexity())
 
-        if decision_tracker is not None:
-            genome.decision_context = decision_tracker.to_summary_dict()
+            genome.metrics = metrics
+            genome.fitness = self.fitness_calc.calculate(metrics, genome)
+            genome.evaluated = True
 
-        return len(queries), "full"
+            if decision_tracker is not None:
+                genome.decision_context = decision_tracker.to_summary_dict()
+
+            return len(queries), "full"
 
     def _batch_compute_metrics_all_genomes(
         self,
@@ -1058,81 +1062,84 @@ class PopulationEvaluator:
             return self._evaluate_single_full(genome, queries, ground_truth)
 
         retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
-        decision_tracker = self._create_decision_tracker()
 
-        start_time = time.time()
-        n_queries = len(queries)
-        quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+        # Wrap evaluation with memory guard
+        with MemoryGuard(label=f"eval_{genome.id}", cleanup_on_exit=True):
+            decision_tracker = self._create_decision_tracker()
 
-        # Phase 1: Evaluate first quarter for early exit check
-        if decision_tracker is not None:
-            # Use single-query mode for decision tracking on first batch
-            first_quarter_results = []
-            for q in queries[:quarter]:
-                res = self.retriever.retrieve(
-                    query=q,
-                    decision_tracker=decision_tracker,
+            start_time = time.time()
+            n_queries = len(queries)
+            quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+
+            # Phase 1: Evaluate first quarter for early exit check
+            if decision_tracker is not None:
+                # Use single-query mode for decision tracking on first batch
+                first_quarter_results = []
+                for q in queries[:quarter]:
+                    res = self.retriever.retrieve(
+                        query=q,
+                        decision_tracker=decision_tracker,
+                        **retriever_kwargs
+                    )
+                    first_quarter_results.append(res)
+            else:
+                # Use batch mode for speed
+                first_quarter_results = self.retriever.retrieve_batch(
+                    queries=queries[:quarter],
+                    max_workers=self.max_workers_per_retrieval,
+                    genome_id=f"{genome.id}_quarter",
                     **retriever_kwargs
                 )
-                first_quarter_results.append(res)
-        else:
-            # Use batch mode for speed
-            first_quarter_results = self.retriever.retrieve_batch(
-                queries=queries[:quarter],
+
+            # Compute metrics at quarter and check early exit
+            quarter_metrics = self._compute_metrics_cumulative(
+                first_quarter_results, ground_truth[:quarter]
+            )
+            elapsed = time.time() - start_time
+            quarter_metrics['latency'] = elapsed / max(1, quarter)
+            quarter_metrics['complexity'] = float(genome.complexity())
+
+            quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
+
+            if quarter_fitness.quality_score < self.early_exit_threshold:
+                # Early exit - this genome isn't promising
+                genome.metrics = quarter_metrics
+                genome.fitness = quarter_fitness
+                genome.evaluated = True
+
+                if decision_tracker is not None:
+                    genome.decision_context = decision_tracker.to_summary_dict()
+
+                logger.debug(
+                    f"  > [Early Exit] {genome.id} at quarter "
+                    f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
+                )
+                return quarter, "early_exit"
+
+            # Phase 2: Evaluate remaining 3/4 for full evaluation
+            remaining_results = self.retriever.retrieve_batch(
+                queries=queries[quarter:],
                 max_workers=self.max_workers_per_retrieval,
-                genome_id=f"{genome.id}_quarter",
+                genome_id=f"{genome.id}_full",
                 **retriever_kwargs
             )
 
-        # Compute metrics at quarter and check early exit
-        quarter_metrics = self._compute_metrics_cumulative(
-            first_quarter_results, ground_truth[:quarter]
-        )
-        elapsed = time.time() - start_time
-        quarter_metrics['latency'] = elapsed / max(1, quarter)
-        quarter_metrics['complexity'] = float(genome.complexity())
+            all_results = first_quarter_results + remaining_results
 
-        quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
+            # Full evaluation completed
+            total_latency = time.time() - start_time
+            final_metrics = self._compute_metrics_cumulative(all_results, ground_truth)
+            final_metrics['latency'] = total_latency / max(1, n_queries)
+            final_metrics['complexity'] = float(genome.complexity())
 
-        if quarter_fitness.quality_score < self.early_exit_threshold:
-            # Early exit - this genome isn't promising
-            genome.metrics = quarter_metrics
-            genome.fitness = quarter_fitness
+            genome.metrics = final_metrics
+            genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
             genome.evaluated = True
 
             if decision_tracker is not None:
                 genome.decision_context = decision_tracker.to_summary_dict()
 
-            logger.debug(
-                f"  > [Early Exit] {genome.id} at quarter "
-                f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
-            )
-            return quarter, "early_exit"
-
-        # Phase 2: Evaluate remaining 3/4 for full evaluation
-        remaining_results = self.retriever.retrieve_batch(
-            queries=queries[quarter:],
-            max_workers=self.max_workers_per_retrieval,
-            genome_id=f"{genome.id}_full",
-            **retriever_kwargs
-        )
-
-        all_results = first_quarter_results + remaining_results
-
-        # Full evaluation completed
-        total_latency = time.time() - start_time
-        final_metrics = self._compute_metrics_cumulative(all_results, ground_truth)
-        final_metrics['latency'] = total_latency / max(1, n_queries)
-        final_metrics['complexity'] = float(genome.complexity())
-
-        genome.metrics = final_metrics
-        genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
-        genome.evaluated = True
-
-        if decision_tracker is not None:
-            genome.decision_context = decision_tracker.to_summary_dict()
-
-        return n_queries, "full"
+            return n_queries, "full"
 
     def _evaluate_single_full(
         self,
@@ -1142,53 +1149,56 @@ class PopulationEvaluator:
     ) -> Tuple[int, str]:
         """Full evaluation without adaptive sampling (fallback)."""
         retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
-        decision_tracker = self._create_decision_tracker()
 
-        start_time = time.time()
+        # Wrap evaluation with memory guard
+        with MemoryGuard(label=f"eval_full_{genome.id}", cleanup_on_exit=True):
+            decision_tracker = self._create_decision_tracker()
 
-        if decision_tracker is not None:
-            # Use single-query mode for decision tracking on subset
-            probe_size = min(20, len(queries))
-            results = []
-            for q in queries[:probe_size]:
-                res = self.retriever.retrieve(
-                    query=q,
-                    decision_tracker=decision_tracker,
-                    **retriever_kwargs
-                )
-                results.append(res)
+            start_time = time.time()
 
-            # Batch the rest
-            if len(queries) > probe_size:
-                batch_results = self.retriever.retrieve_batch(
-                    queries=queries[probe_size:],
+            if decision_tracker is not None:
+                # Use single-query mode for decision tracking on subset
+                probe_size = min(20, len(queries))
+                results = []
+                for q in queries[:probe_size]:
+                    res = self.retriever.retrieve(
+                        query=q,
+                        decision_tracker=decision_tracker,
+                        **retriever_kwargs
+                    )
+                    results.append(res)
+
+                # Batch the rest
+                if len(queries) > probe_size:
+                    batch_results = self.retriever.retrieve_batch(
+                        queries=queries[probe_size:],
+                        max_workers=self.max_workers_per_retrieval,
+                        genome_id=genome.id,
+                        **retriever_kwargs
+                    )
+                    results.extend(batch_results)
+            else:
+                results = self.retriever.retrieve_batch(
+                    queries=queries,
                     max_workers=self.max_workers_per_retrieval,
                     genome_id=genome.id,
                     **retriever_kwargs
                 )
-                results.extend(batch_results)
-        else:
-            results = self.retriever.retrieve_batch(
-                queries=queries,
-                max_workers=self.max_workers_per_retrieval,
-                genome_id=genome.id,
-                **retriever_kwargs
-            )
 
-        total_latency = time.time() - start_time
+            total_latency = time.time() - start_time
 
-        metrics = self._compute_metrics_cumulative(results, ground_truth)
-        metrics['latency'] = total_latency / max(1, len(queries))
-        metrics['complexity'] = float(genome.complexity())
+            metrics = self._compute_metrics_cumulative(results, ground_truth)
+            metrics['latency'] = total_latency / max(1, len(queries))
+            metrics['complexity'] = float(genome.complexity())
 
-        genome.metrics = metrics
-        genome.fitness = self.fitness_calc.calculate(metrics, genome)
-        genome.evaluated = True
+            genome.metrics = metrics
+            genome.fitness = self.fitness_calc.calculate(metrics, genome)
+            genome.evaluated = True
 
-        if decision_tracker is not None:
-            genome.decision_context = decision_tracker.to_summary_dict()
+            if decision_tracker is not None:
+                genome.decision_context = decision_tracker.to_summary_dict()
 
-        return len(queries), "full"
+            return len(queries), "full"
 
     def _compute_metrics_cumulative(
         self,
@@ -1384,90 +1394,93 @@ class PopulationEvaluator:
         """
         retriever_kwargs = self._get_compiler_for_genome(genome).compile(genome)
         pool_size = retriever_kwargs.get('initial_pool_size', 30)
-        decision_tracker = self._create_decision_tracker()
 
-        start_time = time.time()
-        n_queries = len(queries)
-        quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+        # Wrap evaluation with memory guard
+        with MemoryGuard(label=f"eval_{genome.id}", cleanup_on_exit=True):
+            decision_tracker = self._create_decision_tracker()
 
-        # Get pre-computed initial pools
-        initial_pools = shared_context.initial_pools.get(pool_size, [])
-        if not initial_pools or not hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
-            # Fallback to non-optimized path
-            return self._evaluate_single_with_shared(
-                genome, queries, ground_truth, shared_context
+            start_time = time.time()
+            n_queries = len(queries)
+            quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+
+            # Get pre-computed initial pools
+            initial_pools = shared_context.initial_pools.get(pool_size, [])
+            if not initial_pools or not hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+                # Fallback to non-optimized path
+                return self._evaluate_single_with_shared(
+                    genome, queries, ground_truth, shared_context
+                )
+
+            # Fetch all results in one batch (retrieval is the expensive part)
+            all_results = self.retriever.retrieve_batch_with_precomputed(
+                query_embeddings=shared_context.query_embeddings,
+                initial_pools=initial_pools,
+                max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
+                gpu_batch_size=self.run_batch_size,
+                genome_id=genome.id,
+                **retriever_kwargs
             )
 
-        # Fetch all results in one batch (retrieval is the expensive part)
-        all_results = self.retriever.retrieve_batch_with_precomputed(
-            query_embeddings=shared_context.query_embeddings,
-            initial_pools=initial_pools,
-            max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
-            gpu_batch_size=self.run_batch_size,
-            genome_id=genome.id,
-            **retriever_kwargs
-        )
+            # Build retrieved IDs tensor on GPU
+            max_k = 20
+            retrieved_ids = torch.full(
+                (n_queries, max_k), -1, dtype=torch.long, device=self.device
+            )
+            for i, results in enumerate(all_results):
+                for j, item in enumerate(results[:max_k]):
+                    if isinstance(item, dict):
+                        try:
+                            retrieved_ids[i, j] = int(item.get('id', -1))
+                        except (ValueError, TypeError):
+                            pass
+                    else:
+                        try:
+                            retrieved_ids[i, j] = int(item)
+                        except (ValueError, TypeError):
+                            pass
 
-        # Build retrieved IDs tensor on GPU
-        max_k = 20
-        retrieved_ids = torch.full(
-            (n_queries, max_k), -1, dtype=torch.long, device=self.device
-        )
-        for i, results in enumerate(all_results):
-            for j, item in enumerate(results[:max_k]):
-                if isinstance(item, dict):
-                    try:
-                        retrieved_ids[i, j] = int(item.get('id', -1))
-                    except (ValueError, TypeError):
-                        pass
-                else:
-                    try:
-                        retrieved_ids[i, j] = int(item)
-                    except (ValueError, TypeError):
-                        pass
+            # Compute metrics at quarter for early exit check
+            quarter_metrics = self._compute_metrics_for_slice(
+                retrieved_ids[:quarter], shared_context, quarter
+            )
 
-        # Compute metrics at quarter for early exit check
-        quarter_metrics = self._compute_metrics_for_slice(
-            retrieved_ids[:quarter], shared_context, quarter
-        )
+            elapsed = time.time() - start_time
+            quarter_metrics['latency'] = elapsed / max(1, quarter)
+            quarter_metrics['complexity'] = float(genome.complexity())
 
-        elapsed = time.time() - start_time
-        quarter_metrics['latency'] = elapsed / max(1, quarter)
-        quarter_metrics['complexity'] = float(genome.complexity())
+            quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
 
-        quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
+            if quarter_fitness.quality_score < self.early_exit_threshold:
+                # Early exit - this genome isn't promising
+                genome.metrics = quarter_metrics
+                genome.fitness = quarter_fitness
+                genome.evaluated = True
 
-        if quarter_fitness.quality_score < self.early_exit_threshold:
-            # Early exit - this genome isn't promising
-            genome.metrics = quarter_metrics
-            genome.fitness = quarter_fitness
+                if decision_tracker is not None:
+                    genome.decision_context = decision_tracker.to_summary_dict()
+
+                logger.debug(
+                    f"  > [Early Exit] {genome.id} at quarter "
+                    f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
+                )
+                return quarter, "early_exit"
+
+            # Full evaluation - compute metrics for all queries
+            total_latency = time.time() - start_time
+            final_metrics = self._compute_metrics_for_slice(
+                retrieved_ids, shared_context, n_queries
+            )
+            final_metrics['latency'] = total_latency / max(1, n_queries)
+            final_metrics['complexity'] = float(genome.complexity())
+
+            genome.metrics = final_metrics
+            genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
             genome.evaluated = True
 
             if decision_tracker is not None:
                 genome.decision_context = decision_tracker.to_summary_dict()
 
-            logger.debug(
-                f"  > [Early Exit] {genome.id} at quarter "
-                f"(qual={quarter_fitness.quality_score:.4f} < {self.early_exit_threshold})"
-            )
-            return quarter, "early_exit"
-
-        # Full evaluation - compute metrics for all queries
-        total_latency = time.time() - start_time
-        final_metrics = self._compute_metrics_for_slice(
-            retrieved_ids, shared_context, n_queries
-        )
-        final_metrics['latency'] = total_latency / max(1, n_queries)
-        final_metrics['complexity'] = float(genome.complexity())
-
-        genome.metrics = final_metrics
-        genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
-        genome.evaluated = True
-
-        if decision_tracker is not None:
-            genome.decision_context = decision_tracker.to_summary_dict()
-
-        return n_queries, "full"
+            return n_queries, "full"
 
     def _compute_metrics_for_slice(
         self,
