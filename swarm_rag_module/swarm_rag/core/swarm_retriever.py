@@ -881,6 +881,10 @@ class SwarmRetriever:
                 n_agents
             )
 
+        # Clear buffer pool for next query
+        if self._buffer_pool is not None:
+            self._buffer_pool.clear()
+
         return result
 
     # === HELPERS ===
@@ -1256,10 +1260,15 @@ class SwarmRetriever:
                 query_tensor = torch.nn.functional.normalize(query_tensor, p=2, dim=1)
                 all_similarities = torch.mm(query_tensor, unique_embs.t()).squeeze(0)
 
-            neighbor_sims = torch.full(
-                (n_agents, max_degree), -float('inf'),
-                device=device, dtype=torch.float32
-            )
+            # Use buffer pool when available for memory reuse
+            if self._buffer_pool is not None:
+                neighbor_sims = self._buffer_pool.get_neighbor_scores(n_agents, max_degree)
+                neighbor_sims.fill_(-float('inf'))  # Reset to initial value
+            else:
+                neighbor_sims = torch.full(
+                    (n_agents, max_degree), -float('inf'),
+                    device=device, dtype=torch.float32
+                )
 
             with prof.section("step.id_mapping"):
                 if valid_unique_ids.numel() > 0:
@@ -1374,7 +1383,12 @@ class SwarmRetriever:
         has_valid = prob_sums > 1e-10
 
         # Initialize chosen positions and new locations
-        chosen_positions = torch.zeros(n_agents, dtype=torch.long, device=device)
+        # Use buffer pool when available for memory reuse
+        if self._buffer_pool is not None:
+            chosen_positions = self._buffer_pool.get_position_buffer(n_agents)
+            chosen_positions.zero_()  # Clear for reuse
+        else:
+            chosen_positions = torch.zeros(n_agents, dtype=torch.long, device=device)
         new_locations_tensor = torch.as_tensor(agent_locations, device=device, dtype=torch.long)
 
         # Vectorized sampling for agents with valid probabilities
