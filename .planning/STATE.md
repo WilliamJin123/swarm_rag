@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-29)
 
 **Core value:** Find a genome configuration that hits SOTA metrics on STARK Prime (Hit@1 > 60%, Hit@5 > 80%, Recall@20 > 85%, MRR > 80%)
-**Current focus:** Phase 3 - Embedding Cache (next)
+**Current focus:** Phase 3 - Embedding Cache (in progress)
 
 ## Current Position
 
-Phase: 2 of 7 (Fitness Caching) - VERIFIED ✓
+Phase: 3 of 7 (Embedding Cache)
 Plan: 1 of 1 in current phase complete
-Status: Phase verified (4/4 truths), ready for Phase 3
-Last activity: 2026-01-29 - Verification passed
+Status: Plan 03-01 complete, awaiting phase verification
+Last activity: 2026-01-30 - Completed 03-01-PLAN.md
 
-Progress: [=====------] 50%
+Progress: [======-----] 55%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: 9min
-- Total execution time: 0.7 hours
+- Total execution time: 0.9 hours
 
 **By Phase:**
 
@@ -29,10 +29,11 @@ Progress: [=====------] 50%
 |-------|-------|-------|----------|
 | 01-memory-hardening | 4 | 37min | 9min |
 | 02-fitness-caching | 1 | 8min | 8min |
+| 03-embedding-cache | 1 | 12min | 12min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (8min), 01-04 (8min), 01-03 (6min), 01-02 (8min), 01-01 (15min)
-- Trend: stable (8min average for recent plans)
+- Last 5 plans: 03-01 (12min), 02-01 (8min), 01-04 (8min), 01-03 (6min), 01-02 (8min)
+- Trend: stable (8-12min average)
 
 *Updated after each plan completion*
 
@@ -61,6 +62,10 @@ Recent decisions affecting current work:
 - [02-01]: Store quality_score only (single float per entry)
 - [02-01]: Round floats to 6 decimals to handle FP noise
 - [02-01]: Hash config not id (same config = same behavior = same fitness)
+- [03-01]: EMA (alpha=0.1) for average embedding time tracking
+- [03-01]: Lazy integration: prepare_shared_context uses cache if exists
+- [03-01]: Detach tensors before caching to prevent memory leaks
+- [03-01]: Per-generation stats separate from cumulative stats
 
 ### Pending Todos
 
@@ -73,6 +78,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-29
-Stopped at: Phase 2 verified, ready for Phase 3
+Last session: 2026-01-30
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
