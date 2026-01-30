@@ -63,10 +63,11 @@ Plans:
   2. Embedding cache validates query consistency (detects if queries change)
   3. SharedPrecomputeContext lifetime extends beyond single generation
   4. Retrieval time per genome drops measurably after first generation
-**Plans**: 1 plan
+**Plans**: 2 plans (1 original + 1 gap closure)
 
 Plans:
-- [ ] 03-01-PLAN.md - Cross-generation embedding cache with stats and MemoryLogger integration
+- [x] 03-01-PLAN.md - Cross-generation embedding cache with stats and MemoryLogger integration
+- [ ] 03-02-PLAN.md - Gap closure: Wire embedding cache finalize_generation in evaluator
 
 ### Phase 4: Convergence Detection
 **Goal**: Evolution stops early when QD-score stagnates, saving 20-40% of wasted generations
@@ -135,7 +136,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 |-------|----------------|--------|-----------|
 | 1. Memory Hardening | 4/4 | ✓ Complete | 2026-01-29 |
 | 2. Fitness Caching | 1/1 | ✓ Complete | 2026-01-29 |
-| 3. Embedding Cache | 0/1 | Planned | - |
+| 3. Embedding Cache | 1/2 | In Progress | - |
 | 4. Convergence Detection | 0/1 | Not started | - |
 | 5. Async Checkpointing | 0/1 | Not started | - |
 | 6. Performance Validation | 0/1 | Not started | - |
@@ -149,5 +150,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 2 planned: 2026-01-30*
 *Phase 2 complete: 2026-01-29*
 *Phase 3 planned: 2026-01-30*
+*Phase 3 gap closure planned: 2026-01-30*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
