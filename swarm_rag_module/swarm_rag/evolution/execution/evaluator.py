@@ -393,6 +393,29 @@ class PopulationEvaluator:
             shared_context = self._prepare_shared_context(unevaluated, queries, ground_truth)
             self._shared_context = shared_context
 
+        # Initialize buffer pool if retriever supports it
+        if hasattr(self.retriever, 'init_buffer_pool'):
+            # Determine max sizes from genomes
+            max_pool_size = max(
+                (self._get_compiler_for_genome(g).compile(g).get('initial_pool_size', 30)
+                 for g in unevaluated),
+                default=100
+            )
+            max_agents = max(
+                (self._get_compiler_for_genome(g).compile(g).get('n_agents', 10)
+                 for g in unevaluated),
+                default=50
+            )
+            # Use graph's average degree * 2 as estimate for max_degree
+            max_degree = int(getattr(self.retriever, 'avg_degree', 50) * 2)
+
+            self.retriever.init_buffer_pool(
+                max_pool_size=max_pool_size * 2,  # 2x headroom
+                max_agents=max_agents * 2,
+                max_degree=max_degree
+            )
+            logger.info(f"  > Buffer pool initialized: pool={max_pool_size*2}, agents={max_agents*2}")
+
         total_queries_used = 0
 
         if shared_context is not None and not self.enable_adaptive:
@@ -414,6 +437,11 @@ class PopulationEvaluator:
 
         # Clear shared context after evaluation
         self._shared_context = None
+
+        # Release buffer pool to free memory
+        if hasattr(self.retriever, '_buffer_pool') and self.retriever._buffer_pool is not None:
+            self.retriever._buffer_pool.release()
+            self.retriever._buffer_pool = None
 
         # Compute stats
         max_queries = len(queries) * len(unevaluated)
