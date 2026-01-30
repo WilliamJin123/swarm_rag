@@ -13,14 +13,20 @@ import gc
 import math
 import contextlib
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Callable, Any, Generator
+from typing import Dict, List, Optional, Callable, Any, Generator, Tuple
 from functools import wraps
 import logging
+import os
 import torch
 
 from .device import get_device
 
 logger = logging.getLogger(__name__)
+
+# Memory threshold constants - read from environment with defaults
+# These are the standard thresholds used throughout the codebase for memory monitoring
+MEMORY_WARNING_THRESHOLD: float = float(os.environ.get('MEMORY_WARNING_THRESHOLD', '0.70'))
+MEMORY_HARD_STOP_THRESHOLD: float = float(os.environ.get('MEMORY_HARD_STOP_THRESHOLD', '0.85'))
 
 # Optional imports
 try:
@@ -442,6 +448,59 @@ def estimate_tensor_memory(shape: tuple, dtype: torch.dtype = None) -> float:
     return total_bytes / (1024 * 1024)
 
 
+def check_memory_thresholds(
+    warning_pct: float = None,
+    hard_stop_pct: float = None
+) -> Tuple[bool, bool, float]:
+    """
+    Check current GPU memory against thresholds.
+
+    Uses torch.cuda.memory_allocated() for accurate tensor usage tracking,
+    not memory_reserved() which includes caching allocator overhead.
+
+    Args:
+        warning_pct: Warning threshold as ratio (0.0-1.0).
+            Defaults to MEMORY_WARNING_THRESHOLD module constant.
+        hard_stop_pct: Hard stop threshold as ratio (0.0-1.0).
+            Defaults to MEMORY_HARD_STOP_THRESHOLD module constant.
+
+    Returns:
+        Tuple of (is_warning, is_critical, usage_pct) where:
+        - is_warning: True if usage >= warning_pct
+        - is_critical: True if usage >= hard_stop_pct
+        - usage_pct: Current usage as ratio of total VRAM (0.0-1.0)
+
+    Example:
+        is_warn, is_crit, usage = check_memory_thresholds()
+        if is_crit:
+            raise MemoryError("GPU memory critical")
+        elif is_warn:
+            logger.warning(f"GPU memory at {usage:.1%}")
+    """
+    if not torch.cuda.is_available():
+        return False, False, 0.0
+
+    # Use defaults from module constants if not specified
+    warning = warning_pct if warning_pct is not None else MEMORY_WARNING_THRESHOLD
+    hard_stop = hard_stop_pct if hard_stop_pct is not None else MEMORY_HARD_STOP_THRESHOLD
+
+    # Use memory_allocated for accurate tensor usage (not memory_reserved which includes cache)
+    allocated = torch.cuda.memory_allocated()
+    total = torch.cuda.get_device_properties(0).total_memory
+
+    # Handle edge case of zero total memory
+    if total == 0:
+        return False, False, 0.0
+
+    usage_pct = allocated / total
+
+    return (
+        usage_pct >= warning,
+        usage_pct >= hard_stop,
+        usage_pct
+    )
+
+
 __all__ = [
     'MemorySnapshot',
     'MemoryDelta',
@@ -449,5 +508,8 @@ __all__ = [
     'get_gpu_memory_info',
     'clear_gpu_cache',
     'memory_guard',
-    'estimate_tensor_memory'
+    'estimate_tensor_memory',
+    'check_memory_thresholds',
+    'MEMORY_WARNING_THRESHOLD',
+    'MEMORY_HARD_STOP_THRESHOLD',
 ]
