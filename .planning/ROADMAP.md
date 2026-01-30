@@ -13,7 +13,7 @@ This roadmap delivers a performant evolution system capable of running 500 gener
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Memory Hardening** - Establish stable memory management to prevent crashes during long runs
-- [ ] **Phase 2: Fitness Caching** - Cache evaluated genomes to skip redundant fitness computation
+- [x] **Phase 2: Fitness Caching** - Cache evaluated genomes to skip redundant fitness computation
 - [ ] **Phase 3: Embedding Cache** - Persist query embeddings across generations to eliminate recomputation
 - [ ] **Phase 4: Convergence Detection** - Detect stagnation and stop early when evolution plateaus
 - [ ] **Phase 5: Async Checkpointing** - Non-blocking checkpoint saves during evolution
@@ -52,7 +52,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 02-01-PLAN.md - FitnessCache module with genome hashing and evaluator integration
+- [x] 02-01-PLAN.md - FitnessCache module with genome hashing and evaluator integration
 
 ### Phase 3: Embedding Cache
 **Goal**: Query embeddings persist across generations, eliminating redundant embedding computation (50-80% retrieval savings)
@@ -134,7 +134,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Memory Hardening | 4/4 | ✓ Complete | 2026-01-29 |
-| 2. Fitness Caching | 0/1 | Planned | - |
+| 2. Fitness Caching | 1/1 | ✓ Complete | 2026-01-29 |
 | 3. Embedding Cache | 0/1 | Not started | - |
 | 4. Convergence Detection | 0/1 | Not started | - |
 | 5. Async Checkpointing | 0/1 | Not started | - |
@@ -147,5 +147,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 1 gap closure planned: 2026-01-30*
 *Phase 1 complete: 2026-01-29*
 *Phase 2 planned: 2026-01-30*
+*Phase 2 complete: 2026-01-29*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*

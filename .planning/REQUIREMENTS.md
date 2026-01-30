@@ -23,7 +23,7 @@ Requirements for achieving SOTA metrics with performant evolution loop.
 
 ### Caching
 
-- [ ] **CACHE-01**: Fitness caching by genome hash — skip re-evaluation of duplicate/elite genomes
+- [x] **CACHE-01**: Fitness caching by genome hash — skip re-evaluation of duplicate/elite genomes
 - [ ] **CACHE-02**: Cross-generation embedding cache — persist query embeddings across generations
 
 ### Memory Management
@@ -79,7 +79,7 @@ Deferred to future if v1 doesn't achieve targets.
 | METRIC-02 | Phase 7 | Pending |
 | METRIC-03 | Phase 7 | Pending |
 | METRIC-04 | Phase 7 | Pending |
-| CACHE-01 | Phase 2 | Pending |
+| CACHE-01 | Phase 2 | Complete |
 | CACHE-02 | Phase 3 | Pending |
 | MEM-01 | Phase 1 | Complete |
 | MEM-02 | Phase 1 | Complete |
@@ -95,4 +95,4 @@ Deferred to future if v1 doesn't achieve targets.
 
 ---
 *Requirements defined: 2026-01-29*
-*Last updated: 2026-01-29 after Phase 1 completion*
+*Last updated: 2026-01-29 after Phase 2 completion*
