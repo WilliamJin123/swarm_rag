@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .fitness_cache import CacheStats
+    from .embedding_cache import EmbeddingCacheStats
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ class GenerationMemoryStats:
     # Fitness cache stats (optional)
     cache_hits: int = 0
     cache_total: int = 0
+    # Embedding cache stats (optional)
+    embed_cache_hits: int = 0
+    embed_cache_total: int = 0
+    embed_cache_time_saved_sec: float = 0.0
 
     @property
     def usage_ratio(self) -> float:
@@ -45,6 +50,11 @@ class GenerationMemoryStats:
         """Cache hit rate as ratio (0.0 to 1.0)."""
         return self.cache_hits / self.cache_total if self.cache_total > 0 else 0.0
 
+    @property
+    def embed_cache_hit_rate(self) -> float:
+        """Embedding cache hit rate as ratio (0.0 to 1.0)."""
+        return self.embed_cache_hits / self.embed_cache_total if self.embed_cache_total > 0 else 0.0
+
     def to_log_line(self) -> str:
         """Format as single log line."""
         line = (
@@ -55,9 +65,14 @@ class GenerationMemoryStats:
             f"delta={self.delta_mb:+7.1f}MB "
             f"usage={self.usage_ratio:.1%}"
         )
-        # Append cache stats if present
+        # Append fitness cache stats if present
         if self.cache_total > 0:
             line += f" cache={self.cache_hits}/{self.cache_total}({self.cache_hit_rate:.0%})"
+        # Append embedding cache stats if present
+        if self.embed_cache_total > 0:
+            line += f" ecache={self.embed_cache_hits}/{self.embed_cache_total}({self.embed_cache_hit_rate:.0%})"
+            if self.embed_cache_time_saved_sec > 0:
+                line += f" saved={self.embed_cache_time_saved_sec:.1f}s"
         return line
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,11 +87,17 @@ class GenerationMemoryStats:
             'total_vram_mb': self.total_vram_mb,
             'usage_ratio': self.usage_ratio,
         }
-        # Include cache stats if present
+        # Include fitness cache stats if present
         if self.cache_total > 0:
             d['cache_hits'] = self.cache_hits
             d['cache_total'] = self.cache_total
             d['cache_hit_rate'] = self.cache_hit_rate
+        # Include embedding cache stats if present
+        if self.embed_cache_total > 0:
+            d['embed_cache_hits'] = self.embed_cache_hits
+            d['embed_cache_total'] = self.embed_cache_total
+            d['embed_cache_hit_rate'] = self.embed_cache_hit_rate
+            d['embed_cache_time_saved_sec'] = self.embed_cache_time_saved_sec
         return d
 
 
@@ -121,7 +142,8 @@ class MemoryLogger:
     def log_generation(
         self,
         generation: int,
-        cache_stats: Optional['CacheStats'] = None
+        cache_stats: Optional['CacheStats'] = None,
+        embed_cache_stats: Optional['EmbeddingCacheStats'] = None
     ) -> GenerationMemoryStats:
         """
         Log memory stats for a generation.
@@ -131,13 +153,23 @@ class MemoryLogger:
         Args:
             generation: Generation number
             cache_stats: Optional fitness cache stats for this generation
+            embed_cache_stats: Optional embedding cache stats for this generation
 
         Returns:
             GenerationMemoryStats for this generation
         """
-        # Extract cache stats if provided
+        # Extract fitness cache stats if provided
         cache_hits = cache_stats.hits if cache_stats else 0
         cache_total = cache_stats.total if cache_stats else 0
+
+        # Extract embedding cache stats if provided
+        embed_cache_hits = 0
+        embed_cache_total = 0
+        embed_cache_time_saved_sec = 0.0
+        if embed_cache_stats is not None:
+            embed_cache_hits = embed_cache_stats.generation_hits
+            embed_cache_total = embed_cache_stats.generation_hits + embed_cache_stats.generation_misses
+            embed_cache_time_saved_sec = embed_cache_stats.compute_time_saved_sec
 
         if not torch.cuda.is_available():
             # Return placeholder stats for CPU mode
@@ -151,6 +183,9 @@ class MemoryLogger:
                 total_vram_mb=0.0,
                 cache_hits=cache_hits,
                 cache_total=cache_total,
+                embed_cache_hits=embed_cache_hits,
+                embed_cache_total=embed_cache_total,
+                embed_cache_time_saved_sec=embed_cache_time_saved_sec,
             )
             self._stats_history.append(stats)
             return stats
@@ -170,6 +205,9 @@ class MemoryLogger:
             total_vram_mb=self._total_vram_mb,
             cache_hits=cache_hits,
             cache_total=cache_total,
+            embed_cache_hits=embed_cache_hits,
+            embed_cache_total=embed_cache_total,
+            embed_cache_time_saved_sec=embed_cache_time_saved_sec,
         )
 
         # Write to log file

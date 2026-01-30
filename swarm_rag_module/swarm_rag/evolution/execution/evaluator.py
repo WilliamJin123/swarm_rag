@@ -31,6 +31,7 @@ from .shared_precompute import (
     BatchedRetrievalResults
 )
 from .fitness_cache import FitnessCache, CacheStats
+from .embedding_cache import EmbeddingCacheProvider
 
 
 logger = logging.getLogger(__name__)
@@ -1608,3 +1609,14 @@ class PopulationEvaluator:
             # Fail explicitly - GPU/CPU overhead makes silent fallback inefficient
             logger.error(f"GPU metrics failed: {e}")
             raise RuntimeError(f"GPU metric computation failed: {e}") from e
+
+    def cleanup(self):
+        """
+        Release resources at evolution end.
+
+        Clears embedding cache to release GPU memory.
+        Should be called by EvolutionEngine or Orchestrator when evolution completes.
+        """
+        # Clear embedding cache to release GPU memory
+        EmbeddingCacheProvider.clear()
+        logger.info("PopulationEvaluator cleanup: embedding cache cleared")
