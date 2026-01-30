@@ -28,9 +28,9 @@ Requirements for achieving SOTA metrics with performant evolution loop.
 
 ### Memory Management
 
-- [ ] **MEM-01**: Tensor lifecycle guards — strict detach/no_grad/empty_cache patterns in hot paths
-- [ ] **MEM-02**: Memory monitoring — track GPU memory per generation, alert on growth trends
-- [ ] **MEM-03**: Buffer reuse — pre-allocate and reuse traversal buffers instead of per-step allocation
+- [x] **MEM-01**: Tensor lifecycle guards — strict detach/no_grad/empty_cache patterns in hot paths
+- [x] **MEM-02**: Memory monitoring — track GPU memory per generation, alert on growth trends
+- [x] **MEM-03**: Buffer reuse — pre-allocate and reuse traversal buffers instead of per-step allocation
 
 ### Convergence
 
@@ -81,9 +81,9 @@ Deferred to future if v1 doesn't achieve targets.
 | METRIC-04 | Phase 7 | Pending |
 | CACHE-01 | Phase 2 | Pending |
 | CACHE-02 | Phase 3 | Pending |
-| MEM-01 | Phase 1 | Pending |
-| MEM-02 | Phase 1 | Pending |
-| MEM-03 | Phase 1 | Pending |
+| MEM-01 | Phase 1 | Complete |
+| MEM-02 | Phase 1 | Complete |
+| MEM-03 | Phase 1 | Complete |
 | CONV-01 | Phase 4 | Pending |
 | CONV-02 | Phase 4 | Pending |
 | CKPT-01 | Phase 5 | Pending |
@@ -95,4 +95,4 @@ Deferred to future if v1 doesn't achieve targets.
 
 ---
 *Requirements defined: 2026-01-29*
-*Last updated: 2026-01-29 after roadmap creation*
+*Last updated: 2026-01-29 after Phase 1 completion*

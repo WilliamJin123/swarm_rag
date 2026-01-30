@@ -12,7 +12,7 @@ This roadmap delivers a performant evolution system capable of running 500 gener
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Memory Hardening** - Establish stable memory management to prevent crashes during long runs
+- [x] **Phase 1: Memory Hardening** - Establish stable memory management to prevent crashes during long runs
 - [ ] **Phase 2: Fitness Caching** - Cache evaluated genomes to skip redundant fitness computation
 - [ ] **Phase 3: Embedding Cache** - Persist query embeddings across generations to eliminate recomputation
 - [ ] **Phase 4: Convergence Detection** - Detect stagnation and stop early when evolution plateaus
@@ -38,7 +38,7 @@ Plans:
 - [x] 01-01-PLAN.md - MemoryGuard context manager with threshold enforcement
 - [x] 01-02-PLAN.md - MemoryLogger for per-generation tracking and alerting
 - [x] 01-03-PLAN.md - Buffer pre-allocation and MemoryGuard integration
-- [ ] 01-04-PLAN.md - Gap closure: Wire buffer pool + torch.no_grad() coverage
+- [x] 01-04-PLAN.md - Gap closure: Wire buffer pool + torch.no_grad() coverage
 
 ### Phase 2: Fitness Caching
 **Goal**: Duplicate and elite genomes skip evaluation via content-hash caching (30-70% eval savings)
@@ -133,7 +133,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Memory Hardening | 3/4 | Gap closure needed | - |
+| 1. Memory Hardening | 4/4 | ✓ Complete | 2026-01-29 |
 | 2. Fitness Caching | 0/1 | Not started | - |
 | 3. Embedding Cache | 0/1 | Not started | - |
 | 4. Convergence Detection | 0/1 | Not started | - |
@@ -145,5 +145,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Roadmap created: 2026-01-29*
 *Phase 1 planned: 2026-01-29*
 *Phase 1 gap closure planned: 2026-01-30*
+*Phase 1 complete: 2026-01-29*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
