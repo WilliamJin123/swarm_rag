@@ -49,10 +49,10 @@ Plans:
   2. Cache hit rate is logged and visible per generation
   3. Elite genomes carried forward hit cache instead of re-evaluating
   4. Cache properly handles detached tensors (no gradient graph retention)
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 02-01: FitnessCache module with genome hashing
+- [ ] 02-01-PLAN.md - FitnessCache module with genome hashing and evaluator integration
 
 ### Phase 3: Embedding Cache
 **Goal**: Query embeddings persist across generations, eliminating redundant embedding computation (50-80% retrieval savings)
@@ -134,7 +134,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Memory Hardening | 4/4 | ✓ Complete | 2026-01-29 |
-| 2. Fitness Caching | 0/1 | Not started | - |
+| 2. Fitness Caching | 0/1 | Planned | - |
 | 3. Embedding Cache | 0/1 | Not started | - |
 | 4. Convergence Detection | 0/1 | Not started | - |
 | 5. Async Checkpointing | 0/1 | Not started | - |
@@ -146,5 +146,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 1 planned: 2026-01-29*
 *Phase 1 gap closure planned: 2026-01-30*
 *Phase 1 complete: 2026-01-29*
+*Phase 2 planned: 2026-01-30*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
