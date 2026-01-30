@@ -78,10 +78,10 @@ Plans:
   2. Convergence threshold and window size are configurable via evolution config
   3. Evolution run terminates gracefully when convergence detected
   4. Final checkpoint and metrics saved on early termination
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 04-01: ConvergenceDetector with sliding window analysis
+- [ ] 04-01-PLAN.md - ConvergenceDetector module with sliding window analysis and orchestrator integration
 
 ### Phase 5: Async Checkpointing
 **Goal**: Checkpoint saves happen without blocking evolution loop
@@ -137,7 +137,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 1. Memory Hardening | 4/4 | ✓ Complete | 2026-01-29 |
 | 2. Fitness Caching | 1/1 | ✓ Complete | 2026-01-29 |
 | 3. Embedding Cache | 2/2 | ✓ Complete | 2026-01-30 |
-| 4. Convergence Detection | 0/1 | Not started | - |
+| 4. Convergence Detection | 0/1 | Planned | - |
 | 5. Async Checkpointing | 0/1 | Not started | - |
 | 6. Performance Validation | 0/1 | Not started | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
@@ -152,5 +152,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 3 planned: 2026-01-30*
 *Phase 3 gap closure planned: 2026-01-30*
 *Phase 3 complete: 2026-01-30*
+*Phase 4 planned: 2026-01-30*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
