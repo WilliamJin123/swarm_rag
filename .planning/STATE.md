@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-01-29)
 ## Current Position
 
 Phase: 1 of 7 (Memory Hardening) - COMPLETE
-Plan: 3 of 3 in current phase complete
-Status: Phase complete
-Last activity: 2026-01-30 - Completed 01-03-PLAN.md (Buffer Pre-allocation)
+Plan: 4 of 4 in current phase complete
+Status: Phase complete (gap closure completed)
+Last activity: 2026-01-30 - Completed 01-04-PLAN.md (Gap Closure)
 
-Progress: [===--------] 30%
+Progress: [====-------] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: 10min
-- Total execution time: 0.5 hours
+- Total plans completed: 4
+- Average duration: 9min
+- Total execution time: 0.6 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-memory-hardening | 3 | 29min | 10min |
+| 01-memory-hardening | 4 | 37min | 9min |
 
 **Recent Trend:**
-- Last 5 plans: 01-03 (6min), 01-02 (8min), 01-01 (15min)
+- Last 5 plans: 01-04 (8min), 01-03 (6min), 01-02 (8min), 01-01 (15min)
 - Trend: improving (getting faster as patterns established)
 
 *Updated after each plan completion*
@@ -52,6 +52,9 @@ Recent decisions affecting current work:
 - [01-03]: Buffer pool uses 2x headroom for pool_size and agents
 - [01-03]: max_degree estimated from graph's avg_degree * 2
 - [01-03]: All 4 single-genome evaluation methods wrapped with MemoryGuard
+- [01-04]: torch.no_grad() placed inside MemoryGuard for belt-and-suspenders gradient prevention
+- [01-04]: Buffer pool uses conditional pattern for backward compatibility
+- [01-04]: clear() called after each traversal/batch to prevent state leakage
 
 ### Pending Todos
 
@@ -65,5 +68,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 01-03-PLAN.md (Buffer Pre-allocation) - Phase 1 complete
+Stopped at: Completed 01-04-PLAN.md (Gap Closure) - Phase 1 complete with gap closure
 Resume file: None
