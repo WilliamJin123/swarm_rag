@@ -2815,6 +2815,11 @@ class SwarmRetriever:
                 )
                 all_results.append(query_results)
 
+            # Clear buffer pool between batch chunks to reset state
+            # Note: Buffer pool primarily optimizes single-query traversal
+            if self._buffer_pool is not None:
+                self._buffer_pool.clear()
+
             if gid:
                 logger.info(f"    [Retriever] [{gid}] Multi-Query Batch: {end}/{n_queries}")
 
