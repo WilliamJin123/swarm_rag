@@ -12,11 +12,16 @@ import gc
 import os
 import functools
 import logging
-from typing import Optional
+from typing import Optional, Callable, TypeVar
 
 import torch
 
+from ...utils.memory import MEMORY_WARNING_THRESHOLD, MEMORY_HARD_STOP_THRESHOLD
+
 logger = logging.getLogger(__name__)
+
+# Type variable for decorated function return type
+F = TypeVar('F', bound=Callable)
 
 # Read thresholds from environment variables with defaults
 _DEFAULT_WARNING_THRESHOLD = 0.70
@@ -235,7 +240,67 @@ class MemoryGuard:
             return torch.cuda.memory_allocated() / self._total_vram
 
 
+def evaluation_no_grad(
+    track_memory: bool = True,
+    warning_threshold: Optional[float] = None,
+    hard_stop_threshold: Optional[float] = None
+) -> Callable[[F], F]:
+    """
+    Decorator for genome evaluation functions.
+
+    Combines torch.no_grad() context with optional MemoryGuard tracking.
+    All operations inside the decorated function run without gradient computation,
+    and memory usage is tracked and cleaned up after execution.
+
+    Args:
+        track_memory: Whether to use MemoryGuard for memory tracking.
+            Default True. Set False to use only torch.no_grad().
+        warning_threshold: VRAM ratio (0.0-1.0) to trigger warning log.
+            Defaults to MEMORY_WARNING_THRESHOLD from utils.memory.
+        hard_stop_threshold: VRAM ratio (0.0-1.0) to raise MemoryThresholdExceeded.
+            Defaults to MEMORY_HARD_STOP_THRESHOLD from utils.memory.
+
+    Returns:
+        Decorator function that wraps the target function.
+
+    Example:
+        @evaluation_no_grad(track_memory=True)
+        def evaluate_genome(genome, retriever, ...):
+            # All operations are gradient-free
+            # Memory is tracked and cleaned up
+            results = retriever.retrieve_batch(...)
+            return compute_fitness(results)
+
+        @evaluation_no_grad(track_memory=False)
+        def quick_eval(genome):
+            # Just no_grad, no memory tracking
+            return genome.score()
+
+    Raises:
+        MemoryThresholdExceeded: If hard stop threshold is exceeded during execution.
+    """
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with torch.no_grad():
+                if track_memory and torch.cuda.is_available():
+                    warn_thresh = warning_threshold if warning_threshold is not None else MEMORY_WARNING_THRESHOLD
+                    stop_thresh = hard_stop_threshold if hard_stop_threshold is not None else MEMORY_HARD_STOP_THRESHOLD
+                    with MemoryGuard(
+                        warning_threshold=warn_thresh,
+                        hard_stop_threshold=stop_thresh,
+                        cleanup_on_exit=True,
+                        label=func.__name__
+                    ):
+                        return func(*args, **kwargs)
+                else:
+                    return func(*args, **kwargs)
+        return wrapper  # type: ignore
+    return decorator
+
+
 __all__ = [
     'MemoryGuard',
     'MemoryThresholdExceeded',
+    'evaluation_no_grad',
 ]
