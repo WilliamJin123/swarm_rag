@@ -7,6 +7,8 @@ avoiding redundant embedding computations during genome evaluation.
 Expected Impact: 10-20% speedup if embedding model is the bottleneck.
 """
 import logging
+import json
+import copy
 from typing import List, Dict, Optional, Any, Callable
 import torch
 from dataclasses import dataclass, field
@@ -26,10 +28,31 @@ class EmbeddingCacheStats:
     precompute_time: float = 0.0
     total_embedding_time: float = 0.0
 
+    # Per-generation tracking (reset each generation)
+    generation_hits: int = 0
+    generation_misses: int = 0
+    compute_time_saved_sec: float = 0.0
+
+    # Running average of embedding time per query (for time-saved calculation)
+    _avg_embed_time_sec: float = 0.0
+    _embed_time_samples: int = 0
+
     @property
     def hit_rate(self) -> float:
         total = self.cache_hits + self.cache_misses
         return self.cache_hits / total if total > 0 else 0.0
+
+    @property
+    def generation_hit_rate(self) -> float:
+        """Hit rate for current generation."""
+        total = self.generation_hits + self.generation_misses
+        return self.generation_hits / total if total > 0 else 0.0
+
+    def reset_generation(self):
+        """Reset per-generation counters while keeping cumulative stats."""
+        self.generation_hits = 0
+        self.generation_misses = 0
+        self.compute_time_saved_sec = 0.0
 
 
 class QueryEmbeddingCache:
@@ -163,14 +186,27 @@ class QueryEmbeddingCache:
 
             start = time.time()
             embeddings = self.batch_embedding_fn(batch)
-            self.stats.total_embedding_time += time.time() - start
+            elapsed = time.time() - start
+            self.stats.total_embedding_time += elapsed
+
+            # Update running average of embedding time per query (EMA with alpha=0.1)
+            per_query_time = elapsed / max(1, len(batch))
+            if self.stats._embed_time_samples == 0:
+                self.stats._avg_embed_time_sec = per_query_time
+            else:
+                alpha = 0.1
+                self.stats._avg_embed_time_sec = (
+                    alpha * per_query_time +
+                    (1 - alpha) * self.stats._avg_embed_time_sec
+                )
+            self.stats._embed_time_samples += 1
 
             # Convert to target storage format once
             storage_embeddings = self._convert_to_storage_format(embeddings)
 
             # Store each embedding
             for j, q in enumerate(batch):
-                self._cache[q] = storage_embeddings[j]
+                self._cache[q] = storage_embeddings[j].detach()  # Detach to prevent memory leaks
                 self._access_order.append(q)
                 if self._embedding_dim is None:
                     if hasattr(storage_embeddings[j], 'shape'):
@@ -245,6 +281,9 @@ class QueryEmbeddingCache:
         """
         if query in self._cache:
             self.stats.cache_hits += 1
+            self.stats.generation_hits += 1
+            # Track time saved on cache hit
+            self.stats.compute_time_saved_sec += self.stats._avg_embed_time_sec
             # Update access order for LRU
             if query in self._access_order:
                 self._access_order.remove(query)
@@ -252,16 +291,29 @@ class QueryEmbeddingCache:
             return self._cache[query]
 
         self.stats.cache_misses += 1
+        self.stats.generation_misses += 1
 
         # Compute on miss if embedding function available
         if self.embedding_fn is not None:
             start = time.time()
             embedding = self.embedding_fn(query)
-            self.stats.total_embedding_time += time.time() - start
+            elapsed = time.time() - start
+            self.stats.total_embedding_time += elapsed
+
+            # Update running average of embedding time per query
+            if self.stats._embed_time_samples == 0:
+                self.stats._avg_embed_time_sec = elapsed
+            else:
+                alpha = 0.1
+                self.stats._avg_embed_time_sec = (
+                    alpha * elapsed +
+                    (1 - alpha) * self.stats._avg_embed_time_sec
+                )
+            self.stats._embed_time_samples += 1
 
             # Store on configured device
             cache_emb = self._to_device(embedding)
-            self._cache[query] = cache_emb
+            self._cache[query] = cache_emb.detach() if hasattr(cache_emb, 'detach') else cache_emb
             self._access_order.append(query)
             self._evict_if_needed()
             return cache_emb
@@ -325,9 +377,13 @@ class QueryEmbeddingCache:
         for q in queries:
             if q in self._cache:
                 self.stats.cache_hits += 1
+                self.stats.generation_hits += 1
+                # Track time saved on cache hit
+                self.stats.compute_time_saved_sec += self.stats._avg_embed_time_sec
                 result[q] = self._cache[q]
             else:
                 self.stats.cache_misses += 1
+                self.stats.generation_misses += 1
                 missing.append(q)
 
         # Batch compute missing
@@ -428,6 +484,87 @@ class QueryEmbeddingCache:
             torch.Tensor on GPU if available, None if torch not available
         """
         return self.get_all_embeddings_matrix(queries, as_tensor=True)
+
+    def finalize_generation(self, generation: int) -> EmbeddingCacheStats:
+        """
+        Finalize stats for a generation and reset per-generation counters.
+
+        Returns a COPY of current stats with per-generation values before resetting.
+
+        Args:
+            generation: The generation number (for logging)
+
+        Returns:
+            Copy of EmbeddingCacheStats with per-generation values
+        """
+        # Create a copy of current stats
+        stats_copy = copy.copy(self.stats)
+
+        # Log generation summary
+        total = self.stats.generation_hits + self.stats.generation_misses
+        hit_rate = self.stats.generation_hit_rate
+        time_saved = self.stats.compute_time_saved_sec
+        logger.info(
+            f"EmbeddingCache gen {generation}: {self.stats.generation_hits}/{total} hits "
+            f"({hit_rate:.0%}), saved {time_saved:.1f}s"
+        )
+
+        # Reset per-generation counters
+        self.stats.reset_generation()
+
+        return stats_copy
+
+    def dump_debug_info(
+        self,
+        path: Optional[str] = None,
+        include_embeddings: bool = False
+    ) -> dict:
+        """
+        Export cache debug information to dict/JSON.
+
+        Args:
+            path: Optional path to write JSON file
+            include_embeddings: If True, include tensor values as lists (warning: large)
+
+        Returns:
+            Dict with cache state information
+        """
+        debug_info = {
+            'cache_size': len(self._cache),
+            'embedding_dim': self._embedding_dim,
+            'device': self._device,
+            'maxsize': self.maxsize,
+            'stats': {
+                'total_queries': self.stats.total_queries,
+                'cache_hits': self.stats.cache_hits,
+                'cache_misses': self.stats.cache_misses,
+                'hit_rate': self.stats.hit_rate,
+                'precompute_time': self.stats.precompute_time,
+                'total_embedding_time': self.stats.total_embedding_time,
+                'generation_hits': self.stats.generation_hits,
+                'generation_misses': self.stats.generation_misses,
+                'generation_hit_rate': self.stats.generation_hit_rate,
+                'compute_time_saved_sec': self.stats.compute_time_saved_sec,
+                'avg_embed_time_sec': self.stats._avg_embed_time_sec,
+            },
+            'cached_queries': list(self._cache.keys()),
+        }
+
+        if include_embeddings:
+            embeddings_dict = {}
+            for q, emb in self._cache.items():
+                if isinstance(emb, torch.Tensor):
+                    embeddings_dict[q] = emb.cpu().tolist()
+                else:
+                    embeddings_dict[q] = list(emb)
+            debug_info['embeddings'] = embeddings_dict
+
+        if path is not None:
+            with open(path, 'w') as f:
+                json.dump(debug_info, f, indent=2)
+            logger.info(f"Embedding cache debug info written to {path}")
+
+        return debug_info
 
 
 class EmbeddingCacheProvider:

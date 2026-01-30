@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Optional, Set, Tuple
 import torch
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
+from .embedding_cache import EmbeddingCacheProvider
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def prepare_shared_context(
     Pre-compute shared data for all genomes in a generation.
 
     This function is called ONCE at the start of evaluation to compute:
-    1. All query embeddings in a single batch
+    1. All query embeddings in a single batch (reuses global embedding cache if available)
     2. Initial search pools for each unique pool size needed by genomes
     3. Ground truth converted to sets for O(1) lookup
 
@@ -125,28 +126,55 @@ def prepare_shared_context(
     n_queries = len(queries)
     logger.info(f"Pre-computing shared context for {n_queries} queries...")
 
-    # 1. Batch embed all queries
-    logger.debug("  > Batch embedding queries...")
-    if hasattr(retriever, '_get_cached_query_embeddings_batch'):
-        # Use retriever's internal batched embedding method
-        query_embeddings = retriever._get_cached_query_embeddings_batch(queries)
-    elif hasattr(retriever, 'embed_fn') and hasattr(retriever.embed_fn, 'embed_query_batch'):
-        # Direct access to embedding provider
-        query_embeddings = retriever.embed_fn.embed_query_batch(queries)
-        if not isinstance(query_embeddings, torch.Tensor):
-            query_embeddings = torch.as_tensor(query_embeddings, dtype=torch.float32)
-    else:
-        # Fallback: embed one at a time (shouldn't happen with SwarmRetriever)
-        embeddings = []
-        for q in queries:
-            if hasattr(retriever, '_get_cached_query_vector'):
-                emb = retriever._get_cached_query_vector(q)
-            else:
-                emb = retriever.embed_fn.embed_query(q)
-            if not isinstance(emb, torch.Tensor):
-                emb = torch.as_tensor(emb, dtype=torch.float32)
-            embeddings.append(emb)
-        query_embeddings = torch.stack(embeddings)
+    # 1. Check global embedding cache first
+    embedding_cache = EmbeddingCacheProvider.get()
+    query_embeddings = None
+
+    if embedding_cache is not None:
+        # Try to get all embeddings from cache
+        cached = embedding_cache.get_batch(queries)
+        if len(cached) == len(queries):
+            # All queries cached - stack and use
+            query_embeddings = torch.stack([cached[q] for q in queries])
+            logger.info(f"  > Query embeddings from cache ({len(queries)} queries)")
+        else:
+            # Partial cache - we have some, compute the rest below
+            logger.debug(f"  > Partial cache: {len(cached)}/{len(queries)} queries cached")
+
+    # 2. Compute embeddings if not all cached
+    if query_embeddings is None:
+        logger.debug("  > Batch embedding queries...")
+        if hasattr(retriever, '_get_cached_query_embeddings_batch'):
+            # Use retriever's internal batched embedding method
+            query_embeddings = retriever._get_cached_query_embeddings_batch(queries)
+        elif hasattr(retriever, 'embed_fn') and hasattr(retriever.embed_fn, 'embed_query_batch'):
+            # Direct access to embedding provider
+            query_embeddings = retriever.embed_fn.embed_query_batch(queries)
+            if not isinstance(query_embeddings, torch.Tensor):
+                query_embeddings = torch.as_tensor(query_embeddings, dtype=torch.float32)
+        else:
+            # Fallback: embed one at a time (shouldn't happen with SwarmRetriever)
+            embeddings = []
+            for q in queries:
+                if hasattr(retriever, '_get_cached_query_vector'):
+                    emb = retriever._get_cached_query_vector(q)
+                else:
+                    emb = retriever.embed_fn.embed_query(q)
+                if not isinstance(emb, torch.Tensor):
+                    emb = torch.as_tensor(emb, dtype=torch.float32)
+                embeddings.append(emb)
+            query_embeddings = torch.stack(embeddings)
+
+        # Store computed embeddings in global cache for reuse across generations
+        if embedding_cache is not None:
+            for i, q in enumerate(queries):
+                if q not in embedding_cache._cache:
+                    emb = query_embeddings[i]
+                    if hasattr(emb, 'detach'):
+                        emb = emb.detach()
+                    embedding_cache._cache[q] = emb
+                    embedding_cache._access_order.append(q)
+            logger.info(f"  > Stored {len(queries)} embeddings in global cache")
 
     # Ensure embeddings are on target device (no-op if already there)
     if not str(query_embeddings.device).startswith(device):
