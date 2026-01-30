@@ -492,6 +492,14 @@ class PopulationEvaluator:
         cache_stats = self._fitness_cache.finalize_generation(generation)
         logger.info(f"  > Cache: {cache_stats.hits}/{cache_stats.total} hits ({cache_stats.hit_rate:.1%})")
 
+        # Finalize embedding cache stats for this generation
+        embed_cache = EmbeddingCacheProvider.get()
+        embed_cache_stats = None
+        if embed_cache is not None:
+            embed_cache_stats = embed_cache.finalize_generation(generation)
+            logger.info(f"  > Embedding cache: {embed_cache_stats.generation_hits + embed_cache_stats.generation_misses} lookups, "
+                        f"{embed_cache_stats.compute_time_saved_sec:.1f}s saved")
+
         return self.stats
 
     def _prepare_shared_context(
