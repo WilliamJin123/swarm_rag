@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-29)
 
 **Core value:** Find a genome configuration that hits SOTA metrics on STARK Prime (Hit@1 > 60%, Hit@5 > 80%, Recall@20 > 85%, MRR > 80%)
-**Current focus:** Phase 5 - Async Checkpointing (not started)
+**Current focus:** Phase 5 - Async Checkpointing (plan 01 complete)
 
 ## Current Position
 
-Phase: 4 of 7 complete (Convergence Detection)
-Plan: All plans complete, phase verified
-Status: Phase 04 verified and complete
-Last activity: 2026-01-30 - Phase 4 verified, ready for Phase 5
+Phase: 5 of 7 in progress (Async Checkpointing)
+Plan: 1 of 1 complete
+Status: Phase 05 plan 01 complete
+Last activity: 2026-01-31 - Completed 05-01-PLAN.md
 
-Progress: [=======----] 70%
+Progress: [========---] 75%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: 8min
-- Total execution time: 1.1 hours
+- Total execution time: 1.3 hours
 
 **By Phase:**
 
@@ -31,9 +31,10 @@ Progress: [=======----] 70%
 | 02-fitness-caching | 1 | 8min | 8min |
 | 03-embedding-cache | 2 | 17min | 9min |
 | 04-convergence-detection | 1 | 5min | 5min |
+| 05-async-checkpointing | 1 | 10min | 10min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (5min), 03-02 (5min), 03-01 (12min), 02-01 (8min), 01-04 (8min)
+- Last 5 plans: 05-01 (10min), 04-01 (5min), 03-02 (5min), 03-01 (12min), 02-01 (8min)
 - Trend: stable (5-12min average)
 
 *Updated after each plan completion*
@@ -73,6 +74,11 @@ Recent decisions affecting current work:
 - [04-01]: Grace period 20 generations before detection activates
 - [04-01]: Threshold 0.1% relative improvement required
 - [04-01]: Adaptive window: expand when improving, shrink when flat
+- [05-01]: Unbounded Queue() instead of Queue(maxsize=1) - queue all checkpoints
+- [05-01]: Non-daemon thread (daemon=False) for graceful shutdown
+- [05-01]: Atomic writes via tempfile.mkstemp + os.replace
+- [05-01]: No checkpoint rotation - keep all checkpoints
+- [05-01]: Deep copy order: check dict/list/tuple before generic .copy()
 
 ### Pending Todos
 
@@ -85,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-30
-Stopped at: Phase 4 complete, ready for Phase 5
+Last session: 2026-01-31
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None
