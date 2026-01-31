@@ -7,11 +7,14 @@ Supports async checkpointing for non-blocking I/O during evolution.
 import os
 import json
 import logging
+import tempfile
+import time
+import copy
 from datetime import datetime
-from threading import Thread, Event
-from queue import Queue, Empty, Full
+from threading import Thread
+from queue import Queue, Empty
 from typing import List, Optional, Any, TYPE_CHECKING
-from dataclasses import asdict, is_dataclass
+from dataclasses import dataclass, asdict, is_dataclass
 
 import torch
 
@@ -22,6 +25,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class CheckpointStats:
+    """Statistics for checkpoint writing performance."""
+    total_saves: int = 0
+    total_time_seconds: float = 0.0
+    total_bytes: int = 0
+
+
 class AsyncCheckpointWriter:
     """
     Background thread for non-blocking checkpoint writes.
@@ -30,31 +41,70 @@ class AsyncCheckpointWriter:
     evolution loop to continue without waiting for I/O.
 
     Features:
-    - Single-item queue (drops stale checkpoints if new one arrives)
-    - Atomic update of latest.pkl via temp file
-    - Automatic cleanup of old numbered checkpoints
-    - Graceful shutdown with flush support
+    - Unbounded queue (all checkpoints are written, none dropped)
+    - Non-daemon thread (waits for queue drain on shutdown)
+    - Atomic writes via temp file + os.replace
+    - Retry logic with cleanup on failure
+    - Comprehensive logging with stats tracking
     """
 
-    def __init__(self, keep_n_checkpoints: int = 10):
+    def __init__(self):
+        """Initialize the async checkpoint writer."""
+        self._queue: Queue = Queue()  # Unbounded queue - queue all checkpoints
+        self._stats = CheckpointStats()
+        self._thread = Thread(
+            target=self._writer_loop,
+            daemon=False,  # Non-daemon: allow graceful shutdown
+            name="AsyncCheckpointWriter"
+        )
+        self._thread.start()
+
+    def _prepare_checkpoint_data(self, state: dict) -> dict:
         """
-        Initialize the async checkpoint writer.
+        Deep copy checkpoint data for safe queuing to background thread.
+
+        Handles:
+        - Tensors: detach, clone, move to CPU
+        - Genomes: use .copy() if available
+        - Nested dicts/lists: recursive deep copy
 
         Args:
-            keep_n_checkpoints: Number of numbered checkpoints to keep (0 = all)
+            state: Checkpoint state dictionary
+
+        Returns:
+            Deep-copied state safe for background thread
         """
-        self._queue: Queue = Queue(maxsize=1)
-        self._shutdown = Event()
-        self._keep_n = keep_n_checkpoints
-        self._thread = Thread(target=self._writer_loop, daemon=True, name="AsyncCheckpointWriter")
-        self._thread.start()
+        return self._deep_copy_state(state)
+
+    def _deep_copy_state(self, obj: Any) -> Any:
+        """Recursively deep copy state, handling tensors and genomes."""
+        if isinstance(obj, torch.Tensor):
+            # Detach from computation graph, clone, move to CPU
+            return obj.detach().clone().cpu()
+        elif hasattr(obj, 'copy') and callable(obj.copy):
+            # Genome or similar objects with copy method
+            return obj.copy()
+        elif isinstance(obj, dict):
+            return {k: self._deep_copy_state(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._deep_copy_state(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._deep_copy_state(item) for item in obj)
+        else:
+            # Primitive types or immutable objects - use copy.deepcopy for safety
+            try:
+                return copy.deepcopy(obj)
+            except Exception:
+                # If deepcopy fails, return as-is (primitives, etc.)
+                return obj
 
     def _writer_loop(self):
         """Background loop that processes checkpoint writes."""
-        while not self._shutdown.is_set():
+        while True:
             try:
                 item = self._queue.get(timeout=0.5)
-                if item is None:  # Shutdown signal
+                if item is None:  # Sentinel: shutdown signal
+                    self._queue.task_done()
                     break
                 state, gen_path, latest_path = item
                 self._write_checkpoint(state, gen_path, latest_path)
@@ -68,101 +118,137 @@ class AsyncCheckpointWriter:
                 except ValueError:
                     pass  # Already marked done
 
-    def _write_checkpoint(self, state: dict, gen_path: str, latest_path: str):
+    def _write_checkpoint(self, state: dict, gen_path: str, latest_path: str) -> bool:
         """
-        Perform the actual checkpoint write.
+        Perform atomic checkpoint write with retry logic.
+
+        Uses temp file + os.replace for atomic writes.
+        Retries once on failure before logging error.
 
         Args:
             state: Checkpoint state dictionary
             gen_path: Path for numbered checkpoint (e.g., gen_050.pkl)
             latest_path: Path for latest.pkl
+
+        Returns:
+            True if successful, False if failed after retries
         """
-        try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(gen_path), exist_ok=True)
+        start_time = time.time()
+        max_attempts = 2
+        checkpoint_dir = os.path.dirname(gen_path)
 
-            # Save numbered checkpoint
-            torch.save(state, gen_path)
+        # Ensure directory exists
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
-            # Atomic update of latest.pkl
-            temp = latest_path + ".tmp"
-            torch.save(state, temp)
-            if os.path.exists(latest_path):
-                os.remove(latest_path)
-            os.rename(temp, latest_path)
+        generation = state.get('generation', '?')
 
-            logger.debug(f"Async checkpoint written: {gen_path}")
+        for attempt in range(1, max_attempts + 1):
+            temp_gen_path = None
+            temp_latest_path = None
+            try:
+                # Write numbered checkpoint atomically
+                fd_gen, temp_gen_path = tempfile.mkstemp(
+                    suffix=".tmp", prefix="ckpt_", dir=checkpoint_dir
+                )
+                os.close(fd_gen)  # Close fd before torch.save
+                torch.save(state, temp_gen_path)
+                os.replace(temp_gen_path, gen_path)
+                temp_gen_path = None  # Successfully moved, don't cleanup
 
-            # Cleanup old checkpoints
-            self._cleanup_old_checkpoints(os.path.dirname(gen_path))
+                # Write latest checkpoint atomically
+                fd_latest, temp_latest_path = tempfile.mkstemp(
+                    suffix=".tmp", prefix="ckpt_", dir=checkpoint_dir
+                )
+                os.close(fd_latest)
+                torch.save(state, temp_latest_path)
+                os.replace(temp_latest_path, latest_path)
+                temp_latest_path = None  # Successfully moved, don't cleanup
 
-        except Exception as e:
-            logger.error(f"Failed to write checkpoint {gen_path}: {e}")
+                # Calculate stats
+                elapsed = time.time() - start_time
+                file_size = os.path.getsize(gen_path)
 
-    def _cleanup_old_checkpoints(self, checkpoint_dir: str):
-        """Remove checkpoints beyond keep_n limit."""
-        if self._keep_n <= 0:
-            return  # Keep all
+                # Update cumulative stats
+                self._stats.total_saves += 1
+                self._stats.total_time_seconds += elapsed
+                self._stats.total_bytes += file_size
 
-        if not os.path.exists(checkpoint_dir):
-            return
+                # Log completion
+                size_mb = file_size / (1024 * 1024)
+                logger.info(f"Checkpoint saved (gen {generation}, {size_mb:.1f}MB, {elapsed:.2f}s)")
 
-        # Find all numbered checkpoints
-        try:
-            ckpts = sorted(
-                [f for f in os.listdir(checkpoint_dir)
-                 if f.startswith("gen_") and f.endswith(".pkl")],
-                reverse=True,  # Newest first
-            )
+                return True
 
-            # Remove old ones
-            for old in ckpts[self._keep_n:]:
-                old_path = os.path.join(checkpoint_dir, old)
-                try:
-                    os.remove(old_path)
-                    logger.debug(f"Removed old checkpoint: {old}")
-                except OSError as e:
-                    logger.warning(f"Failed to remove checkpoint {old}: {e}")
-        except Exception as e:
-            logger.warning(f"Checkpoint cleanup error: {e}")
+            except Exception as e:
+                # Clean up temp files on failure
+                for temp_path in [temp_gen_path, temp_latest_path]:
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except OSError:
+                            pass
 
-    def save(self, state: dict, gen_path: str, latest_path: str):
+                if attempt < max_attempts:
+                    logger.warning(
+                        f"Checkpoint write failed (attempt {attempt}), retrying... Error: {e}"
+                    )
+                    time.sleep(0.5)
+                else:
+                    logger.error(
+                        f"Checkpoint write failed after {max_attempts} attempts: {e}"
+                    )
+                    return False
+
+        return False
+
+    def queue_checkpoint(self, state: dict, gen_path: str, latest_path: str):
         """
-        Queue checkpoint for async write. Drops old pending if queue full.
+        Queue checkpoint for async write.
 
         Args:
-            state: Checkpoint state dictionary
+            state: Pre-copied checkpoint state dictionary
             gen_path: Path for numbered checkpoint
             latest_path: Path for latest.pkl
         """
-        try:
-            self._queue.put_nowait((state, gen_path, latest_path))
-        except Full:
-            # Drop old pending checkpoint, queue new one
-            try:
-                self._queue.get_nowait()
-            except Empty:
-                pass
-            try:
-                self._queue.put_nowait((state, gen_path, latest_path))
-            except Full:
-                logger.warning("Failed to queue checkpoint - writing synchronously")
-                self._write_checkpoint(state, gen_path, latest_path)
+        generation = state.get('generation', '?')
 
-    def flush(self):
-        """Block until pending checkpoint is written."""
-        self._queue.join()
+        self._queue.put((state, gen_path, latest_path))
+        logger.info(f"Checkpoint queued (gen {generation})")
 
-    def shutdown(self):
-        """Stop the background thread gracefully."""
-        self._shutdown.set()
-        try:
-            self._queue.put_nowait(None)  # Wake up thread
-        except Full:
-            pass
-        self._thread.join(timeout=5.0)
+        # Warn if queue is backing up
+        queue_size = self._queue.qsize()
+        if queue_size > 1:
+            logger.warning(f"Checkpoint queue: {queue_size} pending")
+
+    def shutdown(self, timeout: float = 30.0) -> bool:
+        """
+        Stop the background thread gracefully, waiting for queue to drain.
+
+        Args:
+            timeout: Maximum seconds to wait for queue drain
+
+        Returns:
+            True if clean shutdown, False if timeout
+        """
+        # Send sentinel to signal shutdown
+        self._queue.put(None)
+
+        # Wait for thread to finish
+        self._thread.join(timeout=timeout)
+
+        # Log summary stats
+        if self._stats.total_saves > 0:
+            avg_time = self._stats.total_time_seconds / self._stats.total_saves
+            logger.info(
+                f"Checkpointing: {self._stats.total_saves} saves, "
+                f"{self._stats.total_time_seconds:.1f}s total, avg {avg_time:.2f}s"
+            )
+
         if self._thread.is_alive():
             logger.warning("AsyncCheckpointWriter thread did not terminate cleanly")
+            return False
+
+        return True
 
 
 class RunManager:
@@ -201,9 +287,7 @@ class RunManager:
         # Initialize async writer if enabled
         self._async_writer: Optional[AsyncCheckpointWriter] = None
         if getattr(config, 'async_checkpoints', True):
-            self._async_writer = AsyncCheckpointWriter(
-                keep_n_checkpoints=config.keep_n_checkpoints
-            )
+            self._async_writer = AsyncCheckpointWriter()
             logger.info("Async checkpoint writing enabled")
 
     def initialize_run(self, full_config: "EvolutionConfig" = None):
@@ -267,9 +351,9 @@ class RunManager:
         latest_path = self.config.latest_checkpoint_path
 
         if self._async_writer is not None:
-            # Async path: queue checkpoint and return immediately
-            self._async_writer.save(state, gen_path, latest_path)
-            logger.info(f"Checkpoint queued: {gen_path}")
+            # Async path: deep copy state and queue for background write
+            prepared_state = self._async_writer._prepare_checkpoint_data(state)
+            self._async_writer.queue_checkpoint(prepared_state, gen_path, latest_path)
         else:
             # Synchronous path: write immediately
             os.makedirs(self.config.checkpoint_dir, exist_ok=True)
@@ -335,17 +419,19 @@ class RunManager:
 
     def close(self):
         """
-        Flush pending checkpoints and shutdown async writer.
+        Shutdown async writer, waiting for queue to drain.
 
         Should be called before program exit to ensure all checkpoints are written.
         Safe to call multiple times or if async writer was not enabled.
         """
         if self._async_writer is not None:
-            logger.info("Flushing pending checkpoints...")
-            self._async_writer.flush()
-            self._async_writer.shutdown()
+            logger.info("Shutting down async checkpoint writer...")
+            clean = self._async_writer.shutdown(timeout=30.0)
+            if clean:
+                logger.info("Async checkpoint writer shut down cleanly")
+            else:
+                logger.warning("Async checkpoint writer shutdown timed out")
             self._async_writer = None
-            logger.info("Async checkpoint writer shut down")
 
     def _save_config_snapshot(self, config: "EvolutionConfig"):
         """
@@ -360,30 +446,14 @@ class RunManager:
         logger.info(f"Config snapshot saved: {self.config.config_snapshot_path}")
 
     def _cleanup_old_checkpoints(self):
-        """Remove checkpoints beyond keep_n_checkpoints limit."""
-        if self.config.keep_n_checkpoints <= 0:
-            return  # Keep all
+        """
+        Checkpoint rotation disabled - all checkpoints kept per CONTEXT.md.
 
-        if not os.path.exists(self.config.checkpoint_dir):
-            return
-
-        # Find all numbered checkpoints
-        ckpts = sorted(
-            [
-                f for f in os.listdir(self.config.checkpoint_dir)
-                if f.startswith("gen_") and f.endswith(".pkl")
-            ],
-            reverse=True,  # Newest first
-        )
-
-        # Remove old ones
-        for old in ckpts[self.config.keep_n_checkpoints:]:
-            old_path = os.path.join(self.config.checkpoint_dir, old)
-            try:
-                os.remove(old_path)
-                logger.debug(f"Removed old checkpoint: {old}")
-            except OSError as e:
-                logger.warning(f"Failed to remove checkpoint {old}: {e}")
+        This method is kept for API compatibility with synchronous path
+        but performs no cleanup.
+        """
+        # Checkpoint rotation disabled - all checkpoints kept per CONTEXT.md
+        return
 
     @staticmethod
     def _to_dict(obj: Any) -> Any:
@@ -469,4 +539,4 @@ class RunManager:
         return runs[0]["path"] if runs else None
 
 
-__all__ = ["RunManager", "AsyncCheckpointWriter"]
+__all__ = ["RunManager", "AsyncCheckpointWriter", "CheckpointStats"]
