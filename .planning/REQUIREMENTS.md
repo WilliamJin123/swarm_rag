@@ -39,7 +39,7 @@ Requirements for achieving SOTA metrics with performant evolution loop.
 
 ### Checkpointing
 
-- [ ] **CKPT-01**: Async checkpointing — non-blocking checkpoint saves during evolution
+- [x] **CKPT-01**: Async checkpointing — non-blocking checkpoint saves during evolution
 
 ## v2 Requirements
 
@@ -86,7 +86,7 @@ Deferred to future if v1 doesn't achieve targets.
 | MEM-03 | Phase 1 | Complete |
 | CONV-01 | Phase 4 | Complete |
 | CONV-02 | Phase 4 | Complete |
-| CKPT-01 | Phase 5 | Pending |
+| CKPT-01 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 16 total
@@ -95,4 +95,4 @@ Deferred to future if v1 doesn't achieve targets.
 
 ---
 *Requirements defined: 2026-01-29*
-*Last updated: 2026-01-30 after Phase 4 completion*
+*Last updated: 2026-01-30 after Phase 5 completion*
