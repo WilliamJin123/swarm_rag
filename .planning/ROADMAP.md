@@ -92,10 +92,10 @@ Plans:
   2. Evolution continues while previous checkpoint writes to disk
   3. Checkpoint integrity maintained (no partial writes on crash)
   4. Async checkpointing adds negligible overhead (<1% of generation time)
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 05-01: Async checkpoint writer with integrity guarantees
+- [ ] 05-01-PLAN.md - Refactor AsyncCheckpointWriter with queue-all semantics and atomic writes
 
 ### Phase 6: Performance Validation
 **Goal**: Validate full optimization stack achieves 500 generations in 3 hours with population 50-100
@@ -138,7 +138,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 2. Fitness Caching | 1/1 | ✓ Complete | 2026-01-29 |
 | 3. Embedding Cache | 2/2 | ✓ Complete | 2026-01-30 |
 | 4. Convergence Detection | 1/1 | ✓ Complete | 2026-01-30 |
-| 5. Async Checkpointing | 0/1 | Not started | - |
+| 5. Async Checkpointing | 0/1 | Planned | - |
 | 6. Performance Validation | 0/1 | Not started | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
 
@@ -154,5 +154,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 3 complete: 2026-01-30*
 *Phase 4 planned: 2026-01-30*
 *Phase 4 complete: 2026-01-30*
+*Phase 5 planned: 2026-01-30*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
