@@ -80,7 +80,8 @@ class AsyncCheckpointWriter:
         """Recursively deep copy state, handling tensors and genomes."""
         if isinstance(obj, torch.Tensor):
             # Detach from computation graph, clone, move to CPU
-            return obj.detach().clone().cpu()
+            # Use .data to ensure requires_grad=False on the result
+            return obj.detach().clone().cpu().requires_grad_(False)
         elif isinstance(obj, dict):
             # Handle dicts before generic .copy() check (dicts have .copy())
             return {k: self._deep_copy_state(v) for k, v in obj.items()}
