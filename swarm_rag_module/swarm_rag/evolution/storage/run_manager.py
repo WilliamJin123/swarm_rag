@@ -81,15 +81,16 @@ class AsyncCheckpointWriter:
         if isinstance(obj, torch.Tensor):
             # Detach from computation graph, clone, move to CPU
             return obj.detach().clone().cpu()
-        elif hasattr(obj, 'copy') and callable(obj.copy):
-            # Genome or similar objects with copy method
-            return obj.copy()
         elif isinstance(obj, dict):
+            # Handle dicts before generic .copy() check (dicts have .copy())
             return {k: self._deep_copy_state(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [self._deep_copy_state(item) for item in obj]
         elif isinstance(obj, tuple):
             return tuple(self._deep_copy_state(item) for item in obj)
+        elif hasattr(obj, 'copy') and callable(obj.copy):
+            # Genome or similar objects with copy method
+            return obj.copy()
         else:
             # Primitive types or immutable objects - use copy.deepcopy for safety
             try:
