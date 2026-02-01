@@ -11,9 +11,12 @@ Target Metrics:
 - Recall@20: >85%
 """
 import argparse
+import gc
 import os
 import random
 import sys
+
+import torch
 
 # Ensure UTF-8 encoding for stdout (Windows compatibility)
 if sys.stdout.encoding != 'utf-8':
@@ -116,22 +119,38 @@ def run_evolution(args):
     print("Loading STaRK data...")
     skb = load_and_download_skb(args.dataset)
     adj_dict = precompute_stark_adjacency(skb, args.dataset)
-    query_embs, doc_embs = load_and_download_embeddings(args.dataset)
+
+    # Load embeddings as pre-stacked tensors (memory-efficient)
+    query_tensor, doc_tensor, query_ids, doc_ids = load_and_download_embeddings(args.dataset)
 
     # Resolve device once and pass to all components
     from swarm_rag.utils.device import resolve_device
     resolved_device = resolve_device(args.device)
     print(f"Using device: {resolved_device}")
 
-    # Initialize components with resolved device
-    vector_store = StarkVectorStore(doc_embs, device=resolved_device)
+    # Initialize components with resolved device using tensor-based constructors
+    vector_store = StarkVectorStore(doc_tensor, doc_ids, device=resolved_device)
+    # Delete doc tensors immediately after store creation to free memory
+    del doc_tensor, doc_ids
+
     graph_store = StarkGraphAdapter(
         skb, args.dataset,
         adjacency_dict=adj_dict,
         cache_path=os.path.join(BASE_DIR, "adjacency_cache", f"graph_{args.dataset}.npz"),
         device=resolved_device,
     )
-    embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
+    # Delete adj_dict after graph store creation
+    del adj_dict
+
+    embedding_provider = StarkPreComputedEmbeddingHandler(query_tensor, query_ids, device=resolved_device)
+    # Delete query tensors after embedding provider creation
+    del query_tensor, query_ids
+
+    # Force garbage collection to release memory immediately
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    print("Memory released after store initialization")
 
     retriever = SwarmRetriever(
         vector_store=vector_store,

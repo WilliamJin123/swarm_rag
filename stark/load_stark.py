@@ -30,9 +30,11 @@ def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model:
     Returns:
         (query_tensor, doc_tensor, query_ids, doc_ids) - all as torch.Tensor
 
-    The tensors are pre-stacked and the original mmap'd dicts are deleted
-    immediately after stacking to free memory-mapped file references.
+    The tensors are pre-allocated and filled in-place to avoid intermediate list
+    allocation. Original mmap'd dicts are deleted immediately after filling.
     """
+    import gc
+
     if root is None:
         root = os.path.join(BASE_DIR, 'embeddings')
     PREDEFINED_IDS = {
@@ -72,44 +74,58 @@ def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model:
         url = f'https://drive.google.com/uc?id={PREDEFINED_IDS[dataset_name]["doc"]}'
         gdown.download(url, doc_path, quiet=False)
 
-    print(f"Loading embeddings from {base_dir}...")
-    # Use mmap=True to reduce memory pressure during loading (especially on Windows)
+    # Load query embeddings (smaller, process first)
+    print(f"Loading query embeddings from {base_dir}...")
     query_embs_dict = torch.load(query_path, mmap=True, weights_only=False)
-    doc_embs_dict = torch.load(doc_path, mmap=True, weights_only=False)
 
-    # Stack query embeddings into tensor (sorted for deterministic ordering)
-    print(f"Stacking {len(query_embs_dict)} query embeddings...")
+    # Pre-allocate query tensor (avoid intermediate list)
+    n_queries = len(query_embs_dict)
     query_sorted_ids = sorted(query_embs_dict.keys())
     query_ids = torch.tensor(query_sorted_ids, dtype=torch.long)
-    query_emb_list = []
-    for qid in query_sorted_ids:
+
+    # Get embedding dimension from first embedding
+    first_emb = query_embs_dict[query_sorted_ids[0]]
+    if isinstance(first_emb, torch.Tensor):
+        emb_dim = first_emb.squeeze().shape[0]
+    else:
+        emb_dim = len(first_emb)
+
+    print(f"Stacking {n_queries} query embeddings (dim={emb_dim})...")
+    query_tensor = torch.empty((n_queries, emb_dim), dtype=torch.float32)
+    for i, qid in enumerate(query_sorted_ids):
         vec = query_embs_dict[qid]
         if isinstance(vec, torch.Tensor):
-            vec = vec.detach().cpu()
+            vec = vec.detach().cpu().squeeze()
         else:
-            vec = torch.as_tensor(vec)
-        if vec.dim() > 1:
-            vec = vec.squeeze()
-        query_emb_list.append(vec)
-    query_tensor = torch.stack(query_emb_list)
-    del query_emb_list, query_embs_dict  # Free mmap reference immediately
+            vec = torch.as_tensor(vec).squeeze()
+        query_tensor[i] = vec
 
-    # Stack doc embeddings into tensor (sorted for deterministic ordering)
-    print(f"Stacking {len(doc_embs_dict)} document embeddings...")
+    # Free query dict before loading doc dict
+    del query_embs_dict
+    gc.collect()
+
+    # Load doc embeddings
+    print(f"Loading document embeddings from {base_dir}...")
+    doc_embs_dict = torch.load(doc_path, mmap=True, weights_only=False)
+
+    # Pre-allocate doc tensor
+    n_docs = len(doc_embs_dict)
     doc_sorted_ids = sorted(doc_embs_dict.keys())
     doc_ids = torch.tensor(doc_sorted_ids, dtype=torch.long)
-    doc_emb_list = []
-    for did in doc_sorted_ids:
+
+    print(f"Stacking {n_docs} document embeddings (dim={emb_dim})...")
+    doc_tensor = torch.empty((n_docs, emb_dim), dtype=torch.float32)
+    for i, did in enumerate(doc_sorted_ids):
         vec = doc_embs_dict[did]
         if isinstance(vec, torch.Tensor):
-            vec = vec.detach().cpu()
+            vec = vec.detach().cpu().squeeze()
         else:
-            vec = torch.as_tensor(vec)
-        if vec.dim() > 1:
-            vec = vec.squeeze()
-        doc_emb_list.append(vec)
-    doc_tensor = torch.stack(doc_emb_list)
-    del doc_emb_list, doc_embs_dict  # Free mmap reference immediately
+            vec = torch.as_tensor(vec).squeeze()
+        doc_tensor[i] = vec
+
+    # Free doc dict
+    del doc_embs_dict
+    gc.collect()
 
     print(f"Loaded tensors: query {query_tensor.shape}, doc {doc_tensor.shape}")
     return query_tensor, doc_tensor, query_ids, doc_ids
