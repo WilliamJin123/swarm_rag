@@ -174,28 +174,65 @@ class StarkVectorStore(VectorStore):
     Thin wrapper around TorchVectorStore for STaRK datasets.
 
     Usage:
-        store = StarkVectorStore(doc_embs)  # Auto-detect device
-        store = StarkVectorStore(doc_embs, device="cuda")  # Force GPU
-        store = StarkVectorStore(doc_embs, device="cpu")  # Force CPU
-        store = StarkVectorStore(doc_embs, dense=True)  # O(1) lookup (more memory)
+        # Preferred: tensor-based (memory-efficient)
+        store = StarkVectorStore(doc_tensor, doc_ids, device="cuda")
+
+        # Backward compatible: dict-based
+        store = StarkVectorStore.from_dict(doc_embs, device="cuda")
     """
 
     def __init__(
         self,
-        doc_embs: Dict[int, torch.Tensor],
+        embeddings: torch.Tensor,
+        ids: torch.Tensor,
         device: Optional[TorchDeviceStr] = None,
         dense: bool = False
     ):
         """
-        Initialize vector store.
+        Initialize vector store from pre-stacked embeddings.
+
+        Args:
+            embeddings: Pre-stacked tensor of shape (N, D)
+            ids: Tensor of document IDs of shape (N,)
+            device: Target device ("cuda" or "cpu"), auto-detected if None
+            dense: If True, use dense O(1) lookup (trades memory for speed)
+        """
+        self._device = device or get_device()
+        self._store = TorchVectorStore.from_tensor(embeddings, ids, device=self._device, dense=dense)
+
+    @classmethod
+    def from_dict(
+        cls,
+        doc_embs: Dict[int, torch.Tensor],
+        device: Optional[TorchDeviceStr] = None,
+        dense: bool = False
+    ) -> "StarkVectorStore":
+        """
+        Create from dict (backward compatibility). Prefer using tensor constructor directly.
 
         Args:
             doc_embs: Dictionary mapping doc_id -> embedding tensor
             device: Target device ("cuda" or "cpu"), auto-detected if None
-            dense: If True, use dense O(1) lookup (trades ~4GB memory for speed)
+            dense: If True, use dense O(1) lookup (trades memory for speed)
+
+        Returns:
+            StarkVectorStore instance
         """
-        self._device = device or get_device()
-        self._store = TorchVectorStore.from_dict(doc_embs, device=self._device, dense=dense)
+        # Stack embeddings (same logic as TorchVectorStore.from_dict)
+        sorted_ids = sorted(doc_embs.keys())
+        ids = torch.tensor(sorted_ids, dtype=torch.long)
+        emb_list = []
+        for i in sorted_ids:
+            vec = doc_embs[i]
+            if isinstance(vec, torch.Tensor):
+                vec = vec.detach().cpu()
+            else:
+                vec = torch.as_tensor(vec)
+            if vec.dim() > 1:
+                vec = vec.squeeze()
+            emb_list.append(vec)
+        embeddings = torch.stack(emb_list)
+        return cls(embeddings=embeddings, ids=ids, device=device, dense=dense)
 
     # Delegate all VectorStore methods to underlying TorchVectorStore
     def search(self, query_vec: torch.Tensor, limit: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -250,34 +287,64 @@ class StarkVectorStore(VectorStore):
 
 class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     """
-    Pre-computed embedding lookup.
+    Pre-computed embedding lookup with lazy GPU transfer.
 
-    Stores embeddings on the configured device.
+    Embeddings stay on CPU until first access, then cached on target device.
     """
 
-    def __init__(self, query_embs: dict[int, torch.Tensor], device: Optional[TorchDeviceStr] = None):
+    def __init__(
+        self,
+        query_embs: Union[Dict[int, torch.Tensor], torch.Tensor],
+        query_ids: Optional[torch.Tensor] = None,
+        device: Optional[TorchDeviceStr] = None
+    ):
         """
-        Initialize from embedding dictionary.
+        Initialize from embedding dict or pre-stacked tensor.
 
         Args:
-            query_embs: Dictionary mapping query_id -> embedding tensor
+            query_embs: Either dict mapping query_id -> embedding, or pre-stacked tensor (N, D)
+            query_ids: Required if query_embs is a tensor - maps index to query_id
             device: Target device for storage (auto-detected if None)
         """
         self._device = device if device is not None else get_device()
-        self.query_embs = {}
-        for qid, emb in query_embs.items():
-            if isinstance(emb, torch.Tensor):
-                tensor = emb.detach().squeeze().to(self._device)
-            else:
-                tensor = torch.as_tensor(emb, device=self._device).squeeze()
-            self.query_embs[qid] = tensor
+        self._gpu_cache: Dict[int, torch.Tensor] = {}
+
+        if isinstance(query_embs, torch.Tensor):
+            # Pre-stacked tensor mode
+            if query_ids is None:
+                raise ValueError("query_ids required when query_embs is a tensor")
+            self._source_embs = query_embs  # Keep on CPU
+            self._id_to_idx = {int(qid): idx for idx, qid in enumerate(query_ids.tolist())}
+            self._is_tensor_mode = True
+        else:
+            # Dict mode (backward compatibility)
+            self._source_embs = query_embs  # Keep dict on CPU
+            self._id_to_idx = None
+            self._is_tensor_mode = False
 
     def embed_query(self, query_id: int) -> torch.Tensor:
-        return self.query_embs[query_id]
+        """Get embedding for a query, transferring to GPU on first access."""
+        # Check cache first
+        if query_id in self._gpu_cache:
+            return self._gpu_cache[query_id]
+
+        # Load from source and transfer to GPU
+        if self._is_tensor_mode:
+            idx = self._id_to_idx[query_id]
+            emb = self._source_embs[idx].detach().squeeze().to(self._device)
+        else:
+            emb = self._source_embs[query_id]
+            if isinstance(emb, torch.Tensor):
+                emb = emb.detach().squeeze().to(self._device)
+            else:
+                emb = torch.as_tensor(emb, device=self._device).squeeze()
+
+        self._gpu_cache[query_id] = emb
+        return emb
 
     def embed_query_batch(self, query_ids: list[int]) -> Matrix:
         """Returns a 2D matrix (N_queries, Dimension) of embeddings."""
-        return torch.stack([self.query_embs[qid] for qid in query_ids])
+        return torch.stack([self.embed_query(qid) for qid in query_ids])
 
     @property
     def device(self) -> str:
