@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-29)
 
 **Core value:** Find a genome configuration that hits SOTA metrics on STARK Prime (Hit@1 > 60%, Hit@5 > 80%, Recall@20 > 85%, MRR > 80%)
-**Current focus:** Phase 6 - Performance Validation (not started)
+**Current focus:** Phase 5.1 complete, ready for Phase 6 - Performance Validation
 
 ## Current Position
 
-Phase: 5 of 7 complete (Async Checkpointing)
-Plan: All plans complete, phase verified
-Status: Phase 05 verified and complete
-Last activity: 2026-01-30 - Phase 5 verified, ready for Phase 6
+Phase: 5.1 of 7 complete (Memory Exhaustion Fix)
+Plan: 01 of 01 complete
+Status: Phase 05.1 complete
+Last activity: 2026-02-01 - Completed 05.1-01-PLAN.md
 
-Progress: [========---] 75%
+Progress: [=========--] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 8min
-- Total execution time: 1.3 hours
+- Total plans completed: 10
+- Average duration: 9min
+- Total execution time: 1.5 hours
 
 **By Phase:**
 
@@ -32,10 +32,11 @@ Progress: [========---] 75%
 | 03-embedding-cache | 2 | 17min | 9min |
 | 04-convergence-detection | 1 | 5min | 5min |
 | 05-async-checkpointing | 1 | 10min | 10min |
+| 05.1-memory-exhaustion-fix | 1 | 13min | 13min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (10min), 04-01 (5min), 03-02 (5min), 03-01 (12min), 02-01 (8min)
-- Trend: stable (5-12min average)
+- Last 5 plans: 05.1-01 (13min), 05-01 (10min), 04-01 (5min), 03-02 (5min), 03-01 (12min)
+- Trend: stable (5-13min average)
 
 *Updated after each plan completion*
 
@@ -79,6 +80,10 @@ Recent decisions affecting current work:
 - [05-01]: Atomic writes via tempfile.mkstemp + os.replace
 - [05-01]: No checkpoint rotation - keep all checkpoints
 - [05-01]: Deep copy order: check dict/list/tuple before generic .copy()
+- [05.1-01]: Pre-allocate tensors with torch.empty() instead of list+stack
+- [05.1-01]: Sequential loading: query embs first, gc.collect(), then doc embs
+- [05.1-01]: Lazy GPU transfer for query embeddings (cache on first access)
+- [05.1-01]: Preserve from_dict() methods for backward compatibility
 
 ### Pending Todos
 
@@ -86,11 +91,12 @@ None yet.
 
 ### Blockers/Concerns
 
+- SKB loading (~2-3GB) causes memory exhaustion on systems with <8GB RAM (pre-existing, outside scope)
 - Recent bug fixes for memory/latency explosion are untested (from PROJECT.md)
 - Unknown if current heuristic space can express SOTA-level genomes
 
 ## Session Continuity
 
-Last session: 2026-01-30
-Stopped at: Phase 5 complete, ready for Phase 6
+Last session: 2026-02-01
+Stopped at: Completed 05.1-01-PLAN.md
 Resume file: None
