@@ -106,10 +106,10 @@ Plans:
   2. Average generation time is under 21.6 seconds (3 hours / 500 gens)
   3. Query latency remains at ~50ms throughout run (no degradation)
   4. All caches, memory guards, and convergence detection functioning together
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 06-01: Full-stack performance benchmark and tuning
+- [ ] 06-01-PLAN.md - Full-stack performance benchmark with JSON report and pass/fail determination
 
 ### Phase 7: SOTA Evolution
 **Goal**: Run evolution search to discover genome achieving SOTA metrics on STARK Prime
@@ -139,7 +139,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 3. Embedding Cache | 2/2 | ✓ Complete | 2026-01-30 |
 | 4. Convergence Detection | 1/1 | ✓ Complete | 2026-01-30 |
 | 5. Async Checkpointing | 1/1 | ✓ Complete | 2026-01-30 |
-| 6. Performance Validation | 0/1 | Not started | - |
+| 6. Performance Validation | 0/1 | Planned | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
 
 ---
@@ -156,5 +156,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 *Phase 4 complete: 2026-01-30*
 *Phase 5 planned: 2026-01-30*
 *Phase 5 complete: 2026-01-30*
+*Phase 6 planned: 2026-01-31*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
