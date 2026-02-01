@@ -159,6 +159,7 @@ class EvolutionEngine:
             enable_cross_genome_metric_batch=self.evo_config.resources.enable_cross_genome_metric_batch,
             run_mode=self.evo_config.resources.run_mode,
             run_batch_size=self.evo_config.resources.run_batch_size,
+            heuristic_features=self.evo_config.heuristic_features,
         )
 
         # Initialize LLM Provider if using LLM Mutation

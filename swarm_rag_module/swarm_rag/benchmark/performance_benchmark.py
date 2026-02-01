@@ -542,13 +542,14 @@ class PerformanceBenchmark:
         # Import additional config types
         from ..evolution.types.config import (
             GeneticConfig,
+            GenomeMode,
             STARK_FEATURES,
         )
 
         # Configure evolution with benchmark settings
         # Use weighted_sum mode for faster evaluation (vs expression trees)
         config = EvolutionConfig(
-            genome_mode="weighted_sum",
+            genome_mode=GenomeMode.WEIGHTED_SUM,
             heuristic_features=STARK_FEATURES,
             n_generations=self.config.target_generations,
             map_elites=MapElitesConfig(
