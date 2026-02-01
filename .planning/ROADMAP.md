@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Embedding Cache** - Persist query embeddings across generations to eliminate recomputation
 - [x] **Phase 4: Convergence Detection** - Detect stagnation and stop early when evolution plateaus
 - [x] **Phase 5: Async Checkpointing** - Non-blocking checkpoint saves during evolution
-- [ ] **Phase 5.1: Memory Exhaustion Fix** - *INSERTED* - Eliminate redundant embedding copies that exhaust system memory
+- [x] **Phase 5.1: Memory Exhaustion Fix** - *INSERTED* - Eliminate redundant embedding copies that exhaust system memory
 - [ ] **Phase 6: Performance Validation** - Validate 500 gen / 3 hour target with full optimization stack
 - [ ] **Phase 7: SOTA Evolution** - Run evolution to discover genome achieving SOTA metrics
 
@@ -111,7 +111,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 05.1-01-PLAN.md - Memory-efficient embedding loading with pre-stacked tensors and lazy GPU transfer
+- [x] 05.1-01-PLAN.md - Memory-efficient embedding loading with pre-stacked tensors and lazy GPU transfer
 
 ### Phase 6: Performance Validation
 **Goal**: Validate full optimization stack achieves 500 generations in 3 hours with population 50-100
@@ -155,7 +155,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 7
 | 3. Embedding Cache | 2/2 | ✓ Complete | 2026-01-30 |
 | 4. Convergence Detection | 1/1 | ✓ Complete | 2026-01-30 |
 | 5. Async Checkpointing | 1/1 | ✓ Complete | 2026-01-30 |
-| 5.1 Memory Exhaustion Fix | 0/1 | Planned | - |
+| 5.1 Memory Exhaustion Fix | 1/1 | ✓ Complete | 2026-01-31 |
 | 6. Performance Validation | 0/1 | Planned | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
 
@@ -174,5 +174,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 7
 *Phase 5 planned: 2026-01-30*
 *Phase 5 complete: 2026-01-30*
 *Phase 6 planned: 2026-01-31*
+*Phase 5.1 complete: 2026-01-31*
 *Depth: standard (7 phases)*
 *Requirements coverage: 16/16 mapped*
