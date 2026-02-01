@@ -440,6 +440,9 @@ class PerformanceBenchmark:
         Returns:
             Tuple of (actual_generations_completed, termination_reason)
         """
+        import os
+        import random
+
         # Import here to avoid circular imports
         from ..evolution.engine import EvolutionEngine
         from ..evolution.types.config import (
@@ -449,29 +452,131 @@ class PerformanceBenchmark:
             ResourceConfig,
             ConvergenceConfig,
         )
-        from ..integrations.stark import load_stark_data, create_stark_retriever
+        from ..evolution.execution.fitness import create_fitness_calculator
+        from ..eval import Evaluator
+        from ..core import SwarmRetriever
+        from ..integrations.stark import (
+            StarkGraphAdapter,
+            StarkPreComputedEmbeddingHandler,
+            StarkVectorStore,
+        )
+        from ..utils.device import resolve_device
 
-        logger.info("Loading STARK Prime dataset...")
-        stark_data = load_stark_data(name="amazon", split="train")
-        logger.info(f"Loaded {len(stark_data['query_ids'])} training queries")
+        # Import STARK data loading functions
+        # These are in the stark/ directory at project root
+        import sys
+        # __file__ is: swarm_rag_module/swarm_rag/benchmark/performance_benchmark.py
+        # parents[3] is: swarm_rag_experiment (project root)
+        project_root = Path(__file__).resolve().parents[3]
+        stark_dir = project_root / "stark"
+        if str(stark_dir) not in sys.path:
+            sys.path.insert(0, str(stark_dir))
 
-        # Create retriever
-        logger.info("Creating STARK retriever...")
-        retriever, evaluator, fitness_calc = create_stark_retriever(stark_data)
+        from load_stark import (
+            load_and_download_embeddings,
+            load_and_download_skb,
+            load_and_download_qa,
+            precompute_stark_adjacency,
+        )
+
+        # Use prime dataset (129K docs vs amazon's 957K) for benchmark
+        # Prime fits in most GPU memory configurations
+        dataset_name = "prime"
+
+        logger.info(f"Loading STARK {dataset_name} dataset...")
+        skb = load_and_download_skb(dataset_name)
+        adj_dict = precompute_stark_adjacency(skb, dataset_name)
+        query_embs, doc_embs = load_and_download_embeddings(dataset_name)
+
+        logger.info(f"Loaded {len(query_embs)} queries, {len(doc_embs)} documents")
+
+        # Prepare train/val splits
+        raw_data = load_and_download_qa(dataset_name)
+        train_subset = list(raw_data.get_subset("train"))
+        val_subset = list(raw_data.get_subset("val"))
+
+        random.seed(42)
+        random.shuffle(train_subset)
+        random.shuffle(val_subset)
+
+        # Limit data for faster benchmark (full dataset for realistic perf)
+        train_q = [d[0] for d in train_subset]
+        train_ids = [d[1] for d in train_subset]
+        train_gt = [d[2] for d in train_subset]
+
+        val_q = [d[0] for d in val_subset[:100]]
+        val_ids = [d[1] for d in val_subset[:100]]
+        val_gt = [d[2] for d in val_subset[:100]]
+
+        logger.info(f"Using {len(train_ids)} train queries, {len(val_ids)} val queries")
+
+        # Resolve device
+        resolved_device = resolve_device("auto")
+        logger.info(f"Using device: {resolved_device}")
+
+        # Initialize components
+        vector_store = StarkVectorStore(doc_embs, device=resolved_device)
+        graph_store = StarkGraphAdapter(
+            skb, dataset_name,
+            adjacency_dict=adj_dict,
+            cache_path=str(stark_dir / "adjacency_cache" / f"graph_{dataset_name}.npz"),
+            device=resolved_device,
+        )
+        embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
+
+        retriever = SwarmRetriever(
+            vector_store=vector_store,
+            graph_store=graph_store,
+            embedding_provider=embedding_provider,
+            cache_neighbors=False,
+            cache_vectors=True,
+            device=resolved_device,
+        )
+
+        evaluator = Evaluator(k_values=[1, 5, 10, 20])
+        fitness_calc = create_fitness_calculator(
+            mode="weighted_sum",
+            weights={"Hit@1": 0.25, "Hit@5": 0.25, "MRR": 0.25, "Recall@20": 0.25},
+        )
+
+        # Import additional config types
+        from ..evolution.types.config import (
+            GeneticConfig,
+            STARK_FEATURES,
+        )
 
         # Configure evolution with benchmark settings
+        # Use weighted_sum mode for faster evaluation (vs expression trees)
         config = EvolutionConfig(
+            genome_mode="weighted_sum",
+            heuristic_features=STARK_FEATURES,
             n_generations=self.config.target_generations,
             map_elites=MapElitesConfig(
+                dimensions=["aggressiveness", "complexity"],
                 bins=[10, 10],
+                ranges=[(10.0, 150.0), (5.0, 60.0)],
                 initial_fill=self.config.population_size,
+                batch_size=min(15, self.config.population_size // 3),
             ),
             resources=ResourceConfig(
-                concurrent_evaluations=1,
+                concurrent_evaluations=4,
+                max_workers_per_retrieval=4,
+                enable_shared_precompute=True,
+                enable_cross_genome_metric_batch=True,
+                early_exit_threshold=0.25,
                 run_mode="batch",
+            ),
+            genetic=GeneticConfig(
+                creation_strategy="baseline_seeded_initialization",
+                mutation_strategy="guided_mutation",
+                crossover_strategy="uniform_parameter_mix",
+                base_mutation_rate=0.20,
+                crossover_rate=0.6,
+                n_agent_groups=3,
             ),
             storage=StorageConfig(
                 checkpoint_frequency=50,  # Less frequent for benchmark
+                base_dir=str(project_root / ".planning" / "phases" / "06-performance-validation" / "benchmark_runs"),
             ),
             convergence=ConvergenceConfig(
                 enabled=True,
@@ -487,16 +592,22 @@ class PerformanceBenchmark:
             retriever=retriever,
             fitness_calculator=fitness_calc,
             evaluator=evaluator,
-            train_query_ids=stark_data["query_ids"],
-            train_ground_truth=stark_data["ground_truth"],
-            val_query_ids=stark_data["query_ids"][:100],  # Small validation set
-            val_ground_truth=stark_data["ground_truth"][:100],
+            train_query_ids=train_ids,
+            train_ground_truth=train_gt,
+            val_query_ids=val_ids,
+            val_ground_truth=val_gt,
             config=config,
         )
+
+        # Store evaluator reference for cache stats
+        self._evaluator = engine.population_evaluator
 
         # Hook into profiler to collect generation times
         orchestrator = engine._orchestrator
         original_profiler = orchestrator._profiler
+
+        # Enable profiler for timing collection
+        original_profiler.enabled = True
 
         # Run evolution
         logger.info(f"Starting evolution ({self.config.target_generations} generations max)...")
@@ -531,9 +642,15 @@ class PerformanceBenchmark:
     def _get_fitness_cache_stats(self) -> Dict[str, Any]:
         """Get fitness cache statistics from the evaluator."""
         try:
-            # Access via global cache if available
-            # The FitnessCache is typically attached to PopulationEvaluator
-            # For benchmark purposes, we try to access the cumulative stats
+            # Access via stored evaluator reference
+            if hasattr(self, '_evaluator') and self._evaluator is not None:
+                cache = self._evaluator._fitness_cache
+                if cache is not None:
+                    stats = cache.total_stats
+                    return {
+                        "hit_rate": stats.hit_rate,
+                        "total_lookups": stats.total,
+                    }
             return {
                 "hit_rate": 0.0,
                 "total_lookups": 0,
