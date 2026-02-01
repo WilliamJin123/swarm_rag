@@ -17,6 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Embedding Cache** - Persist query embeddings across generations to eliminate recomputation
 - [x] **Phase 4: Convergence Detection** - Detect stagnation and stop early when evolution plateaus
 - [x] **Phase 5: Async Checkpointing** - Non-blocking checkpoint saves during evolution
+- [ ] **Phase 5.1: Memory Exhaustion Fix** - *INSERTED* - Eliminate redundant embedding copies that exhaust system memory
 - [ ] **Phase 6: Performance Validation** - Validate 500 gen / 3 hour target with full optimization stack
 - [ ] **Phase 7: SOTA Evolution** - Run evolution to discover genome achieving SOTA metrics
 
@@ -97,6 +98,21 @@ Plans:
 Plans:
 - [x] 05-01-PLAN.md - Refactor AsyncCheckpointWriter with queue-all semantics and atomic writes
 
+### Phase 5.1: Memory Exhaustion Fix (INSERTED)
+**Goal**: Eliminate redundant embedding copies that exhaust system memory before evolution can run
+**Depends on**: Phase 5 (all prior optimizations complete)
+**Requirements**: MEM-01 (memory stability prerequisite for any run)
+**Success Criteria** (what must be TRUE):
+  1. Original embedding dicts (query_embs, doc_embs) are released after copying to stores
+  2. TorchVectorStore.from_dict() accepts pre-stacked tensors to avoid intermediate copies
+  3. StarkPreComputedEmbeddingHandler uses lazy loading instead of eager GPU copy
+  4. Peak memory usage during initialization stays under 4GB for STARK Prime
+  5. System does not crash from memory exhaustion when starting evolution
+**Plans**: 1 plan
+
+Plans:
+- [ ] 05.1-01-PLAN.md - Memory-efficient embedding loading with pre-stacked tensors and lazy GPU transfer
+
 ### Phase 6: Performance Validation
 **Goal**: Validate full optimization stack achieves 500 generations in 3 hours with population 50-100
 **Depends on**: Phase 5 (all optimizations complete)
@@ -130,7 +146,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -139,6 +155,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 3. Embedding Cache | 2/2 | ✓ Complete | 2026-01-30 |
 | 4. Convergence Detection | 1/1 | ✓ Complete | 2026-01-30 |
 | 5. Async Checkpointing | 1/1 | ✓ Complete | 2026-01-30 |
+| 5.1 Memory Exhaustion Fix | 0/1 | Planned | - |
 | 6. Performance Validation | 0/1 | Planned | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
 
