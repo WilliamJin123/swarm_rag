@@ -191,6 +191,31 @@ class TorchVectorStore(VectorStore):
 
         return cls(embeddings=embeddings, ids=ids, device=device, dense=dense)
 
+    @classmethod
+    def from_tensor(
+        cls,
+        embeddings: torch.Tensor,
+        ids: torch.Tensor,
+        device: Optional[TorchDeviceStr] = None,
+        dense: bool = False
+    ) -> "TorchVectorStore":
+        """
+        Create TorchVectorStore from pre-stacked embeddings tensor.
+
+        This is more memory-efficient than from_dict() as it avoids
+        intermediate list allocation and torch.stack().
+
+        Args:
+            embeddings: Pre-stacked tensor of shape (N, D)
+            ids: Tensor of document IDs of shape (N,)
+            device: Target device
+            dense: If True, use dense storage for O(1) lookup
+
+        Returns:
+            TorchVectorStore instance
+        """
+        return cls(embeddings=embeddings, ids=ids, device=device, dense=dense)
+
     def search(
         self,
         query_vec: torch.Tensor,

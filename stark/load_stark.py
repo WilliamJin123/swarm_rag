@@ -23,8 +23,16 @@ def load_and_download_qa(dataset_name: str = 'prime', root: str = None, human_ge
         root = os.path.join(BASE_DIR, 'qa')
     return load_qa(name=dataset_name, root=root, human_generated_eval=human_gen)
 
-def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model: str = 'text-embedding-ada-002') -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
-    """Returns query_embs, doc_embs"""
+def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model: str = 'text-embedding-ada-002') -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Load embeddings as pre-stacked tensors for memory-efficient initialization.
+
+    Returns:
+        (query_tensor, doc_tensor, query_ids, doc_ids) - all as torch.Tensor
+
+    The tensors are pre-stacked and the original mmap'd dicts are deleted
+    immediately after stacking to free memory-mapped file references.
+    """
     if root is None:
         root = os.path.join(BASE_DIR, 'embeddings')
     PREDEFINED_IDS = {
@@ -43,11 +51,11 @@ def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model:
     }
     if dataset_name not in PREDEFINED_IDS:
         raise ValueError(f"Dataset {dataset_name} not found. Choose from ['prime', 'amazon', 'mag']")
-    
+
     base_dir = os.path.join(root, dataset_name, emb_model)
     query_dir = os.path.join(base_dir, "query")
     doc_dir = os.path.join(base_dir, "doc")
-    
+
     os.makedirs(query_dir, exist_ok=True)
     os.makedirs(doc_dir, exist_ok=True)
 
@@ -58,17 +66,53 @@ def load_and_download_embeddings(dataset_name: str, root: str = None, emb_model:
         print(f"Downloading {dataset_name} query embeddings...")
         url = f'https://drive.google.com/uc?id={PREDEFINED_IDS[dataset_name]["query"]}'
         gdown.download(url, query_path, quiet=False)
-    
+
     if not os.path.exists(doc_path):
         print(f"Downloading {dataset_name} document embeddings...")
         url = f'https://drive.google.com/uc?id={PREDEFINED_IDS[dataset_name]["doc"]}'
         gdown.download(url, doc_path, quiet=False)
 
     print(f"Loading embeddings from {base_dir}...")
-    query_embs = torch.load(query_path)
-    doc_embs = torch.load(doc_path)
-    
-    return query_embs, doc_embs
+    # Use mmap=True to reduce memory pressure during loading (especially on Windows)
+    query_embs_dict = torch.load(query_path, mmap=True, weights_only=False)
+    doc_embs_dict = torch.load(doc_path, mmap=True, weights_only=False)
+
+    # Stack query embeddings into tensor (sorted for deterministic ordering)
+    print(f"Stacking {len(query_embs_dict)} query embeddings...")
+    query_sorted_ids = sorted(query_embs_dict.keys())
+    query_ids = torch.tensor(query_sorted_ids, dtype=torch.long)
+    query_emb_list = []
+    for qid in query_sorted_ids:
+        vec = query_embs_dict[qid]
+        if isinstance(vec, torch.Tensor):
+            vec = vec.detach().cpu()
+        else:
+            vec = torch.as_tensor(vec)
+        if vec.dim() > 1:
+            vec = vec.squeeze()
+        query_emb_list.append(vec)
+    query_tensor = torch.stack(query_emb_list)
+    del query_emb_list, query_embs_dict  # Free mmap reference immediately
+
+    # Stack doc embeddings into tensor (sorted for deterministic ordering)
+    print(f"Stacking {len(doc_embs_dict)} document embeddings...")
+    doc_sorted_ids = sorted(doc_embs_dict.keys())
+    doc_ids = torch.tensor(doc_sorted_ids, dtype=torch.long)
+    doc_emb_list = []
+    for did in doc_sorted_ids:
+        vec = doc_embs_dict[did]
+        if isinstance(vec, torch.Tensor):
+            vec = vec.detach().cpu()
+        else:
+            vec = torch.as_tensor(vec)
+        if vec.dim() > 1:
+            vec = vec.squeeze()
+        doc_emb_list.append(vec)
+    doc_tensor = torch.stack(doc_emb_list)
+    del doc_emb_list, doc_embs_dict  # Free mmap reference immediately
+
+    print(f"Loaded tensors: query {query_tensor.shape}, doc {doc_tensor.shape}")
+    return query_tensor, doc_tensor, query_ids, doc_ids
 
 def precompute_stark_adjacency(skb: SKB, dataset_name: str, cache_dir: str = None) -> Dict[int, List[int]]:
     """
