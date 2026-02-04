@@ -264,10 +264,9 @@ class StarkVectorStore(VectorStore):
         neighbor_mask: torch.Tensor,
         out: Optional[torch.Tensor] = None
     ) -> Optional[torch.Tensor]:
-        """Fused neighbor similarity computation - returns None if not supported."""
-        if hasattr(self._store, 'compute_neighbor_similarities'):
-            return self._store.compute_neighbor_similarities(query_vec, neighbor_ids, neighbor_mask, out=out)
-        return None
+        """Fused neighbor similarity computation - delegates to underlying store."""
+        # compute_neighbor_similarities is defined in VectorStore ABC with default returning None
+        return self._store.compute_neighbor_similarities(query_vec, neighbor_ids, neighbor_mask, out=out)
 
     @property
     def n_docs(self) -> int:

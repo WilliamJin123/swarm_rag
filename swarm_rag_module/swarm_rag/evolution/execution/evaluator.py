@@ -937,22 +937,14 @@ class PopulationEvaluator:
                         device="cuda"
                     )
                 else:
-                    # Fallback to sets-based GPU computation
+                    # Fallback to sets-based GPU computation using vectorized implementation
                     expanded_gt_sets = ground_truth_sets * n_genomes
-                    if hasattr(MetricFunctions, 'compute_all_metrics_batch_gpu_vectorized'):
-                        all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu_vectorized(
-                            retrieved_ids,
-                            expanded_gt_sets[:n_total],
-                            k_values=self.evaluator.k_values,
-                            device="cuda"
-                        )
-                    else:
-                        all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu(
-                            retrieved_ids,
-                            expanded_gt_sets[:n_total],
-                            k_values=self.evaluator.k_values,
-                            device="cuda"
-                        )
+                    all_metrics_per_query = MetricFunctions.compute_all_metrics_batch_gpu_vectorized(
+                        retrieved_ids,
+                        expanded_gt_sets[:n_total],
+                        k_values=self.evaluator.k_values,
+                        device="cuda"
+                    )
             except Exception as e:
                 # Fail explicitly - GPU/CPU overhead makes silent fallback inefficient
                 logger.error(f"GPU batch metrics failed: {e}")

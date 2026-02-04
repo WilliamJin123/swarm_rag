@@ -799,10 +799,11 @@ class SwarmRetriever:
             )
 
         # Check if we can use batched GPU processing
+        # get_neighbors_batch is abstract in GraphStore ABC (always available)
+        # is_gpu is a property in GraphStore ABC with default implementation
         use_batched = (
             self._use_gpu and
-            hasattr(self.graph_store, 'get_neighbors_batch') and
-            getattr(self.graph_store, 'is_gpu', False) and
+            self.graph_store.is_gpu and
             decision_tracker is None  # Batched mode doesn't support decision tracking
         )
 
@@ -1216,6 +1217,9 @@ class SwarmRetriever:
 
         with prof.section("step.neighbors"):
             # Batch fetch all neighbors using GPU graph store (capped to prevent OOM on hub nodes)
+            all_neighbors: torch.Tensor
+            neighbor_mask: torch.Tensor
+
             all_neighbors, neighbor_mask = self.graph_store.get_neighbors_batch(
                 positions, max_neighbors=MAX_NEIGHBORS_PER_NODE
             )
@@ -1234,16 +1238,14 @@ class SwarmRetriever:
         agent_has_neighbors = neighbor_mask.any(dim=1)  # (n_agents,)
 
         # Try FAST PATH: fused neighbor similarity computation (skips unique→fetch→scatter)
-        fused_sims = None
-        if hasattr(self.vector_store, 'compute_neighbor_similarities'):
-            # Get pre-allocated buffer if available to avoid per-call allocation
-            out_buffer = None
-            if self._buffer_pool is not None:
-                out_buffer = self._buffer_pool.get_neighbor_scores(n_agents, max_degree)
-            with prof.section("step.fused_sim"):
-                fused_sims = self.vector_store.compute_neighbor_similarities(
-                    query_vec, all_neighbors, neighbor_mask, out=out_buffer
-                )
+        # compute_neighbor_similarities is defined in VectorStore ABC with default returning None
+        out_buffer = None
+        if self._buffer_pool is not None:
+            out_buffer = self._buffer_pool.get_neighbor_scores(n_agents, max_degree)
+        with prof.section("step.fused_sim"):
+            fused_sims = self.vector_store.compute_neighbor_similarities(
+                query_vec, all_neighbors, neighbor_mask, out=out_buffer
+            )
 
         if fused_sims is not None:
             # FAST PATH: fused computation succeeded
@@ -1312,11 +1314,11 @@ class SwarmRetriever:
         all_neighbor_degrees = torch.ones(
             (n_agents, max_degree), device=device, dtype=torch.float32
         )
-        if hasattr(self.graph_store, 'get_degrees_batch'):
-            valid_neighbor_ids = all_neighbors[neighbor_mask]
-            if valid_neighbor_ids.numel() > 0:
-                valid_degrees = self.graph_store.get_degrees_batch(valid_neighbor_ids)
-                all_neighbor_degrees[neighbor_mask] = valid_degrees.float()
+        
+        valid_neighbor_ids = all_neighbors[neighbor_mask]
+        if valid_neighbor_ids.numel() > 0:
+            valid_degrees = self.graph_store.get_degrees_batch(valid_neighbor_ids)
+            all_neighbor_degrees[neighbor_mask] = valid_degrees.float()
 
         # Direct tensor indexing for pheromone lookup - no conversion needed
         valid_neighbor_ids = all_neighbors[neighbor_mask]
@@ -3253,10 +3255,11 @@ class SwarmRetriever:
             )
 
         # Check if we can use batched GPU processing
+        # get_neighbors_batch is abstract in GraphStore ABC (always available)
+        # is_gpu is a property in GraphStore ABC with default implementation
         use_batched = (
             self._use_gpu and
-            hasattr(self.graph_store, 'get_neighbors_batch') and
-            getattr(self.graph_store, 'is_gpu', False) and
+            self.graph_store.is_gpu and
             decision_tracker is None
         )
 

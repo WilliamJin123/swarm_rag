@@ -98,9 +98,18 @@ class GeneticStrategies:
     @staticmethod
     def _mix_params(child: Genome, parent2: Genome):
         """Helper to mix scalar parameters and group ratios uniformly."""
+        ranges = SwarmParamRanges()
         for key in child.params:
             if key in parent2.params and random.random() > 0.5:
                 child.params[key] = parent2.params[key]
+            # Clamp to bounds after mixing
+            if hasattr(ranges, key):
+                min_v, max_v = getattr(ranges, key)
+                val = child.params[key]
+                if isinstance(min_v, int):
+                    child.params[key] = max(int(min_v), min(int(max_v), int(val)))
+                else:
+                    child.params[key] = max(min_v, min(max_v, val))
 
         for key in child.group_ratios:
             if key in parent2.group_ratios and random.random() > 0.5:
@@ -895,12 +904,15 @@ class GeneticStrategies:
                         else:
                             genome.params[key] = random.uniform(min_v, max_v)
                     else:
-                        # 50% chance of large jitter (+/- 30%)
+                        # 50% chance of large jitter (+/- 30%), clamped to bounds
                         val = genome.params[key]
+                        min_v, max_v = getattr(ranges, key)
                         if isinstance(val, int):
-                            genome.params[key] = max(1, val + random.randint(-5, 5))
+                            new_val = val + random.randint(-5, 5)
+                            genome.params[key] = max(int(min_v), min(int(max_v), new_val))
                         else:
-                            genome.params[key] = max(0.01, val * random.uniform(0.7, 1.3))
+                            new_val = val * random.uniform(0.7, 1.3)
+                            genome.params[key] = max(min_v, min(max_v, new_val))
 
         # Aggressive Group Ratio Mutation
         for key, val in genome.group_ratios.items():

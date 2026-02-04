@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Sequence, TypeAlias, Tuple
 import torch
 
@@ -74,7 +74,39 @@ class VectorStore(ABC):
             Tensor on device, or None if not found
         """
         pass
+
+    @property
+    def is_gpu(self) -> bool:
+        """Whether this store operates on GPU (cuda or mps)."""
+        return self.device != "cpu"
+
     
+    def compute_neighbor_similarities(
+        self,
+        query_vec: torch.Tensor,
+        neighbor_ids: torch.Tensor,
+        neighbor_mask: torch.Tensor,
+        out: Optional[torch.Tensor] = None
+    ) -> Optional[torch.Tensor]:
+        """
+        Fused neighbor similarity computation (optional optimization).
+
+        Default implementation returns None, signaling caller to use fallback.
+        Implementations may override for fused GPU computation that avoids
+        the unique→fetch→scatter pattern.
+
+        Args:
+            query_vec: Query embedding vector
+            neighbor_ids: Tensor of neighbor IDs
+            neighbor_mask: Boolean mask for valid neighbors
+            out: Optional pre-allocated output buffer
+
+        Returns:
+            Similarity scores tensor, or None if not supported
+        """
+        return None
+
+
 class GraphStore(ABC):
     """
     Abstract contract for Graph Structures (NetworkX, PyG, Neo4j).
@@ -135,6 +167,7 @@ class GraphStore(ABC):
         """Returns the degree (number of neighbors) of a single node."""
         pass
 
+    @abstractmethod
     def get_degrees_batch(
         self,
         node_ids: torch.Tensor
@@ -143,8 +176,14 @@ class GraphStore(ABC):
         pass
 
     @property
+    def is_gpu(self) -> bool:
+        """Whether this store operates on GPU (cuda or mps)."""
+        return self.device != "cpu"
+
+    @property
     def n_nodes(self) -> int:
         pass
+
 
 class EmbeddingProvider(ABC):
     """Abstract contract for Embedding Models (Cohere, OpenAI, Pre-computed Lookups)"""

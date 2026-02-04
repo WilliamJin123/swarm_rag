@@ -60,7 +60,7 @@ CONFIG = {
 }
 
 
-def run_eval(retriever, evaluator, qa_data, indices, verbose=False):
+def run_eval(retriever: SwarmRetriever, evaluator: Evaluator, qa_data, indices, verbose=False):
     """Run evaluation, return results list and total time."""
     results = []
     total_time = 0.0
@@ -101,6 +101,7 @@ def main():
     parser.add_argument("-f", "--full", action="store_true", help="Run full QA dataset")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("-c", "--compare", action="store_true", help="Compare GPU vs CPU")
+    parser.add_argument("-he", "--human_eval", action="store_true", help="Run against the human eval dataset")
     parser.add_argument("--device", choices=["auto", "gpu", "cpu"], default="auto", help="Device mode")
     parser.add_argument("--dataset", default="prime", help="Dataset: prime, amazon, mag")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -139,8 +140,8 @@ def main():
     print(f"{'='*50}")
 
     # Load data
-    print("\nLoading data...")
-    qa_data = load_and_download_qa(args.dataset)
+    print(f"\nLoading data... {'[HUMAN_EVAL]' if args.human_eval else ''}")
+    qa_data = load_and_download_qa(args.dataset, human_gen=args.human_eval)
     skb = load_and_download_skb(args.dataset)
     query_embs, doc_embs, query_ids, doc_ids = load_and_download_embeddings(args.dataset)
     adj_dict = precompute_stark_adjacency(skb, args.dataset)

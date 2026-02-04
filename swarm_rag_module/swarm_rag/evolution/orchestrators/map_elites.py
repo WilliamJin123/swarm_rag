@@ -9,7 +9,10 @@ Enhanced with three-tier LLM-guided evolution:
 import os
 from typing import List, Optional, Any
 
+import torch
 from tqdm.auto import tqdm
+
+from swarm_rag.utils import clear_gpu_cache
 
 from .base import BaseOrchestrator
 from ..types.genome import Genome
@@ -291,6 +294,10 @@ class MAPElitesOrchestrator(BaseOrchestrator):
                         generation=gen,
                         extra_state=self._serialize_archive_state(),
                     )
+
+            # Memory cleanup at end of generation
+            with self._profiler.section("memory_cleanup"):
+                clear_gpu_cache()
 
             # Live profiler output
             if self._profiler.enabled:

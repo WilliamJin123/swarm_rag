@@ -359,15 +359,14 @@ class MapElitesConfig:
 class SwarmParamRanges:
     """Valid ranges for SwarmRAG parameters.
 
-    These are the authoritative ranges for all evolvable parameters.
-    Values are tightened based on empirical analysis of effective configurations.
+    Tightened to cap runtime: max_cost = n_agents × steps × (pool/30) ≈ 200.
     """
-    n_agents: Tuple[int, int] = (15, 50)           # Was (5, 30) - fewer agents = faster, too many = redundant
-    steps: Tuple[int, int] = (3, 7)                 # Was (4, 12) - most signal captured in 3-6 steps
-    decay: Tuple[float, float] = (0.3, 0.8)         # Was (0.85, 0.99) - keep dynamic, tightened range
-    initial_pool_size: Tuple[int, int] = (20, 60)   # Was (10, 50) - tight range around optimal
-    start_subset: Tuple[int, int] = (5, 15)         # Keep unchanged
-    drop_zone_inc: Tuple[float, float] = (0.05, 0.2)  # Keep unchanged
+    n_agents: Tuple[int, int] = (10, 30)
+    steps: Tuple[int, int] = (3, 5)
+    decay: Tuple[float, float] = (0.3, 0.8)
+    initial_pool_size: Tuple[int, int] = (15, 40)
+    start_subset: Tuple[int, int] = (5, 12)
+    drop_zone_inc: Tuple[float, float] = (0.05, 0.15)
 
     def to_evolvable_dict(self) -> Dict[str, Tuple[float, float]]:
         """Return evolvable parameters as dict (excludes fixed params like start_subset, drop_zone_inc)."""
