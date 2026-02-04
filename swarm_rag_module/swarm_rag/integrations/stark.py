@@ -7,6 +7,7 @@ with STaRK-specific features: CSR caching, centrality heuristics, etc.
 
 import math
 import os
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple, Union
 
 import scipy.sparse as sp
@@ -287,16 +288,21 @@ class StarkVectorStore(VectorStore):
 
 class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
     """
-    Pre-computed embedding lookup with lazy GPU transfer.
+    Pre-computed embedding lookup with lazy GPU transfer and LRU eviction.
 
     Embeddings stay on CPU until first access, then cached on target device.
+    Uses LRU eviction to prevent unbounded GPU memory growth.
     """
+
+    # Default cache size - can be overridden at init
+    DEFAULT_CACHE_SIZE = 256
 
     def __init__(
         self,
         query_embs: Union[Dict[int, torch.Tensor], torch.Tensor],
         query_ids: Optional[torch.Tensor] = None,
-        device: Optional[TorchDeviceStr] = None
+        device: Optional[TorchDeviceStr] = None,
+        cache_size: Optional[int] = None
     ):
         """
         Initialize from embedding dict or pre-stacked tensor.
@@ -305,9 +311,13 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
             query_embs: Either dict mapping query_id -> embedding, or pre-stacked tensor (N, D)
             query_ids: Required if query_embs is a tensor - maps index to query_id
             device: Target device for storage (auto-detected if None)
+            cache_size: Max number of embeddings to cache on GPU (default 256).
+                Set to 0 or None to disable caching (always transfer from CPU).
         """
         self._device = device if device is not None else get_device()
-        self._gpu_cache: Dict[int, torch.Tensor] = {}
+        self._cache_size = cache_size if cache_size is not None else self.DEFAULT_CACHE_SIZE
+        # Use OrderedDict for LRU eviction - most recently used at end
+        self._gpu_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
 
         if isinstance(query_embs, torch.Tensor):
             # Pre-stacked tensor mode
@@ -326,6 +336,8 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
         """Get embedding for a query, transferring to GPU on first access."""
         # Check cache first
         if query_id in self._gpu_cache:
+            # Move to end for LRU tracking
+            self._gpu_cache.move_to_end(query_id)
             return self._gpu_cache[query_id]
 
         # Load from source and transfer to GPU
@@ -339,8 +351,18 @@ class StarkPreComputedEmbeddingHandler(EmbeddingProvider):
             else:
                 emb = torch.as_tensor(emb, device=self._device).squeeze()
 
-        self._gpu_cache[query_id] = emb
+        # Cache with LRU eviction
+        if self._cache_size > 0:
+            # Evict oldest entries if at capacity
+            while len(self._gpu_cache) >= self._cache_size:
+                self._gpu_cache.popitem(last=False)  # Remove oldest (first)
+            self._gpu_cache[query_id] = emb
+
         return emb
+
+    def clear_cache(self):
+        """Clear the GPU cache to free memory."""
+        self._gpu_cache.clear()
 
     def embed_query_batch(self, query_ids: list[int]) -> Matrix:
         """Returns a 2D matrix (N_queries, Dimension) of embeddings."""

@@ -200,10 +200,19 @@ class MemoryGuard:
                 f"Delta: {delta / (1024 * 1024):.2f} MB"
             )
 
-        # Cleanup if requested
+        # Cleanup logic:
+        # - empty_cache() is fast and always safe to call
+        # - gc.collect() is slow (can take 30+ seconds under memory pressure)
+        #   so only call it when memory usage is concerning (above 50% of warning threshold)
         if self.cleanup_on_exit:
-            gc.collect()
+            # Always clear CUDA cache (fast operation)
             torch.cuda.empty_cache()
+
+            # Only run expensive gc.collect when memory is elevated
+            # This prevents long pauses during normal operation
+            gc_threshold = self.warning_threshold * 0.7  # e.g., 49% if warning is 70%
+            if usage_ratio >= gc_threshold:
+                gc.collect()
 
         return False
 

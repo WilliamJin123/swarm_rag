@@ -673,9 +673,8 @@ class PopulationEvaluator:
 
                 self._log_genome_result(genome, exit_tier, completed_count, len(batch))
 
-                # Clear CUDA cache to prevent memory fragmentation and latency creep
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                # Note: CUDA cache clearing is now handled by MemoryGuard
+                # Redundant empty_cache calls were causing performance issues
 
             return total_queries_used
 

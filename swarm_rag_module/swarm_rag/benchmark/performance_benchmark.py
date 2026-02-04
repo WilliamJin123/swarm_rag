@@ -463,16 +463,15 @@ class PerformanceBenchmark:
         from ..utils.device import resolve_device
 
         # Import STARK data loading functions
-        # These are in the stark/ directory at project root
-        import sys
-        # __file__ is: swarm_rag_module/swarm_rag/benchmark/performance_benchmark.py
-        # parents[3] is: swarm_rag_experiment (project root)
+        # Project root must be in sys.path for stark package to be importable
+        # This is typically done via PYTHONPATH or package installation
         project_root = Path(__file__).resolve().parents[3]
         stark_dir = project_root / "stark"
-        if str(stark_dir) not in sys.path:
-            sys.path.insert(0, str(stark_dir))
+        import sys
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
 
-        from load_stark import (
+        from stark import (
             load_and_download_embeddings,
             load_and_download_skb,
             load_and_download_qa,
@@ -486,7 +485,7 @@ class PerformanceBenchmark:
         logger.info(f"Loading STARK {dataset_name} dataset...")
         skb = load_and_download_skb(dataset_name)
         adj_dict = precompute_stark_adjacency(skb, dataset_name)
-        query_embs, doc_embs = load_and_download_embeddings(dataset_name)
+        query_embs, doc_embs, query_ids, doc_ids = load_and_download_embeddings(dataset_name)
 
         logger.info(f"Loaded {len(query_embs)} queries, {len(doc_embs)} documents")
 
@@ -496,17 +495,30 @@ class PerformanceBenchmark:
         val_subset = list(raw_data.get_subset("val"))
 
         random.seed(42)
-        random.shuffle(train_subset)
-        random.shuffle(val_subset)
 
-        # Limit data for faster benchmark (full dataset for realistic perf)
-        train_q = [d[0] for d in train_subset]
-        train_ids = [d[1] for d in train_subset]
-        train_gt = [d[2] for d in train_subset]
+        # Sample train/val data (matching evolve_stark.py defaults)
+        train_sample_size = 100
+        val_sample_size = 50
 
-        val_q = [d[0] for d in val_subset[:100]]
-        val_ids = [d[1] for d in val_subset[:100]]
-        val_gt = [d[2] for d in val_subset[:100]]
+        if train_sample_size < len(train_subset):
+            train_data = random.sample(train_subset, train_sample_size)
+        else:
+            random.shuffle(train_subset)
+            train_data = train_subset
+
+        if val_sample_size < len(val_subset):
+            val_data = random.sample(val_subset, val_sample_size)
+        else:
+            random.shuffle(val_subset)
+            val_data = val_subset
+
+        train_q = [d[0] for d in train_data]
+        train_ids = [d[1] for d in train_data]
+        train_gt = [d[2] for d in train_data]
+
+        val_q = [d[0] for d in val_data]
+        val_ids = [d[1] for d in val_data]
+        val_gt = [d[2] for d in val_data]
 
         logger.info(f"Using {len(train_ids)} train queries, {len(val_ids)} val queries")
 
@@ -514,7 +526,6 @@ class PerformanceBenchmark:
         resolved_device = resolve_device("auto")
         logger.info(f"Using device: {resolved_device}")
 
-        # Initialize components
         vector_store = StarkVectorStore(doc_embs, device=resolved_device)
         graph_store = StarkGraphAdapter(
             skb, dataset_name,
@@ -522,7 +533,8 @@ class PerformanceBenchmark:
             cache_path=str(stark_dir / "adjacency_cache" / f"graph_{dataset_name}.npz"),
             device=resolved_device,
         )
-        embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
+        # Query embeddings stay on auto-resolved device
+        embedding_provider = StarkPreComputedEmbeddingHandler(query_embs, query_ids, device=resolved_device)
 
         retriever = SwarmRetriever(
             vector_store=vector_store,

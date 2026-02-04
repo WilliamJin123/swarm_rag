@@ -2820,6 +2820,10 @@ class SwarmRetriever:
             if self._buffer_pool is not None:
                 self._buffer_pool.clear()
 
+            # Explicit cleanup of batch tensors to prevent memory accumulation
+            # This avoids relying on Python GC which can be slow under memory pressure
+            del agent_locs, pheromones, history, batch_embeddings
+
             if gid:
                 logger.info(f"    [Retriever] [{gid}] Multi-Query Batch: {end}/{n_queries}")
 
