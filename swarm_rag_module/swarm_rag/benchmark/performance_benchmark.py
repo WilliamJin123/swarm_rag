@@ -526,7 +526,7 @@ class PerformanceBenchmark:
         resolved_device = resolve_device("auto")
         logger.info(f"Using device: {resolved_device}")
 
-        vector_store = StarkVectorStore(doc_embs, device=resolved_device)
+        vector_store = StarkVectorStore(doc_embs, doc_ids, device=resolved_device)
         graph_store = StarkGraphAdapter(
             skb, dataset_name,
             adjacency_dict=adj_dict,
@@ -550,6 +550,18 @@ class PerformanceBenchmark:
             mode="weighted_sum",
             weights={"Hit@1": 0.25, "Hit@5": 0.25, "MRR": 0.25, "Recall@20": 0.25},
         )
+
+        # Memory cleanup after data loading but before evolution
+        import gc
+        gc.collect()
+        if self._has_cuda:
+            torch.cuda.empty_cache()
+
+        # Log memory state before evolution starts
+        if self._has_cuda:
+            allocated_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+            total_mb = torch.cuda.get_device_properties(0).total_memory / (1024 * 1024)
+            logger.info(f"Memory before evolution: {allocated_mb:.0f}MB / {total_mb:.0f}MB ({allocated_mb/total_mb:.1%})")
 
         # Import additional config types
         from ..evolution.types.config import (
