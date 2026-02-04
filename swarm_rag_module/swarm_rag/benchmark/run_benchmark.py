@@ -16,6 +16,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+import os
 
 from .performance_benchmark import PerformanceBenchmark, BenchmarkConfig
 
@@ -29,6 +30,7 @@ def parse_args():
 
     parser.add_argument(
         "--population",
+        "-p",
         type=int,
         default=75,
         help="Population size for evolution (target range: 50-100)",
@@ -36,6 +38,7 @@ def parse_args():
 
     parser.add_argument(
         "--generations",
+        "-g",
         type=int,
         default=500,
         help="Target number of generations",
@@ -50,6 +53,7 @@ def parse_args():
 
     parser.add_argument(
         "--memory-limit",
+        "-m",
         type=float,
         default=4.0,
         help="Memory limit in GB for pass criteria",
@@ -67,6 +71,22 @@ def parse_args():
         "-v",
         action="store_true",
         help="Enable verbose logging",
+    )
+
+    parser.add_argument(
+        "--no-swarm-profile",
+        "-nsp",
+        action="store_false",
+        dest="swarm_profile",
+        help="Disable SWARM profiling (default: enabled)",
+    )
+
+    parser.add_argument(
+        "--no-evolution-profile",
+        "-nep",
+        action="store_false",
+        dest="evolution_profile",
+        help="Disable EVOLUTION profiling (default: enabled)",
     )
 
     return parser.parse_args()
@@ -90,6 +110,13 @@ def setup_logging(verbose: bool = False):
 def main():
     """Main entry point for benchmark CLI."""
     args = parse_args()
+
+    if args.swarm_profile:
+        os.environ["SWARM_PROFILE"] = "1"
+    
+    if args.evolution_profile:
+        os.environ["EVOLUTION_PROFILE"] = "1"
+
     setup_logging(args.verbose)
 
     logger = logging.getLogger(__name__)

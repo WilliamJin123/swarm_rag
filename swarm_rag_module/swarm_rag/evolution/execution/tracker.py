@@ -67,6 +67,10 @@ class ProgressTracker:
         if title is None:
             title = self.plot_title
 
+        # Ensure plot directory exists
+        plot_dir = os.path.dirname(save_path)
+        if plot_dir:
+            os.makedirs(plot_dir, exist_ok=True)
 
         df = pd.DataFrame(self.history)
         
