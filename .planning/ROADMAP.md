@@ -19,6 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Async Checkpointing** - Non-blocking checkpoint saves during evolution
 - [x] **Phase 5.1: Memory Exhaustion Fix** - *INSERTED* - Eliminate redundant embedding copies that exhaust system memory
 - [ ] **Phase 6: Performance Validation** - Validate 500 gen / 3 hour target with full optimization stack
+- [ ] **Phase 6.5: Benchmark Validation** - *INSERTED* - Run benchmarks, debug issues, validate performance reports
 - [ ] **Phase 7: SOTA Evolution** - Run evolution to discover genome achieving SOTA metrics
 
 ## Phase Details
@@ -127,6 +128,21 @@ Plans:
 Plans:
 - [ ] 06-01-PLAN.md - Full-stack performance benchmark with JSON report and pass/fail determination
 
+### Phase 6.5: Benchmark Validation (INSERTED)
+**Goal**: Fix benchmark bugs and validate full optimization stack achieves 500 generations in 3 hours
+**Depends on**: Phase 6 (benchmark infrastructure must be in place)
+**Requirements**: PERF-01, PERF-04 (validation of performance targets)
+**Success Criteria** (what must be TRUE):
+  1. Benchmark runs complete without crashes or memory exhaustion
+  2. Any memory leaks or bugs discovered during runs are identified and fixed
+  3. Performance report validates against 500 gen / 3 hour target
+  4. All caches, memory guards, and convergence detection verified working in practice
+  5. JSON performance report generated with pass/fail determination
+**Plans**: 1 plan
+
+Plans:
+- [ ] 06.5-01-PLAN.md - Fix device mismatch bug, run benchmark validation, generate performance report
+
 ### Phase 7: SOTA Evolution
 **Goal**: Run evolution search to discover genome achieving SOTA metrics on STARK Prime
 **Depends on**: Phase 6 (performance validated)
@@ -146,7 +162,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 7
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 6.5 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -157,6 +173,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 7
 | 5. Async Checkpointing | 1/1 | ✓ Complete | 2026-01-30 |
 | 5.1 Memory Exhaustion Fix | 1/1 | ✓ Complete | 2026-01-31 |
 | 6. Performance Validation | 0/1 | Planned | - |
+| 6.5 Benchmark Validation | 0/1 | Planned | - |
 | 7. SOTA Evolution | 0/2 | Not started | - |
 
 ---
@@ -175,5 +192,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 5.1 -> 6 -> 7
 *Phase 5 complete: 2026-01-30*
 *Phase 6 planned: 2026-01-31*
 *Phase 5.1 complete: 2026-01-31*
-*Depth: standard (7 phases)*
+*Phase 6.5 inserted: 2026-02-03*
+*Phase 6.5 planned: 2026-02-03*
+*Depth: standard (7 phases + 2 inserted)*
 *Requirements coverage: 16/16 mapped*
