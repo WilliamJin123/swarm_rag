@@ -142,7 +142,7 @@ def main():
     print("\nLoading data...")
     qa_data = load_and_download_qa(args.dataset)
     skb = load_and_download_skb(args.dataset)
-    query_embs, doc_embs = load_and_download_embeddings(args.dataset)
+    query_embs, doc_embs, query_ids, doc_ids = load_and_download_embeddings(args.dataset)
     adj_dict = precompute_stark_adjacency(skb, args.dataset)
 
     # Determine sample size
@@ -155,7 +155,7 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cache_dir = os.path.join(script_dir, "adjacency_cache")
     os.makedirs(cache_dir, exist_ok=True)
-    embedding_provider = StarkPreComputedEmbeddingHandler(query_embs)
+    embedding_provider = StarkPreComputedEmbeddingHandler(query_embs, query_ids=query_ids)
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
 
     all_results = {}
@@ -164,7 +164,7 @@ def main():
         mode_name = "GPU" if device == "cuda" else "CPU"
         print(f"\n--- {mode_name} ---")
 
-        vector_store = StarkVectorStore(doc_embs, device=device)
+        vector_store = StarkVectorStore(doc_embs, doc_ids, device=device, dense=True)
 
         graph_store = StarkGraphAdapter(
             skb, args.dataset,

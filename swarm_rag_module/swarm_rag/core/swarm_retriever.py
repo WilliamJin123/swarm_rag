@@ -9,6 +9,11 @@ from contextlib import contextmanager
 import logging
 from ..utils import LRUCache, get_device, move_to_device, tensor_like, DEFAULT_SWARM_PARAMS
 
+# Maximum neighbors per node for graph traversal.
+# Caps tensor sizes to enable pre-allocated buffers and prevent OOM on high-degree hub nodes.
+# 500 covers 95th percentile (206) with headroom. Nodes with more neighbors get random sampling.
+MAX_NEIGHBORS_PER_NODE = 500
+
 if TYPE_CHECKING:
     from ..evolution.types.config import WeightTensors, HeuristicFeatureConfig
 
@@ -1210,8 +1215,10 @@ class SwarmRetriever:
         positions = agent_locations.to(device=device, dtype=torch.long)
 
         with prof.section("step.neighbors"):
-            # Batch fetch all neighbors using GPU graph store
-            all_neighbors, neighbor_mask = self.graph_store.get_neighbors_batch(positions)
+            # Batch fetch all neighbors using GPU graph store (capped to prevent OOM on hub nodes)
+            all_neighbors, neighbor_mask = self.graph_store.get_neighbors_batch(
+                positions, max_neighbors=MAX_NEIGHBORS_PER_NODE
+            )
             # all_neighbors: (n_agents, max_degree), neighbor_mask: (n_agents, max_degree)
 
         if all_neighbors is None or neighbor_mask is None:
@@ -1229,9 +1236,13 @@ class SwarmRetriever:
         # Try FAST PATH: fused neighbor similarity computation (skips unique→fetch→scatter)
         fused_sims = None
         if hasattr(self.vector_store, 'compute_neighbor_similarities'):
+            # Get pre-allocated buffer if available to avoid per-call allocation
+            out_buffer = None
+            if self._buffer_pool is not None:
+                out_buffer = self._buffer_pool.get_neighbor_scores(n_agents, max_degree)
             with prof.section("step.fused_sim"):
                 fused_sims = self.vector_store.compute_neighbor_similarities(
-                    query_vec, all_neighbors, neighbor_mask
+                    query_vec, all_neighbors, neighbor_mask, out=out_buffer
                 )
 
         if fused_sims is not None:
@@ -2193,9 +2204,9 @@ class SwarmRetriever:
         # Flatten positions for batch neighbor lookup
         flat_positions = state.agent_positions.view(-1)  # (batch * n_agents,)
 
-        # Get neighbors for all positions
+        # Get neighbors for all positions (capped to prevent OOM on hub nodes)
         all_neighbors, neighbor_mask = self.graph_store.get_neighbors_batch(
-            flat_positions
+            flat_positions, max_neighbors=MAX_NEIGHBORS_PER_NODE
         )
         # all_neighbors: (batch * n_agents, max_degree)
         # neighbor_mask: (batch * n_agents, max_degree)
@@ -2910,8 +2921,10 @@ class SwarmRetriever:
         # Flatten all positions
         flat_positions = agent_locations.flatten()  # (batch_size * n_agents,)
 
-        # Batch fetch from graph store
-        flat_neighbors, flat_mask = self.graph_store.get_neighbors_batch(flat_positions)
+        # Batch fetch from graph store (capped to prevent OOM on hub nodes)
+        flat_neighbors, flat_mask = self.graph_store.get_neighbors_batch(
+            flat_positions, max_neighbors=MAX_NEIGHBORS_PER_NODE
+        )
         # flat_neighbors: (batch_size * n_agents, max_degree)
         # flat_mask: (batch_size * n_agents, max_degree)
 

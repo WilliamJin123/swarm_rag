@@ -204,19 +204,24 @@ class TorchGraphStore(GraphStore):
 
     def get_neighbors_batch(
         self,
-        node_ids: torch.Tensor
+        node_ids: torch.Tensor,
+        max_neighbors: Optional[int] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Batch neighbor lookup for multiple nodes.
 
         Args:
             node_ids: Tensor/list of node IDs
+            max_neighbors: Optional cap on neighbors per node. If a node has more
+                          neighbors than this, a random contiguous slice is returned.
+                          This enables predictable memory usage for pre-allocated buffers.
 
         Returns:
             Tuple of:
-                - neighbors: Tensor of shape (batch_size, batch_max_degree)
+                - neighbors: Tensor of shape (batch_size, output_degree)
+                  where output_degree = min(batch_max_degree, max_neighbors) if capped
                   Padded with -1 for missing neighbors
-                - mask: Boolean tensor of shape (batch_size, batch_max_degree)
+                - mask: Boolean tensor of shape (batch_size, output_degree)
                   True where valid neighbors exist
         """
         ids = node_ids.to(device=self._device, dtype=torch.long)
@@ -236,12 +241,34 @@ class TorchGraphStore(GraphStore):
         starts = self._crow_indices[clamped_ids]
         ends = self._crow_indices[clamped_ids + 1]
         lengths = ends - starts
-        
+
         # Apply valid mask to lengths (invalid nodes have length 0)
         lengths = torch.where(valid_mask, lengths, torch.zeros_like(lengths))
 
-        total_neighbors = lengths.sum().item()
-        batch_max_degree = int(lengths.max().item()) if batch_size > 0 else 0
+        # Apply max_neighbors cap with random sampling
+        if max_neighbors is not None and max_neighbors > 0:
+            # For nodes with more neighbors than max_neighbors, use random offset
+            # This gives a random contiguous slice (fast, GPU-friendly)
+            excess = (lengths - max_neighbors).clamp(min=0)
+            needs_sampling = excess > 0
+
+            if needs_sampling.any():
+                # Generate random offsets for nodes that need sampling
+                # offset in [0, excess] so we get a random starting position
+                random_offsets = torch.zeros_like(lengths)
+                random_offsets[needs_sampling] = (
+                    torch.rand(needs_sampling.sum(), device=self._device) *
+                    (excess[needs_sampling].float() + 1)
+                ).long()
+                starts = starts + random_offsets
+
+            # Cap lengths
+            capped_lengths = torch.minimum(lengths, torch.tensor(max_neighbors, device=self._device))
+        else:
+            capped_lengths = lengths
+
+        total_neighbors = capped_lengths.sum().item()
+        batch_max_degree = int(capped_lengths.max().item()) if batch_size > 0 else 0
 
         if batch_max_degree == 0:
             return (
@@ -266,8 +293,8 @@ class TorchGraphStore(GraphStore):
             device=self._device, dtype=torch.bool
         )
 
-        # Vectorized neighbor gathering
-        lengths_int = lengths.int()
+        # Vectorized neighbor gathering (using capped_lengths)
+        lengths_int = capped_lengths.int()
 
         # 1. Determine which row (node ID) each neighbor belongs to in the flat list
         #    e.g. lengths=[2, 1] -> row_indices=[0, 0, 1]
@@ -278,8 +305,8 @@ class TorchGraphStore(GraphStore):
 
         # 2. Calculate the start offset for each node in the flat index space
         #    e.g. lengths=[2, 1] -> cumsum=[2, 3] -> group_starts=[0, 2]
-        group_starts = torch.cumsum(lengths, dim=0) - lengths
-        
+        group_starts = torch.cumsum(capped_lengths, dim=0) - capped_lengths
+
         # 3. Repeat these start offsets to match the size of the flat neighbor list
         #    e.g. group_starts=[0, 2] -> repeated=[0, 0, 2]
         start_offsets_flat = torch.repeat_interleave(group_starts, lengths_int)
@@ -287,12 +314,12 @@ class TorchGraphStore(GraphStore):
         # 4. Generate the column positions (0 to degree-1) for each node
         #    flat_idx = [0, 1, 2]
         #    col_pos = flat_idx - start_offsets = [0-0, 1-0, 2-2] = [0, 1, 0]
-        flat_idx = torch.arange(total_neighbors, device=self._device)
+        flat_idx = torch.arange(int(total_neighbors), device=self._device)
         col_positions = flat_idx - start_offsets_flat
 
         # 5. Gather actual neighbor indices from CSR col_indices
         #    Calculate flat indices into self._col_indices
-        #    flat_starts = [start_0, start_0, start_1]
+        #    flat_starts = [start_0, start_0, start_1] (already adjusted for sampling)
         flat_starts = torch.repeat_interleave(starts, lengths_int)
         flat_indices = flat_starts + col_positions
 
@@ -303,8 +330,8 @@ class TorchGraphStore(GraphStore):
         flat_neighbors = self._col_indices[flat_indices]
 
         # 6. Scatter back into the dense batch tensor
-        neighbors[row_indices, col_positions] = flat_neighbors
-        mask[row_indices, col_positions] = True
+        neighbors[row_indices, col_positions.long()] = flat_neighbors
+        mask[row_indices, col_positions.long()] = True
 
         return neighbors, mask
 

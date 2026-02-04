@@ -141,6 +141,25 @@ class TorchVectorStore(VectorStore):
                 f"device={self._device}"
             )
 
+        # Pre-allocate reusable buffers to avoid per-query allocations (reduces GC stutter)
+        self._sim_buffer = torch.empty((1, self.n_docs), dtype=self._dtype, device=self._device)
+
+        # Pre-allocate buffers for compute_neighbor_similarities (dense mode only)
+        # Sized for max_agents=50, max_neighbors=500 (matching MAX_NEIGHBORS_PER_NODE cap)
+        # Total: 50 * 500 = 25,000 positions × 1536 dim × 4 bytes = ~150 MB
+        if dense:
+            self._neighbor_buffer_size = 50 * 500  # max_agents * max_neighbors
+            self._neighbor_emb_buffer = torch.empty(
+                (self._neighbor_buffer_size, self.dim), dtype=self._dtype, device=self._device
+            )
+            self._neighbor_sim_buffer = torch.empty(
+                self._neighbor_buffer_size, dtype=self._dtype, device=self._device
+            )
+        else:
+            self._neighbor_buffer_size = 0
+            self._neighbor_emb_buffer = None
+            self._neighbor_sim_buffer = None
+
     @classmethod
     def from_dict(
         cls,
@@ -234,10 +253,12 @@ class TorchVectorStore(VectorStore):
         query = query_vec.to(device=self._device, dtype=self._dtype)
         if query.dim() == 1:
             query = query.unsqueeze(0)
-        
+
         query = torch.nn.functional.normalize(query, p=2, dim=1)
 
-        similarities = torch.mm(query, self._embeddings.t()).squeeze(0)
+        # Use pre-allocated buffer to avoid per-query allocation (reduces GC stutter)
+        torch.mm(query, self._embeddings.t(), out=self._sim_buffer)
+        similarities = self._sim_buffer.squeeze(0)
 
         k = min(limit, self.n_docs)
         scores, indices = torch.topk(similarities, k=k, largest=True)
@@ -358,18 +379,21 @@ class TorchVectorStore(VectorStore):
         self,
         query_vec: torch.Tensor,
         neighbor_ids: torch.Tensor,
-        neighbor_mask: torch.Tensor
+        neighbor_mask: torch.Tensor,
+        out: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Compute similarities for all neighbors in one fused operation.
 
-        FAST PATH: Skips unique→fetch→scatter pipeline by directly indexing
-        dense embeddings and computing similarities in-place.
+        FAST PATH: Uses pre-allocated buffers and fixed-size operations to avoid
+        per-call memory allocations that cause GPU memory fragmentation.
 
         Args:
             query_vec: Query embedding (D,) or (1, D)
             neighbor_ids: Neighbor IDs tensor (n_agents, max_degree)
             neighbor_mask: Valid neighbor mask (n_agents, max_degree)
+            out: Optional pre-allocated output buffer (n_agents, max_degree).
+                 If provided, results are written here to avoid allocation.
 
         Returns:
             Similarities tensor (n_agents, max_degree), -inf for invalid neighbors
@@ -379,47 +403,84 @@ class TorchVectorStore(VectorStore):
             return None
 
         n_agents, max_degree = neighbor_ids.shape
+        total_positions = n_agents * max_degree
         device = self._device
 
-        # Initialize similarities to -inf (invalid)
-        similarities = torch.full(
-            (n_agents, max_degree), -float('inf'),
-            device=device, dtype=torch.float32
-        )
+        # Use pre-allocated output buffer or create new tensor
+        if out is not None:
+            similarities = out
+            similarities.fill_(-float('inf'))
+        else:
+            similarities = torch.full(
+                (n_agents, max_degree), -float('inf'),
+                device=device, dtype=torch.float32
+            )
 
         if not neighbor_mask.any():
             return similarities
 
-        # Prepare query vector
+        # Prepare query vector (small allocation, unavoidable)
         query = query_vec.to(device=device, dtype=torch.float32)
         if query.dim() == 1:
             query = query.unsqueeze(0)
         query = torch.nn.functional.normalize(query, p=2, dim=1)  # (1, D)
 
-        # Get valid neighbor IDs
-        valid_ids = neighbor_ids[neighbor_mask]  # (N_valid,)
-
-        # Clamp to valid embedding range
         max_id = self._dense_embeddings.shape[0]
-        clamped_ids = valid_ids.clamp(0, max_id - 1)
 
-        # Direct dense lookup - O(1) per ID, no unique needed!
-        valid_embs = self._dense_embeddings[clamped_ids]  # (N_valid, D)
+        # === FIXED-SIZE OPERATIONS using pre-allocated buffers ===
+        # This avoids variable-size allocations that cause memory fragmentation
 
-        # Check which embeddings are actually valid
-        in_range = (valid_ids >= 0) & (valid_ids < max_id)
-        has_emb = self._valid_mask[clamped_ids]
-        emb_valid = in_range & has_emb
+        # Check if we can use pre-allocated buffers
+        if (self._neighbor_emb_buffer is not None and
+            total_positions <= self._neighbor_buffer_size):
 
-        # Compute similarities for valid embeddings
-        # (N_valid, D) @ (D, 1) -> (N_valid, 1) -> (N_valid,)
-        valid_sims = torch.mm(valid_embs, query.t()).squeeze(1)
+            # Flatten neighbor_ids (view, no copy)
+            flat_ids = neighbor_ids.view(-1)  # (n_agents * max_degree,)
 
-        # Zero out invalid embeddings
-        valid_sims = torch.where(emb_valid, valid_sims, torch.full_like(valid_sims, -float('inf')))
+            # Clamp ALL IDs to valid range (operates in-place on view conceptually)
+            clamped_flat = flat_ids.clamp(0, max_id - 1)
 
-        # Scatter back to 2D tensor
-        similarities[neighbor_mask] = valid_sims
+            # Use pre-allocated embedding buffer - slice to needed size
+            emb_buffer = self._neighbor_emb_buffer[:total_positions]
+
+            # Gather ALL embeddings using index_select into buffer
+            # Note: index_select doesn't have out= param, so we use direct indexing
+            # which creates a temporary, but it's a contiguous block
+            torch.index_select(
+                self._dense_embeddings, 0, clamped_flat, out=emb_buffer
+            )
+
+            # Use pre-allocated similarity buffer
+            sim_buffer = self._neighbor_sim_buffer[:total_positions]
+
+            # Compute ALL similarities: (N, D) @ (D, 1) -> (N, 1)
+            torch.mm(emb_buffer, query.t(), out=sim_buffer.unsqueeze(1))
+
+            # Reshape to output shape (view, no copy)
+            all_sims = sim_buffer.view(n_agents, max_degree)
+
+            # Build validity mask (fixed-size operations)
+            flat_mask = neighbor_mask.view(-1)
+            in_range = (flat_ids >= 0) & (flat_ids < max_id)
+            has_emb = self._valid_mask[clamped_flat]
+            full_valid = (flat_mask & in_range & has_emb).view(n_agents, max_degree)
+
+            # Apply mask: copy valid similarities, leave rest as -inf
+            similarities = torch.where(full_valid, all_sims, similarities)
+
+        else:
+            # Fallback: original variable-size path (for oversized inputs)
+            valid_ids = neighbor_ids[neighbor_mask]
+            clamped_ids = valid_ids.clamp(0, max_id - 1)
+            valid_embs = self._dense_embeddings[clamped_ids]
+
+            in_range = (valid_ids >= 0) & (valid_ids < max_id)
+            has_emb = self._valid_mask[clamped_ids]
+            emb_valid = in_range & has_emb
+
+            valid_sims = torch.mm(valid_embs, query.t()).squeeze(1)
+            valid_sims = torch.where(emb_valid, valid_sims, torch.full_like(valid_sims, -float('inf')))
+            similarities[neighbor_mask] = valid_sims
 
         return similarities
 
@@ -504,6 +565,15 @@ class TorchVectorStore(VectorStore):
         if hasattr(self, '_valid_mask') and self._valid_mask is not None:
             del self._valid_mask
             self._valid_mask = None
+        if hasattr(self, '_sim_buffer') and self._sim_buffer is not None:
+            del self._sim_buffer
+            self._sim_buffer = None
+        if hasattr(self, '_neighbor_emb_buffer') and self._neighbor_emb_buffer is not None:
+            del self._neighbor_emb_buffer
+            self._neighbor_emb_buffer = None
+        if hasattr(self, '_neighbor_sim_buffer') and self._neighbor_sim_buffer is not None:
+            del self._neighbor_sim_buffer
+            self._neighbor_sim_buffer = None
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

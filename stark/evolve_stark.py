@@ -170,7 +170,7 @@ def run_evolution(args):
     fitness_calc = create_fitness_calculator(
         mode="hybrid",
         weights={"Hit@1": 0.25, "Hit@5": 0.25, "MRR": 0.25, "Recall@20": 0.25},
-        thresholds={"Hit@1": 0.50, "Hit@5": 0.75, "MRR": 0.70, "Recall@20": 0.80},
+        thresholds={"Hit@1": 0.60, "Hit@5": 0.80, "MRR": 0.80, "Recall@20": 0.85},
     )
     evaluator = Evaluator(k_values=[1, 5, 10, 20])
 

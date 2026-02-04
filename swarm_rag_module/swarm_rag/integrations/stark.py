@@ -129,8 +129,10 @@ class StarkGraphAdapter(GraphStore):
     def get_neighbors(self, node_id: int) -> torch.Tensor:
         return self._store.get_neighbors(node_id)
 
-    def get_neighbors_batch(self, node_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self._store.get_neighbors_batch(node_ids)
+    def get_neighbors_batch(
+        self, node_ids: torch.Tensor, max_neighbors: Optional[int] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self._store.get_neighbors_batch(node_ids, max_neighbors=max_neighbors)
 
     def get_degrees_batch(self, node_ids: torch.Tensor) -> torch.Tensor:
         return self._store.get_degrees_batch(node_ids)
@@ -259,11 +261,12 @@ class StarkVectorStore(VectorStore):
         self,
         query_vec: torch.Tensor,
         neighbor_ids: torch.Tensor,
-        neighbor_mask: torch.Tensor
+        neighbor_mask: torch.Tensor,
+        out: Optional[torch.Tensor] = None
     ) -> Optional[torch.Tensor]:
         """Fused neighbor similarity computation - returns None if not supported."""
         if hasattr(self._store, 'compute_neighbor_similarities'):
-            return self._store.compute_neighbor_similarities(query_vec, neighbor_ids, neighbor_mask)
+            return self._store.compute_neighbor_similarities(query_vec, neighbor_ids, neighbor_mask, out=out)
         return None
 
     @property

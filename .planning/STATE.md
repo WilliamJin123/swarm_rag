@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-01-29)
 
 **Core value:** Find a genome configuration that hits SOTA metrics on STARK Prime (Hit@1 > 60%, Hit@5 > 80%, Recall@20 > 85%, MRR > 80%)
-**Current focus:** Phase 5.1 complete, ready for Phase 6 - Performance Validation
+**Current focus:** Phase 5.1 complete, ready for Phase 6 - Performance Validation (then 6.5 - Benchmark Validation)
 
 ## Current Position
 
@@ -88,6 +88,10 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 None yet.
+
+### Roadmap Evolution
+
+- Phase 6.5 inserted: Benchmark Validation - Run benchmarks, debug issues, validate performance reports
 
 ### Blockers/Concerns
 

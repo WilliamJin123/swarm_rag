@@ -533,7 +533,6 @@ class PerformanceBenchmark:
             cache_path=str(stark_dir / "adjacency_cache" / f"graph_{dataset_name}.npz"),
             device=resolved_device,
         )
-        # Query embeddings stay on auto-resolved device
         embedding_provider = StarkPreComputedEmbeddingHandler(query_embs, query_ids, device=resolved_device)
 
         retriever = SwarmRetriever(
