@@ -126,8 +126,9 @@ def prepare_shared_context(
     n_queries = len(queries)
     logger.info(f"Pre-computing shared context for {n_queries} queries...")
 
-    # 1. Check global embedding cache first
-    embedding_cache = EmbeddingCacheProvider.get()
+    # 1. Get or create global embedding cache (lazy initialization)
+    # This ensures the cache exists for tracking stats across generations
+    embedding_cache = EmbeddingCacheProvider.get_or_create(device=device)
     query_embeddings = None
 
     if embedding_cache is not None:
