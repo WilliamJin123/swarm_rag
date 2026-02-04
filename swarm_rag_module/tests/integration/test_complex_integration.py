@@ -58,7 +58,7 @@ def test_variance_calculation_flow():
     retriever = MockRetriever()
     base_eval = MockBaseEvaluator(index_name="test")
     # Fitness that cares about Stability
-    fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0})
+    fitness_calc = FitnessCalculator.from_weights({'Recall@20': 1.0})
 
     # Disable adaptive/shared precompute for simple variance test
     pop_eval = PopulationEvaluator(
@@ -115,7 +115,7 @@ def test_checkpoint_resume():
     print("  Running initial batch (Gen 0-1)...")
     engine = EvolutionEngine(
         retriever=MockRetriever(),
-        fitness_calculator=FitnessCalculator({'Recall@20': 1.0}),
+        fitness_calculator=FitnessCalculator.from_weights({'Recall@20': 1.0}),
         evaluator=MockBaseEvaluator("test"),
         train_query_ids=["q1"], train_ground_truth=[[0]],
         val_query_ids=["v1"], val_ground_truth=[[0]],
@@ -152,7 +152,7 @@ def test_checkpoint_resume():
         checkpoint_path=new_storage.latest_checkpoint_path,
         retriever=MockRetriever(),
         evaluator=MockBaseEvaluator("test"),
-        fitness_calculator=FitnessCalculator({'Recall@20': 1.0}),
+        fitness_calculator=FitnessCalculator.from_weights({'Recall@20': 1.0}),
         train_query_ids=["q1"], train_ground_truth=[[0]],
         val_query_ids=["v1"], val_ground_truth=[[0]],
         config=new_config,

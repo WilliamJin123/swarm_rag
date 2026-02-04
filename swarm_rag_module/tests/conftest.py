@@ -154,13 +154,13 @@ def int_evaluator():
 @pytest.fixture
 def simple_fitness_calculator():
     """Provide a simple fitness calculator for tests."""
-    return FitnessCalculator(weights={"Recall@10": 1.0})
+    return FitnessCalculator.from_weights({"Recall@10": 1.0})
 
 
 @pytest.fixture
 def balanced_fitness_calculator():
     """Provide a balanced fitness calculator for tests."""
-    return FitnessCalculator(weights={
+    return FitnessCalculator.from_weights({
         "Hit@1": 0.25,
         "Hit@5": 0.25,
         "MRR": 0.25,

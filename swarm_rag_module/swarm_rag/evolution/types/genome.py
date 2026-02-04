@@ -406,8 +406,8 @@ class GenomeCompiler:
         """
         Compiles a single expression tree into a lambda.
         """
-        raw_features = self._extract_features(expr_tree)
-        required_features = sorted([str(f.value) if hasattr(f, 'value') else str(f) for f in raw_features])
+        # _extract_features returns Set[str], sorted() gives us a deduplicated list
+        required_features = sorted(self._extract_features(expr_tree))
 
         getters: List[Callable[[HeuristicContext], Any]] = []
         for name in required_features:
@@ -445,7 +445,12 @@ class GenomeCompiler:
     def _extract_features(self, node: ExpressionNode) -> Set[str]:
         features = set()
         if node.type == 'feature':
-            features.add(node.value)
+            val = node.value
+            # Handle HeuristicKey enum or string values
+            if hasattr(val, 'value'):
+                features.add(str(val.value))  # Enum's string value
+            else:
+                features.add(str(val))
         for child in node.children:
             features.update(self._extract_features(child))
         return features

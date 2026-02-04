@@ -77,7 +77,7 @@ def test_full_evolution_loop():
         retriever = MockRetriever()
         evaluator = MockEvaluator(index_name="test")
         # Fitness: We care about Recall
-        fitness_calc = FitnessCalculator(weights={'Recall@20': 1.0})
+        fitness_calc = FitnessCalculator.from_weights({'Recall@20': 1.0})
 
         # Create RunManager
         run_manager = RunManager(storage)

@@ -98,7 +98,7 @@ def test_map_elites_flow():
 
     retriever = ToyStochasticRetriever()
     evaluator = IntEvaluator(index_name="toy_sim")
-    fitness_calculator = FitnessCalculator(weights={"Recall@10": 1.0})
+    fitness_calculator = FitnessCalculator.from_weights({"Recall@10": 1.0})
 
     # Create RunManager
     run_manager = RunManager(storage)

@@ -144,7 +144,7 @@ def test_evolution_solves_toy_problem():
     evaluator = IntEvaluator(index_name="toy_sim")
 
     # Fitness: Prioritize Recall heavily
-    fitness_calculator = FitnessCalculator(weights={"Recall@10": 1.0})
+    fitness_calculator = FitnessCalculator.from_weights({"Recall@10": 1.0})
 
     # Create RunManager
     run_manager = RunManager(storage)
@@ -203,7 +203,7 @@ def test_resume_simulation():
     # 2. Load
     retriever = ToyStochasticRetriever()
     evaluator = BaseEvaluator(index_name="toy_sim")
-    fitness_calc = FitnessCalculator(weights={"Recall@10": 1.0})
+    fitness_calc = FitnessCalculator.from_weights({"Recall@10": 1.0})
 
     run_manager = RunManager(storage)
 
