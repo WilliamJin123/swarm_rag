@@ -14,6 +14,13 @@ from ..utils import LRUCache, get_device, move_to_device, tensor_like, DEFAULT_S
 # 500 covers 95th percentile (206) with headroom. Nodes with more neighbors get random sampling.
 MAX_NEIGHBORS_PER_NODE = 500
 
+# Default heuristic weights for movement scoring.
+# These control relative importance of semantic similarity, node centrality,
+# and pheromone repulsion when agents choose their next node.
+DEFAULT_SEMANTIC_WEIGHT = 0.3
+DEFAULT_CENTRALITY_WEIGHT = 0.4
+DEFAULT_REPULSION_WEIGHT = 0.3
+
 if TYPE_CHECKING:
     from ..evolution.types.config import WeightTensors, HeuristicFeatureConfig
 
@@ -210,9 +217,9 @@ class SwarmRetriever:
         "top_k": 20,
         # Default "Homogeneous" Strategy (Fallback)
         "movement_strategies": {
-            "semantic": ("semantic_similarity", 0.3),
-            "centrality": ("node_centrality", 0.4),
-            "diversity": ("pheromone_repulsion", 0.3),
+            "semantic": ("semantic_similarity", DEFAULT_SEMANTIC_WEIGHT),
+            "centrality": ("node_centrality", DEFAULT_CENTRALITY_WEIGHT),
+            "diversity": ("pheromone_repulsion", DEFAULT_REPULSION_WEIGHT),
         },
         "ranking_strategies": {
             "visited": ("percentage_visited", 0.2),
@@ -231,12 +238,12 @@ class SwarmRetriever:
         Create default WeightTensors matching _DEFAULT_PARAMS movement weights.
 
         Default features: [semantic_similarity_unnormalized, node_centrality, pheromone_repulsion]
-        Default weights:  [0.3,                              0.4,             0.3]
+        Default weights:  [DEFAULT_SEMANTIC_WEIGHT,           DEFAULT_CENTRALITY_WEIGHT, DEFAULT_REPULSION_WEIGHT]
         """
         # Import here to avoid circular import at module level
         from ..evolution.types.config import WeightTensors
         return WeightTensors(
-            movement_weights=torch.tensor([[0.3, 0.4, 0.3]], dtype=torch.float32, device=device),
+            movement_weights=torch.tensor([[DEFAULT_SEMANTIC_WEIGHT, DEFAULT_CENTRALITY_WEIGHT, DEFAULT_REPULSION_WEIGHT]], dtype=torch.float32, device=device),
             movement_biases=torch.zeros(1, dtype=torch.float32, device=device),
             deposit_weights=torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32, device=device),
             deposit_biases=torch.zeros(1, dtype=torch.float32, device=device),
@@ -433,9 +440,9 @@ class SwarmRetriever:
 
         # Combine with default weights
         total_scores = (
-            0.3 * semantic_scores +
-            0.4 * centrality_scores +
-            0.3 * repulsion_scores
+            DEFAULT_SEMANTIC_WEIGHT * semantic_scores +
+            DEFAULT_CENTRALITY_WEIGHT * centrality_scores +
+            DEFAULT_REPULSION_WEIGHT * repulsion_scores
         )
 
         # Apply mask and clamp
@@ -1237,8 +1244,7 @@ class SwarmRetriever:
         # Handle agents with no neighbors
         agent_has_neighbors = neighbor_mask.any(dim=1)  # (n_agents,)
 
-        # Try FAST PATH: fused neighbor similarity computation (skips unique→fetch→scatter)
-        # compute_neighbor_similarities is defined in VectorStore ABC with default returning None
+        # Try FAST PATH: fused neighbor similarity computation (skips unique->fetch->scatter)
         out_buffer = None
         if self._buffer_pool is not None:
             out_buffer = self._buffer_pool.get_neighbor_scores(n_agents, max_degree)
@@ -1247,11 +1253,11 @@ class SwarmRetriever:
                 query_vec, all_neighbors, neighbor_mask, out=out_buffer
             )
 
-        if fused_sims is not None:
+        if not torch.isinf(fused_sims).all():
             # FAST PATH: fused computation succeeded
             neighbor_sims = fused_sims
         else:
-            # SLOW PATH: original unique→fetch→scatter pipeline
+            # SLOW PATH: original unique->fetch->scatter pipeline
             with prof.section("step.unique"):
                 flat_neighbors_gpu = all_neighbors[neighbor_mask]
                 valid_flat = flat_neighbors_gpu[flat_neighbors_gpu >= 0]
@@ -1486,19 +1492,17 @@ class SwarmRetriever:
         to provide insight into agent decision-making. Used only when
         decision tracking is enabled.
         """
+        _heuristic_captures = [
+            ("semantic_similarity", Heuristics.semantic_similarity),
+            ("node_centrality", Heuristics.node_centrality),
+            ("pheromone_repulsion", Heuristics.pheromone_repulsion),
+        ]
         scores = {}
-        try:
-            scores["semantic_similarity"] = Heuristics.semantic_similarity(ctx)
-        except Exception:
-            pass
-        try:
-            scores["node_centrality"] = Heuristics.node_centrality(ctx)
-        except Exception:
-            pass
-        try:
-            scores["pheromone_repulsion"] = Heuristics.pheromone_repulsion(ctx)
-        except Exception:
-            pass
+        for name, fn in _heuristic_captures:
+            try:
+                scores[name] = fn(ctx)
+            except Exception:
+                logger.debug("Heuristic '%s' failed during score capture", name, exc_info=True)
         return scores
 
     def _ranking_from_history(
@@ -2327,7 +2331,7 @@ class SwarmRetriever:
 
         # Combine with default weights (TODO: make configurable via strategies)
         total_scores = (
-            0.3 * semantic_scores + 0.4 * centrality_scores + 0.3 * repulsion_scores
+            DEFAULT_SEMANTIC_WEIGHT * semantic_scores + DEFAULT_CENTRALITY_WEIGHT * centrality_scores + DEFAULT_REPULSION_WEIGHT * repulsion_scores
         )
 
         # Apply mask

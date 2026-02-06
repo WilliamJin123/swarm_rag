@@ -399,8 +399,13 @@ class TorchVectorStore(VectorStore):
             Similarities tensor (n_agents, max_degree), -inf for invalid neighbors
         """
         if not self._dense or self._dense_embeddings is None:
-            # Fall back to None to signal caller should use old path
-            return None
+            if out is not None:
+                out.fill_(float('-inf'))
+                return out
+            return torch.full(
+                neighbor_ids.shape, float('-inf'),
+                device=query_vec.device, dtype=torch.float32
+            )
 
         n_agents, max_degree = neighbor_ids.shape
         total_positions = n_agents * max_degree

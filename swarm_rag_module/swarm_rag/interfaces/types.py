@@ -8,7 +8,7 @@ a single source of truth for type definitions.
 Usage:
     from swarm_rag.interfaces.shared_types import AgentGroupConfig, StrategyConfig
 """
-from typing import Dict, Any, List, Tuple, Callable, TypedDict, Optional, Literal
+from typing import Dict, Any, List, Tuple, Callable, TypedDict, Optional, Literal, Union
 
 try:
     from typing import NotRequired
@@ -22,22 +22,17 @@ TorchDeviceStr = Literal["cpu", "cuda", "mps"]
 # Strategy Configuration Types
 # =============================================================================
 
-class StrategyConfig(TypedDict, total=False):
-    """
-    Configuration for a named strategy (movement, deposit, or ranking).
+# A single strategy entry: either a string name or a callable, paired with a weight.
+# Examples:
+#   ("semantic_similarity", 0.5)  -- reference by name
+#   (my_custom_fn, 0.2)          -- reference by callable
+StrategyEntry = Tuple[Union[str, Callable[..., Any]], float]
 
-    Strategies can be defined as:
-    1. Tuple of (heuristic_fn_or_name, weight)
-    2. Tuple of (callable, weight) for custom strategies
-
-    Example:
-        movement_strategies: StrategyConfig = {
-            "semantic": ("semantic_similarity", 0.5),
-            "diversity": ("pheromone_repulsion", 0.3),
-            "hub": (my_custom_fn, 0.2),
-        }
-    """
-    pass  # Dict[str, Tuple[Any, float]]
+# A strategy configuration maps logical names to (fn_or_name, weight) tuples.
+# This is the concrete type that was previously typed as Dict[str, Any].
+# Example:
+#   {"semantic": ("semantic_similarity", 0.5), "diversity": ("pheromone_repulsion", 0.3)}
+StrategyConfig = Dict[str, StrategyEntry]
 
 
 class AgentGroupConfig(TypedDict):
@@ -51,19 +46,19 @@ class AgentGroupConfig(TypedDict):
         agent_groups = [
             {
                 "count": 10,
-                "movement_strategies": {"semantic": (semantic_fn, 1.0)},
-                "deposit_strategies": {"flat": (flat_fn, 1.0)},
+                "movement_strategies": {"semantic": ("semantic_fn", 1.0)},
+                "deposit_strategies": {"flat": ("flat_fn", 1.0)},
             },
             {
                 "count": 5,
-                "movement_strategies": {"explorer": (explore_fn, 1.0)},
-                "deposit_strategies": {"hub": (hub_fn, 1.0)},
+                "movement_strategies": {"explorer": ("explore_fn", 1.0)},
+                "deposit_strategies": {"hub": ("hub_fn", 1.0)},
             },
         ]
     """
     count: int  # How many agents of this type?
-    movement_strategies: Dict[str, Any]  # {name: (fn_or_name, weight)}
-    deposit_strategies: Dict[str, Any]   # {name: (fn_or_name, weight)}
+    movement_strategies: StrategyConfig  # {name: (fn_or_name, weight)}
+    deposit_strategies: StrategyConfig   # {name: (fn_or_name, weight)}
 
 
 # =============================================================================
@@ -86,9 +81,9 @@ class RetrievalConfig(TypedDict, total=False):
     top_k: int
 
     # Strategy configurations (used when not using agent_groups)
-    movement_strategies: Dict[str, Any]
-    deposit_strategies: Dict[str, Any]
-    ranking_strategies: Dict[str, Any]
+    movement_strategies: StrategyConfig
+    deposit_strategies: StrategyConfig
+    ranking_strategies: StrategyConfig
 
     # Heterogeneous agent groups (overrides global strategies)
     agent_groups: List[AgentGroupConfig]
@@ -164,5 +159,3 @@ class HeuristicInfo(TypedDict):
     category: str  # 'movement', 'deposit', 'ranking'
     description: str
     is_vectorized: bool
-
-

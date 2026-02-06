@@ -27,10 +27,10 @@ def test_fixed_params_have_default_values():
 def test_evolvable_ranges_are_tightened():
     """Evolvable parameter ranges should be tightened per brainstorm."""
     ranges = SwarmParamRanges()
-    assert ranges.n_agents == (15, 50)
-    assert ranges.steps == (3, 7)
+    assert ranges.n_agents == (10, 30)
+    assert ranges.steps == (3, 5)
     assert ranges.decay == (0.3, 0.8)
-    assert ranges.initial_pool_size == (20, 60)
+    assert ranges.initial_pool_size == (15, 40)
 
 
 def test_create_random_genome_uses_fixed_params():

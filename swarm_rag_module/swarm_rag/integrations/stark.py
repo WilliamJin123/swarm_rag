@@ -263,9 +263,8 @@ class StarkVectorStore(VectorStore):
         neighbor_ids: torch.Tensor,
         neighbor_mask: torch.Tensor,
         out: Optional[torch.Tensor] = None
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor:
         """Fused neighbor similarity computation - delegates to underlying store."""
-        # compute_neighbor_similarities is defined in VectorStore ABC with default returning None
         return self._store.compute_neighbor_similarities(query_vec, neighbor_ids, neighbor_mask, out=out)
 
     @property

@@ -676,87 +676,173 @@ class EvolutionState:
 # Evolution Context (Config + State + Resources)
 # =============================================================================
 
-@dataclass
 class EvolutionContext:
     """
     Shared context passed to all genetic operators (Selection, Crossover, Mutation).
 
     Contains:
     - config: Immutable configuration (EvolutionConfig)
-    - state: Mutable runtime state (EvolutionState) - also exposed as top-level fields
+    - state: Mutable runtime state (EvolutionState) - single source of truth
     - resources: Feature registries and LLM provider
     - device: Computed device string
 
-    Note: For backward compatibility, state fields are also exposed at the top level.
-    New code should prefer accessing state through the state property.
+    Mutable state fields (generation, population, etc.) are exposed as top-level
+    properties for backward compatibility, but delegate to an internal
+    EvolutionState instance to ensure a single source of truth.
     """
-    # === Configuration (immutable) ===
-    config: EvolutionConfig = field(default_factory=EvolutionConfig)
 
-    # === Registry Data (quasi-immutable, set at init) ===
-    available_features: List[str] = field(default_factory=list)
-    expression_features: Dict[str, List[str]] = field(default_factory=dict)
+    def __init__(
+        self,
+        config: EvolutionConfig = None,
+        available_features: List[str] = None,
+        expression_features: Dict[str, List[str]] = None,
+        llm_provider: Any = None,
+        # Mutable state fields (used to initialize _state)
+        generation: int = 0,
+        population: List = None,
+        global_mutation_multiplier: float = 1.0,
+        current_temperature: float = 1.0,
+        stagnation_count: int = 0,
+        archive_fill_rate: float = 0.0,
+        top_fitness_unchanged: int = 0,
+        creative_mutations_this_gen: int = 0,
+        creative_success_count: int = 0,
+        creative_failure_count: int = 0,
+    ):
+        # === Configuration (immutable) ===
+        self.config = config or EvolutionConfig()
 
-    # === LLM Integration ===
-    llm_provider: Optional[Any] = None
+        # === Registry Data (quasi-immutable, set at init) ===
+        self.available_features = available_features or []
+        self.expression_features = expression_features or {}
 
-    # === Mutable State (use state property for clean access) ===
-    # These fields are exposed for backward compatibility
-    generation: int = 0
-    population: List["Genome"] = field(default_factory=list)
-    global_mutation_multiplier: float = 1.0
-    current_temperature: float = 1.0
-    stagnation_count: int = 0
-    archive_fill_rate: float = 0.0
-    top_fitness_unchanged: int = 0
-    creative_mutations_this_gen: int = 0
-    creative_success_count: int = 0
-    creative_failure_count: int = 0
+        # === LLM Integration ===
+        self.llm_provider = llm_provider
 
-    # === Computed Fields ===
-    resolved_device: str = field(default="", init=False)
-    _state: Optional[EvolutionState] = field(default=None, init=False, repr=False)
+        # === Computed Fields ===
+        from ...utils.device import resolve_device
+        self.resolved_device = resolve_device(self.config.storage.device)
 
-    def __post_init__(self):
-        """Initialize computed fields."""
-        if not self.resolved_device:
-            from ...utils.device import resolve_device
-            self.resolved_device = resolve_device(self.config.storage.device)
+        # === Single source of truth for mutable state ===
+        self._state = EvolutionState(
+            generation=generation,
+            population=population if population is not None else [],
+            global_mutation_multiplier=global_mutation_multiplier,
+            current_temperature=current_temperature,
+            stagnation_count=stagnation_count,
+            archive_fill_rate=archive_fill_rate,
+            top_fitness_unchanged=top_fitness_unchanged,
+            creative_mutations_this_gen=creative_mutations_this_gen,
+            creative_success_count=creative_success_count,
+            creative_failure_count=creative_failure_count,
+        )
+
+    # ── Properties delegating to _state ──────────────────────────────────
+
+    @property
+    def generation(self) -> int:
+        return self._state.generation
+
+    @generation.setter
+    def generation(self, value: int):
+        self._state.generation = value
+
+    @property
+    def population(self) -> List["Genome"]:
+        return self._state.population
+
+    @population.setter
+    def population(self, value: List["Genome"]):
+        self._state.population = value
+
+    @property
+    def global_mutation_multiplier(self) -> float:
+        return self._state.global_mutation_multiplier
+
+    @global_mutation_multiplier.setter
+    def global_mutation_multiplier(self, value: float):
+        self._state.global_mutation_multiplier = value
+
+    @property
+    def current_temperature(self) -> float:
+        return self._state.current_temperature
+
+    @current_temperature.setter
+    def current_temperature(self, value: float):
+        self._state.current_temperature = value
+
+    @property
+    def stagnation_count(self) -> int:
+        return self._state.stagnation_count
+
+    @stagnation_count.setter
+    def stagnation_count(self, value: int):
+        self._state.stagnation_count = value
+
+    @property
+    def archive_fill_rate(self) -> float:
+        return self._state.archive_fill_rate
+
+    @archive_fill_rate.setter
+    def archive_fill_rate(self, value: float):
+        self._state.archive_fill_rate = value
+
+    @property
+    def top_fitness_unchanged(self) -> int:
+        return self._state.top_fitness_unchanged
+
+    @top_fitness_unchanged.setter
+    def top_fitness_unchanged(self, value: int):
+        self._state.top_fitness_unchanged = value
+
+    @property
+    def creative_mutations_this_gen(self) -> int:
+        return self._state.creative_mutations_this_gen
+
+    @creative_mutations_this_gen.setter
+    def creative_mutations_this_gen(self, value: int):
+        self._state.creative_mutations_this_gen = value
+
+    @property
+    def creative_success_count(self) -> int:
+        return self._state.creative_success_count
+
+    @creative_success_count.setter
+    def creative_success_count(self, value: int):
+        self._state.creative_success_count = value
+
+    @property
+    def creative_failure_count(self) -> int:
+        return self._state.creative_failure_count
+
+    @creative_failure_count.setter
+    def creative_failure_count(self, value: int):
+        self._state.creative_failure_count = value
+
+    # ── State access ─────────────────────────────────────────────────────
 
     @property
     def state(self) -> EvolutionState:
         """
-        Get a view of the mutable state as an EvolutionState object.
+        Get the mutable state object (single source of truth).
 
-        This provides a clean interface for accessing state fields.
-        Modifications to the returned object affect the context.
+        Modifications to the returned object are immediately visible
+        through the top-level properties and vice versa.
         """
-        if self._state is None:
-            # Create a state view that syncs with context fields
-            self._state = EvolutionState(
-                generation=self.generation,
-                population=self.population,
-                global_mutation_multiplier=self.global_mutation_multiplier,
-                current_temperature=self.current_temperature,
-                stagnation_count=self.stagnation_count,
-                archive_fill_rate=self.archive_fill_rate,
-                top_fitness_unchanged=self.top_fitness_unchanged,
-                creative_mutations_this_gen=self.creative_mutations_this_gen,
-                creative_success_count=self.creative_success_count,
-                creative_failure_count=self.creative_failure_count,
-            )
         return self._state
+
+    # ── Convenience methods ──────────────────────────────────────────────
 
     def reset_creative_gen_count(self):
         """Reset the per-generation creative mutation counter."""
-        self.creative_mutations_this_gen = 0
+        self._state.creative_mutations_this_gen = 0
 
     def can_use_creative_mode(self) -> bool:
         """Check if creative mode can be used this generation."""
         if not self.config.creative_mode.enabled:
             return False
         max_per_gen = self.config.creative_mode.max_creative_per_generation
-        return self.creative_mutations_this_gen < max_per_gen
+        return self._state.creative_mutations_this_gen < max_per_gen
 
     @property
     def device(self) -> str:

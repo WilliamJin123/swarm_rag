@@ -202,7 +202,8 @@ class MemoryProfiler:
             cached = torch.cuda.memory_reserved()
             total = torch.cuda.get_device_properties(0).total_memory
             return allocated, cached, total
-        except Exception:
+        except RuntimeError as e:
+            logger.debug("GPU memory query failed: %s", e)
             return 0, 0, 0
 
     def _get_cpu_memory(self) -> tuple:
@@ -215,7 +216,8 @@ class MemoryProfiler:
             mem = psutil.virtual_memory()
             proc = self._process.memory_info()
             return mem.used, mem.available, mem.percent, proc.rss, proc.vms
-        except Exception:
+        except (OSError, psutil.Error) as e:
+            logger.debug("CPU memory query failed: %s", e)
             return 0, 0, 0.0, 0, 0
 
     def snapshot(self, label: str = "") -> MemorySnapshot:
@@ -368,7 +370,8 @@ def get_gpu_memory_info() -> Dict[str, float]:
             'free_mb': (torch.cuda.get_device_properties(0).total_memory -
                        torch.cuda.memory_allocated()) / (1024 * 1024)
         }
-    except Exception:
+    except RuntimeError as e:
+        logger.debug("GPU memory info query failed: %s", e)
         return {}
 
 

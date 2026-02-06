@@ -3,6 +3,7 @@ from .protocols import RetrievalBackend
 from .evaluable import EvaluableRetriever
 from .types import (
     AgentGroupConfig,
+    StrategyEntry,
     StrategyConfig,
     RetrievalConfig,
     RetrievalMetrics,
@@ -29,6 +30,7 @@ __all__ = [
     "EvaluableRetriever",
     # Shared types
     "AgentGroupConfig",
+    "StrategyEntry",
     "StrategyConfig",
     "RetrievalConfig",
     "RetrievalMetrics",

@@ -6,7 +6,7 @@ import torch
 try:
     import cohere
     from tenacity import retry, stop_after_attempt, wait_exponential
-except:
+except (ImportError, ModuleNotFoundError):
     fail_on_missing_imports(['cohere', 'tenacity'])
 
 class CohereEmbeddingProvider(EmbeddingProvider):
@@ -27,4 +27,3 @@ class CohereEmbeddingProvider(EmbeddingProvider):
             input_type=self.input_type
         )
         return torch.as_tensor(response.embeddings.float_, dtype=torch.float32)
-    

@@ -6,7 +6,7 @@ import torch
 try:
     import google.genai as genai
     from tenacity import retry, stop_after_attempt, wait_exponential
-except:
+except (ImportError, ModuleNotFoundError):
     fail_on_missing_imports(['google-generativeai', 'tenacity'])
 
 class GeminiEmbeddingProvider(EmbeddingProvider):
@@ -21,7 +21,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         return self.embed_query_batch([query])[0]
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=60))
-    def embed_query_batch(self, queries: List[Union[str, Any]]) -> List[torch.Tensor]:
+    def embed_query_batch(self, queries: List[Union[str, Any]]) -> torch.Tensor:
         # Convert to strings if needed
         texts = [str(q) if not isinstance(q, str) else q for q in queries]
 
@@ -33,4 +33,4 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
         # The result.embeddings is a list of dicts with 'values'
         embeddings = [torch.as_tensor(emb['values'], dtype=torch.float32) for emb in result['embeddings']]
-        return embeddings
+        return torch.stack(embeddings)

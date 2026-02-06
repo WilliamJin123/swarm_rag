@@ -1,5 +1,6 @@
-from typing import Dict, Callable, Any, List, Set, Tuple, Optional
+from typing import Dict, Callable, Any, List, Set, Tuple, Optional, Iterator, Union
 from dataclasses import dataclass, field
+import math
 import torch
 import random
 
@@ -41,6 +42,250 @@ class CompiledStrategies:
     deposit: Callable
 
 
+# =============================================================================
+# EvaluationMetrics: Typed replacement for Dict[str, float] (Audit 2.4)
+# =============================================================================
+
+class EvaluationMetrics:
+    """
+    Typed metrics container that replaces Dict[str, float] for genome.metrics.
+
+    Has explicit fields for known metrics while supporting arbitrary extra keys
+    for backward compatibility (e.g., 'variance', 'complexity', 'node_results').
+
+    Supports full dict-like access: [], .get(), .items(), .keys(), .values(),
+    iteration, len(), bool(), and copy(). This ensures all existing code that
+    treats genome.metrics as a dict continues to work.
+    """
+
+    __slots__ = (
+        'hit_at_1', 'hit_at_5', 'hit_at_10', 'hit_at_20',
+        'recall_at_1', 'recall_at_5', 'recall_at_10', 'recall_at_20',
+        'mrr', 'latency', 'diversity_node_types', 'diversity_count',
+        '_extra',
+    )
+
+    _KEY_TO_ATTR = {
+        'Hit@1': 'hit_at_1', 'Hit@5': 'hit_at_5',
+        'Hit@10': 'hit_at_10', 'Hit@20': 'hit_at_20',
+        'Recall@1': 'recall_at_1', 'Recall@5': 'recall_at_5',
+        'Recall@10': 'recall_at_10', 'Recall@20': 'recall_at_20',
+        'MRR': 'mrr', 'latency': 'latency',
+        'Diversity_Node_Types': 'diversity_node_types',
+        'Diversity_Count': 'diversity_count',
+    }
+
+    _ATTR_TO_KEY = {v: k for k, v in _KEY_TO_ATTR.items()}
+
+    def __init__(self, data: Dict[str, Any] = None, **kwargs):
+        self.hit_at_1: float = 0.0
+        self.hit_at_5: float = 0.0
+        self.hit_at_10: float = 0.0
+        self.hit_at_20: float = 0.0
+        self.recall_at_1: float = 0.0
+        self.recall_at_5: float = 0.0
+        self.recall_at_10: float = 0.0
+        self.recall_at_20: float = 0.0
+        self.mrr: float = 0.0
+        self.latency: float = 0.0
+        self.diversity_node_types: float = 0.0
+        self.diversity_count: float = 0.0
+        self._extra: Dict[str, Any] = {}
+        if data:
+            self.update(data)
+        if kwargs:
+            self.update(kwargs)
+
+    def update(self, data: Dict[str, Any]) -> None:
+        for key, value in data.items():
+            attr = self._KEY_TO_ATTR.get(key)
+            if attr is not None:
+                object.__setattr__(self, attr, value)
+            else:
+                self._extra[key] = value
+
+    def __getitem__(self, key: str) -> Any:
+        attr = self._KEY_TO_ATTR.get(key)
+        if attr is not None:
+            return getattr(self, attr)
+        if key in self._extra:
+            return self._extra[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        attr = self._KEY_TO_ATTR.get(key)
+        if attr is not None:
+            object.__setattr__(self, attr, value)
+        else:
+            self._extra[key] = value
+
+    def __contains__(self, key: str) -> bool:
+        attr = self._KEY_TO_ATTR.get(key)
+        if attr is not None:
+            return True
+        return key in self._extra
+
+    def __delitem__(self, key: str) -> None:
+        if key in self._extra:
+            del self._extra[key]
+        elif key in self._KEY_TO_ATTR:
+            object.__setattr__(self, self._KEY_TO_ATTR[key], 0.0)
+        else:
+            raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def keys(self) -> List[str]:
+        result = []
+        for dict_key, attr in self._KEY_TO_ATTR.items():
+            if getattr(self, attr) != 0.0:
+                result.append(dict_key)
+        result.extend(self._extra.keys())
+        return result
+
+    def values(self) -> List[Any]:
+        result = []
+        for dict_key, attr in self._KEY_TO_ATTR.items():
+            if getattr(self, attr) != 0.0:
+                result.append(getattr(self, attr))
+        result.extend(self._extra.values())
+        return result
+
+    def items(self) -> List[Tuple[str, Any]]:
+        result = []
+        for dict_key, attr in self._KEY_TO_ATTR.items():
+            val = getattr(self, attr)
+            if val != 0.0:
+                result.append((dict_key, val))
+        result.extend(self._extra.items())
+        return result
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.keys())
+
+    def __len__(self) -> int:
+        count = sum(1 for attr in self._KEY_TO_ATTR.values() if getattr(self, attr) != 0.0)
+        return count + len(self._extra)
+
+    def __bool__(self) -> bool:
+        for attr in self._KEY_TO_ATTR.values():
+            if getattr(self, attr) != 0.0:
+                return True
+        return bool(self._extra)
+
+    def clear(self) -> None:
+        for attr in self._KEY_TO_ATTR.values():
+            object.__setattr__(self, attr, 0.0)
+        self._extra.clear()
+
+    def copy(self) -> 'EvaluationMetrics':
+        new = EvaluationMetrics()
+        for attr in self._KEY_TO_ATTR.values():
+            object.__setattr__(new, attr, getattr(self, attr))
+        new._extra = self._extra.copy()
+        return new
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = {}
+        for dict_key, attr in self._KEY_TO_ATTR.items():
+            val = getattr(self, attr)
+            if val != 0.0:
+                result[dict_key] = val
+        result.update(self._extra)
+        return result
+
+    def __repr__(self) -> str:
+        return f"EvaluationMetrics({self.to_dict()})"
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, EvaluationMetrics):
+            return self.to_dict() == other.to_dict()
+        if isinstance(other, dict):
+            return self.to_dict() == other
+        return NotImplemented
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'EvaluationMetrics':
+        return cls(data=data)
+
+
+def _coerce_metrics(value):
+    """Coerce a value to EvaluationMetrics. Accepts dict, EvaluationMetrics, or None."""
+    if isinstance(value, EvaluationMetrics):
+        return value
+    if isinstance(value, dict):
+        return EvaluationMetrics(data=value)
+    if value is None:
+        return EvaluationMetrics()
+    raise TypeError(f"Cannot coerce {type(value).__name__} to EvaluationMetrics")
+
+
+# =============================================================================
+# CompiledGenome: Typed return from GenomeCompiler.compile() (Audit 2.1)
+# =============================================================================
+
+@dataclass
+class CompiledGenome:
+    """
+    Typed result from GenomeCompiler.compile().
+
+    Replaces the untyped Dict[str, Any] return value with explicit fields.
+    Supports dict-like access for backward compatibility.
+    """
+    agent_groups: List[AgentGroupConfig]
+    ranking_strategies: Dict[str, Tuple[Callable, float]]
+    params: SwarmParams
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = dict(self.params)
+        result['agent_groups'] = self.agent_groups
+        result['ranking_strategies'] = self.ranking_strategies
+        return result
+
+    def __getitem__(self, key: str) -> Any:
+        if key == 'agent_groups':
+            return self.agent_groups
+        if key == 'ranking_strategies':
+            return self.ranking_strategies
+        if key in self.params:
+            return self.params[key]
+        raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        return key in ('agent_groups', 'ranking_strategies') or key in self.params
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def keys(self):
+        return list(self.params.keys()) + ['agent_groups', 'ranking_strategies']
+
+    def values(self):
+        return list(self.params.values()) + [self.agent_groups, self.ranking_strategies]
+
+    def items(self):
+        result = list(self.params.items())
+        result.append(('agent_groups', self.agent_groups))
+        result.append(('ranking_strategies', self.ranking_strategies))
+        return result
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __len__(self):
+        return len(self.params) + 2
+
+    def copy(self) -> Dict[str, Any]:
+        return self.to_dict()
+
+
 # Re-export DEFAULT_PARAMS for backward compatibility
 # The single source of truth is in utils.constants.DEFAULT_SWARM_PARAMS
 DEFAULT_PARAMS: SwarmParams = DEFAULT_SWARM_PARAMS
@@ -78,7 +323,9 @@ class Genome:
     fitness: FitnessResult = field(default_factory=lambda: FitnessResult())
 
     # Recall@20, Hit@1, Hit@5, MRR, etc.
-    metrics: Dict[str, float] = field(default_factory=dict)
+    # Now uses EvaluationMetrics (dict-compatible) instead of plain Dict[str, float].
+    # Assignment from a plain dict is auto-coerced via __setattr__.
+    metrics: EvaluationMetrics = field(default_factory=EvaluationMetrics)
     latency: float = 0.0
     evaluated: bool = False
 
@@ -86,7 +333,29 @@ class Genome:
 
     def __post_init__(self):
         """Ensure consistent state after initialization."""
+        # Coerce metrics from dict to EvaluationMetrics if needed
+        if not isinstance(self.metrics, EvaluationMetrics):
+            object.__setattr__(self, 'metrics', _coerce_metrics(self.metrics))
         self.normalize_ratios()
+
+    def __setattr__(self, name: str, value) -> None:
+        """
+        Custom attribute setter for two purposes:
+
+        1. Auto-coerce plain dicts assigned to 'metrics' into EvaluationMetrics (Audit 2.4).
+        2. Auto-invalidate _compiled_cache when 'strategies' is reassigned (Audit 3.3).
+        """
+        if name == 'metrics' and not isinstance(value, EvaluationMetrics):
+            value = _coerce_metrics(value)
+        if name == 'strategies':
+            # Invalidate compiled cache when strategies are replaced
+            try:
+                cache = object.__getattribute__(self, '_compiled_cache')
+                if isinstance(cache, dict) and cache:
+                    cache.clear()
+            except AttributeError:
+                pass  # During __init__, _compiled_cache may not exist yet
+        object.__setattr__(self, name, value)
 
     def __hash__(self):
         """Allows Genome to be used in sets or as dict keys."""
@@ -114,21 +383,29 @@ class Genome:
         Restores state and re-initializes the empty cache.
         Handles backward compatibility for older checkpoints.
         """
-        self.__dict__.update(state)
+        # Use object.__setattr__ to bypass our custom __setattr__ during restore
+        for key, val in state.items():
+            object.__setattr__(self, key, val)
+
         # Ensure cache exists
-        if '_compiled_cache' not in self.__dict__:
-            self._compiled_cache = {}
+        if '_compiled_cache' not in state:
+            object.__setattr__(self, '_compiled_cache', {})
 
         # Backward compatibility: set defaults for new fields
-        if 'mode' not in self.__dict__:
-            self.mode = GenomeMode.EXPRESSION_TREE
+        if 'mode' not in state:
+            object.__setattr__(self, 'mode', GenomeMode.EXPRESSION_TREE)
         elif isinstance(self.mode, str):
-            # Convert legacy string modes to enum
-            self.mode = GenomeMode(self.mode)
-        if 'weight_tensors' not in self.__dict__:
-            self.weight_tensors = None
-        if 'mutation_sigmas' not in self.__dict__:
-            self.mutation_sigmas = MutationSigmas()
+            object.__setattr__(self, 'mode', GenomeMode(self.mode))
+        if 'weight_tensors' not in state:
+            object.__setattr__(self, 'weight_tensors', None)
+        if 'mutation_sigmas' not in state:
+            object.__setattr__(self, 'mutation_sigmas', MutationSigmas())
+
+        # Coerce legacy dict metrics to EvaluationMetrics
+        if 'metrics' in state and not isinstance(self.metrics, EvaluationMetrics):
+            object.__setattr__(self, 'metrics', _coerce_metrics(self.metrics))
+        elif 'metrics' not in state:
+            object.__setattr__(self, 'metrics', EvaluationMetrics())
 
         self.normalize_ratios()
 
@@ -164,6 +441,31 @@ class Genome:
     def clear_cache(self):
         """Must be called after any mutation."""
         self._compiled_cache.clear()
+
+    def set_evaluation_result(
+        self,
+        fitness: FitnessResult,
+        metrics: Union[Dict[str, float], 'EvaluationMetrics'],
+        latency: float = 0.0,
+        evaluated: bool = True,
+    ) -> None:
+        """
+        Atomically set all evaluation results at once (Audit 3.1).
+
+        Instead of setting genome.fitness, genome.metrics, genome.latency,
+        and genome.evaluated individually (risking partial updates), this
+        method sets them all in one call.
+
+        Args:
+            fitness: The computed FitnessResult.
+            metrics: Evaluation metrics (dict or EvaluationMetrics).
+            latency: Average per-query latency in seconds.
+            evaluated: Whether the genome has been fully evaluated (default True).
+        """
+        self.fitness = fitness
+        self.metrics = metrics  # Auto-coerced by __setattr__
+        self.latency = latency
+        self.evaluated = evaluated
 
     def get_kwargs(self) -> Dict[str, Any]:
         """
@@ -238,8 +540,111 @@ class Genome:
         if 'mutation_sigmas' in d and hasattr(d['mutation_sigmas'], 'to_dict'):
             d['mutation_sigmas'] = d['mutation_sigmas'].to_dict()
 
+        # Serialize EvaluationMetrics to plain dict
+        if 'metrics' in d and isinstance(d['metrics'], EvaluationMetrics):
+            d['metrics'] = d['metrics'].to_dict()
+
         return d
     
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Genome':
+        """
+        Deserialize a Genome from a plain Python dictionary (Audit 2.5).
+
+        Symmetric with to_dict(). Handles enum deserialization and nested
+        object reconstruction consistently.
+
+        Args:
+            data: Dictionary as produced by to_dict() or JSON deserialization.
+
+        Returns:
+            A fully reconstructed Genome instance.
+        """
+        d = data.copy()
+
+        # --- Reconstruct enums ---
+        mode_val = d.pop('mode', GenomeMode.EXPRESSION_TREE.value)
+        if isinstance(mode_val, str):
+            mode = GenomeMode(mode_val)
+        elif isinstance(mode_val, GenomeMode):
+            mode = mode_val
+        else:
+            mode = GenomeMode.EXPRESSION_TREE
+
+        # --- Reconstruct nested objects ---
+
+        # Strategies: dict of ExpressionNode dicts -> ExpressionNode objects
+        strategies_data = d.pop('strategies', {})
+        strategies = {}
+        if strategies_data:
+            for key, node_data in strategies_data.items():
+                if isinstance(node_data, dict):
+                    strategies[key] = _expression_node_from_dict(node_data)
+                elif isinstance(node_data, ExpressionNode):
+                    strategies[key] = node_data
+
+        # Fitness
+        fitness_data = d.pop('fitness', None)
+        if fitness_data is not None:
+            if isinstance(fitness_data, dict):
+                fitness = FitnessResult.from_dict(fitness_data)
+            elif isinstance(fitness_data, FitnessResult):
+                fitness = fitness_data
+            else:
+                fitness = FitnessResult()
+        else:
+            fitness = FitnessResult()
+
+        # Weight tensors
+        wt_data = d.pop('weight_tensors', None)
+        if wt_data is not None:
+            if isinstance(wt_data, dict):
+                weight_tensors = WeightTensors.from_dict(wt_data)
+            elif isinstance(wt_data, WeightTensors):
+                weight_tensors = wt_data
+            else:
+                weight_tensors = None
+        else:
+            weight_tensors = None
+
+        # Mutation sigmas
+        ms_data = d.pop('mutation_sigmas', None)
+        if ms_data is not None:
+            if isinstance(ms_data, dict):
+                mutation_sigmas = MutationSigmas.from_dict(ms_data)
+            elif isinstance(ms_data, MutationSigmas):
+                mutation_sigmas = ms_data
+            else:
+                mutation_sigmas = MutationSigmas()
+        else:
+            mutation_sigmas = MutationSigmas()
+
+        # Metrics
+        metrics_data = d.pop('metrics', {})
+
+        # --- Extract simple fields ---
+        genome_id = d.pop('id', 'unknown')
+        mutation_rate = d.pop('mutation_rate', 0.1)
+        params = d.pop('params', DEFAULT_PARAMS.copy())
+        group_ratios = d.pop('group_ratios', {})
+        latency_val = d.pop('latency', 0.0)
+        evaluated = d.pop('evaluated', False)
+
+        return cls(
+            id=genome_id,
+            mutation_rate=mutation_rate,
+            mode=mode,
+            params=params,
+            group_ratios=group_ratios,
+            strategies=strategies,
+            weight_tensors=weight_tensors,
+            mutation_sigmas=mutation_sigmas,
+            fitness=fitness,
+            metrics=metrics_data,
+            latency=latency_val,
+            evaluated=evaluated,
+        )
+
     def pretty_print(self, printer: Callable[[str], Any] = print):
         """
         Prints a human-readable summary of the genome using the provided printer.
@@ -318,15 +723,37 @@ class Genome:
 
         printer(border)
 
+def _expression_node_from_dict(data: Dict[str, Any]) -> ExpressionNode:
+    """
+    Recursively reconstruct an ExpressionNode from a dictionary.
+
+    This is the deserialization counterpart of ExpressionNode.to_dict().
+    Defined here to avoid modifying the expressions module.
+    """
+    children = [
+        _expression_node_from_dict(child_data)
+        for child_data in data.get('children', [])
+    ]
+    return ExpressionNode(
+        type=data['type'],
+        value=data['value'],
+        children=children,
+    )
+
+
 class GenomeCompiler:
     """
     Dynamically compiles a Genome's symbolic trees into executable logic.
     Decoupled from specific strategy names (works for 'movement', 'ranking', or anything new).
     """
 
-    def compile(self, genome: Genome) -> Dict[str, Any]:
+    def compile(self, genome: Genome) -> CompiledGenome:
         """
         Converts a Genome into the specific kwargs required by SwarmRetriever.
+
+        Returns:
+            CompiledGenome with typed fields (also supports dict-like access
+            for backward compatibility).
         """
         valid_suffixes = {'movement', 'deposit', 'ranking'}
         for key in genome.strategies:
@@ -393,12 +820,12 @@ class GenomeCompiler:
                 }
                 agent_groups.append(group_config)
 
-        # Return keyword arguments for retrieve()
-        return {
-            **genome.params, 
-            "agent_groups": agent_groups,
-            "ranking_strategies": ranking_strategies,
-        }
+        # Return typed CompiledGenome (backward compatible with dict access)
+        return CompiledGenome(
+            agent_groups=agent_groups,
+            ranking_strategies=ranking_strategies,
+            params=dict(genome.params),
+        )
 
 
 

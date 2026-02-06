@@ -96,8 +96,9 @@ class AsyncCheckpointWriter:
             # Primitive types or immutable objects - use copy.deepcopy for safety
             try:
                 return copy.deepcopy(obj)
-            except Exception:
+            except Exception as e:
                 # If deepcopy fails, return as-is (primitives, etc.)
+                logger.warning("deepcopy failed for %s, using shallow reference: %s", type(obj).__name__, e)
                 return obj
 
     def _writer_loop(self):

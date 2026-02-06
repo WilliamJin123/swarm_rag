@@ -8,6 +8,9 @@ from typing import Any, ClassVar, Dict, Generic, overload, ParamSpec, TypeVar, c
 
 from .enums import GeneticKey, HeuristicKey
 
+import logging
+logger = logging.getLogger(__name__)
+
 P = ParamSpec("P")                     # Parameter types of the registered callables
 R = TypeVar("R")                       # Return type of the registered callables
 K = TypeVar("K", bound=Enum)           # Enum used as key (HeuristicKey / GeneticKey)
@@ -106,8 +109,8 @@ class _BaseRegistry(Generic[K, P, R]):
             try:
                 # Example: HeuristicKey('semantic_similarity')
                 return cls._enum_type(key)   # type: ignore[call-arg]
-            except Exception:
-                pass                     # not a built‑in enum value → keep the string
+            except (ValueError, KeyError) as e:
+                logger.debug("Enum parse for %s with key %r fell back to string: %s", cls._enum_type.__name__, key, e)
 
         return key
 

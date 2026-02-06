@@ -129,7 +129,8 @@ def get_gpu_memory_info() -> dict:
             'cached': torch.cuda.memory_reserved(),
             'total': torch.cuda.get_device_properties(0).total_memory,
         }
-    except Exception:
+    except RuntimeError as e:
+        logger.debug("GPU memory info query failed: %s", e)
         return {}
 
 

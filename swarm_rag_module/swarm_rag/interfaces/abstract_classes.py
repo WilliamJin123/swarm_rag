@@ -87,24 +87,21 @@ class VectorStore(ABC):
         neighbor_ids: torch.Tensor,
         neighbor_mask: torch.Tensor,
         out: Optional[torch.Tensor] = None
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor:
         """
         Fused neighbor similarity computation (optional optimization).
 
-        Default implementation returns None, signaling caller to use fallback.
+        Default implementation returns -inf tensor, signaling no fused computation available.
         Implementations may override for fused GPU computation that avoids
-        the unique→fetch→scatter pattern.
-
-        Args:
-            query_vec: Query embedding vector
-            neighbor_ids: Tensor of neighbor IDs
-            neighbor_mask: Boolean mask for valid neighbors
-            out: Optional pre-allocated output buffer
-
-        Returns:
-            Similarity scores tensor, or None if not supported
+        the unique->fetch->scatter pattern.
         """
-        return None
+        if out is not None:
+            out.fill_(float('-inf'))
+            return out
+        return torch.full(
+            neighbor_ids.shape, float('-inf'),
+            device=query_vec.device, dtype=torch.float32
+        )
 
 
 class GraphStore(ABC):

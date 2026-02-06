@@ -18,7 +18,7 @@ from .config import (
     GenomeMode,
     DEFAULT_CONFIG,
 )
-from .genome import Genome, SwarmParams, DEFAULT_PARAMS
+from .genome import Genome, SwarmParams, DEFAULT_PARAMS, EvaluationMetrics, CompiledGenome
 from .expressions import ExpressionNode, ExpressionEvolution
 from .fitness_results import FitnessResult
 
@@ -41,6 +41,8 @@ __all__ = [
     "Genome",
     "SwarmParams",
     "DEFAULT_PARAMS",
+    "EvaluationMetrics",
+    "CompiledGenome",
     # Expression types
     "ExpressionNode",
     "ExpressionEvolution",
