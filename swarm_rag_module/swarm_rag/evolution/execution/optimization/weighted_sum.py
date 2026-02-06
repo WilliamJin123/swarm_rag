@@ -28,7 +28,7 @@ from ...types.config import (
 from ...types.fitness_results import FitnessResult
 from ....core.heuristics import HeuristicContext, HeuristicRegistry
 from ....interfaces.types import AgentGroupConfig
-from ...seed_configs import (
+from ...types.seeds.seed_configs import (
     SEED_CONFIGS,
     BASELINE_HYPERPARAMS,
     BASELINE_WEIGHTS,

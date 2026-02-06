@@ -12,7 +12,7 @@ from ...types.config import EvolutionContext
 from ...types.expressions import ExpressionEvolution, ExpressionNode
 from ....interfaces.enums import GeneticKey
 from ...types.genome import Genome
-from ...seed_genomes import get_all_seed_genomes
+from ...types.seeds.seed_genomes import get_all_seed_genomes
 
 from .registry import GeneticRegistry
 from .mutations import _randomize_all_params, _randomize_ratios

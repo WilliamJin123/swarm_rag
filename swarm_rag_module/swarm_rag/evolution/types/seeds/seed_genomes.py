@@ -10,8 +10,8 @@ and converts them to expression tree format for expression_tree mode.
 """
 from typing import Dict, Any, List
 
-from .types.genome import Genome, FIXED_PARAMS
-from .types.expressions import ExpressionNode
+from ..genome import Genome, FIXED_PARAMS
+from ..expressions import ExpressionNode
 from .seed_configs import (
     SEED_CONFIGS,
     get_all_expression_tree_configs,

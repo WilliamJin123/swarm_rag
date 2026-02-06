@@ -15,7 +15,7 @@ from swarm_rag.evolution.types.config import (
     SwarmParamRanges,
 )
 from swarm_rag.evolution.execution.evaluator import DEFAULT_EARLY_EXIT_THRESHOLD
-from swarm_rag.evolution.seed_genomes import SEED_GENOMES, get_all_seed_genomes
+from swarm_rag.evolution.types.seeds.seed_genomes import SEED_GENOMES, get_all_seed_genomes
 from swarm_rag.evolution.execution.genetics.focused_mutation import (
     identify_weakest_metric,
     get_mutation_focus,

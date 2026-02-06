@@ -69,7 +69,7 @@ SEED_CONFIGS: List[Dict[str, Any]] = [
     {
         "name": "precision_semantic",
         "notes": "High semantic similarity for precise top-1 results",
-        "hyperparams": {"n_agents": 20, "steps": 6, "decay": 0.6},
+        "hyperparams": {"n_agents": 20, "steps": 5, "decay": 0.6},
         "weights": {
             "movement_weights": {
                 "semantic_similarity_unnormalized": 0.60,
@@ -142,7 +142,7 @@ SEED_CONFIGS: List[Dict[str, Any]] = [
     {
         "name": "recall_explorer",
         "notes": "High exploration - maximize coverage",
-        "hyperparams": {"n_agents": 40, "steps": 4, "decay": 0.4, "initial_pool_size": 50},
+        "hyperparams": {"n_agents": 30, "steps": 4, "decay": 0.4, "initial_pool_size": 40},
         "weights": {
             "movement_weights": {
                 "semantic_similarity_unnormalized": 0.25,
@@ -167,7 +167,7 @@ SEED_CONFIGS: List[Dict[str, Any]] = [
     {
         "name": "recall_wide_swarm",
         "notes": "Wide swarm - many agents, shallow depth",
-        "hyperparams": {"n_agents": 50, "steps": 3, "decay": 0.35, "initial_pool_size": 60},
+        "hyperparams": {"n_agents": 30, "steps": 3, "decay": 0.35, "initial_pool_size": 40},
         "weights": {
             "movement_weights": {
                 "semantic_similarity_unnormalized": 0.30,
@@ -192,7 +192,7 @@ SEED_CONFIGS: List[Dict[str, Any]] = [
     {
         "name": "recall_repulsion",
         "notes": "Repulsion-driven - spread agents across graph",
-        "hyperparams": {"n_agents": 35, "steps": 4, "decay": 0.3, "initial_pool_size": 45},
+        "hyperparams": {"n_agents": 30, "steps": 4, "decay": 0.3, "initial_pool_size": 40},
         "weights": {
             "movement_weights": {
                 "semantic_similarity_unnormalized": 0.30,
@@ -219,7 +219,7 @@ SEED_CONFIGS: List[Dict[str, Any]] = [
     {
         "name": "balanced_deep",
         "notes": "Deep search - fewer agents, more steps",
-        "hyperparams": {"n_agents": 18, "steps": 7, "decay": 0.7, "initial_pool_size": 25},
+        "hyperparams": {"n_agents": 18, "steps": 5, "decay": 0.7, "initial_pool_size": 25},
         "weights": {
             "movement_weights": {
                 "semantic_similarity_unnormalized": 0.50,
@@ -265,7 +265,7 @@ SEED_CONFIGS: List[Dict[str, Any]] = [
     {
         "name": "balanced_hybrid",
         "notes": "Hybrid precision-recall",
-        "hyperparams": {"n_agents": 32, "steps": 5, "decay": 0.45, "initial_pool_size": 40},
+        "hyperparams": {"n_agents": 30, "steps": 5, "decay": 0.45, "initial_pool_size": 40},
         "weights": {
             "movement_weights": {
                 "semantic_similarity_unnormalized": 0.35,

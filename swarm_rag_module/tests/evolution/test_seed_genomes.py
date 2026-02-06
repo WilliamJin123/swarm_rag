@@ -1,7 +1,7 @@
 # tests/evolution/test_seed_genomes.py
 """Tests for warm-start seed genomes."""
 import pytest
-from swarm_rag.evolution.seed_genomes import SEED_GENOMES, create_seed_genome
+from swarm_rag.evolution.types.seeds.seed_genomes import SEED_GENOMES, create_seed_genome
 
 
 def test_seed_genomes_exist():
