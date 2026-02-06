@@ -103,6 +103,15 @@ from .creative_synthesizer import (
     MAX_EXPRESSION_COMPLEXITY,
 )
 
+# Protocols and null implementations
+from .protocols import (
+    JournalProtocol,
+    TrackerProtocol,
+    MutatorProtocol,
+    NullJournal,
+    NullTracker,
+)
+
 # Utils
 from .parsers import ExpressionParser
 from .utils import genome_to_json_context
@@ -172,6 +181,12 @@ __all__ = [
     "ALLOWED_OPERATORS",
     "ALLOWED_FUNCTIONS",
     "MAX_EXPRESSION_COMPLEXITY",
+    # Protocols
+    "JournalProtocol",
+    "TrackerProtocol",
+    "MutatorProtocol",
+    "NullJournal",
+    "NullTracker",
     # Utils
     "ExpressionParser",
     "genome_to_json_context",

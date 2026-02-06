@@ -13,9 +13,9 @@ The key insight is that different parameters affect different metrics:
 import random
 from typing import Dict, List, Any, Optional
 
-from .types.genome import Genome, FIXED_PARAMS
-from .types.fitness_results import FitnessResult
-from .types.config import EvolutionContext, SwarmParamRanges
+from ...types.genome import Genome, FIXED_PARAMS
+from ...types.fitness_results import FitnessResult
+from ...types.config import EvolutionContext, SwarmParamRanges
 
 
 # =============================================================================

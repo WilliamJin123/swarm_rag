@@ -18,7 +18,7 @@ Usage:
 """
 from typing import Optional, Any, TYPE_CHECKING
 
-from ..protocols import NullJournal, NullTracker
+from .protocols import NullJournal, NullTracker
 
 if TYPE_CHECKING:
     from ..types.config import LLMConfig, CreativeModeConfig

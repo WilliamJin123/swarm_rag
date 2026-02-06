@@ -1,7 +1,7 @@
 # tests/evolution/test_focused_mutation.py
 """Tests for focused metric-aware mutation."""
 import pytest
-from swarm_rag.evolution.focused_mutation import (
+from swarm_rag.evolution.execution.genetics.focused_mutation import (
     identify_weakest_metric,
     get_mutation_focus,
     METRIC_TO_PARAM_MAPPING,

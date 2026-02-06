@@ -13,7 +13,7 @@ from ...types.config import EvolutionContext, SwarmParamRanges
 from ...types.expressions import ExpressionEvolution, ExpressionNode
 from ....interfaces.enums import GeneticKey
 from ...types.genome import Genome, DEFAULT_PARAMS, SwarmParams, FIXED_PARAMS
-from ...focused_mutation import apply_focused_mutation
+from .focused_mutation import apply_focused_mutation
 
 from .registry import GeneticRegistry
 
