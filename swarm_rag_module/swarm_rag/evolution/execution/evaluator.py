@@ -20,8 +20,10 @@ from dataclasses import dataclass, field
 
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
+from ...utils.device import get_device
 from .memory_guard import MemoryGuard, MemoryThresholdExceeded
 from .fitness import FitnessCalculator
+from .weighted_sum import WeightedSumCompiler
 from ..types.genome import GenomeCompiler, Genome
 from ..types.config import HeuristicFeatureConfig, GenomeMode
 from .shared_precompute import (
@@ -30,17 +32,35 @@ from .shared_precompute import (
     get_unique_pool_sizes,
     BatchedRetrievalResults
 )
-from .fitness_cache import FitnessCache, CacheStats
-from .embedding_cache import EmbeddingCacheProvider
+from .cache_coordinator import CacheCoordinator
+from .early_exit import EarlyExitPolicy
+from .early_exit import DEFAULT_EARLY_EXIT_THRESHOLD  # noqa: F811 - re-exported for backward compat
 
 
 logger = logging.getLogger(__name__)
 
+# Default number of concurrent genome evaluations when not provided by config.
+# In production, ResourceConfig._get_optimal_concurrency() computes this
+# dynamically from CPU core count; this fallback is for standalone use.
+DEFAULT_CONCURRENT_EVALUATIONS: int = 4
 
-# Default early exit threshold at quarter checkpoint (25% of queries)
-# DEPRECATED: Use ResourceConfig.early_exit_threshold instead for new code.
-# This constant is kept for backward compatibility with existing tests and imports.
-DEFAULT_EARLY_EXIT_THRESHOLD: float = 0.30
+# Maximum number of retrieved items tracked per query for metric computation.
+MAX_K_FOR_METRICS: int = 20
+
+# Minimum number of queries before switching from sequential to batch metric
+# computation.  Below this threshold, the sequential path is used so that
+# mock evaluators in tests work correctly.
+BATCH_METRIC_THRESHOLD: int = 50
+
+# Number of decision-tracking probe queries in full-evaluation mode.
+DECISION_PROBE_SIZE: int = 20
+
+# Buffer-pool headroom multiplier applied to the largest genome's pool / agent
+# sizes when pre-allocating retrieval buffers.
+BUFFER_POOL_HEADROOM: int = 2
+
+# Bytes-to-megabytes divisor used when reporting GPU memory usage.
+_BYTES_PER_MB: int = 1024 * 1024
 
 
 @dataclass
@@ -55,22 +75,22 @@ class EvaluationStats:
 @dataclass
 class EvaluatorConfig:
     """
-    Configuration for PopulationEvaluator.
+    Configuration for PopulationEvaluator (non-dependency settings).
 
-    Groups related parameters for cleaner initialization.
+    Groups tuning knobs and feature flags for cleaner initialization.
+    Dependencies (retriever, evaluator, fitness_calc) are passed separately
+    to PopulationEvaluator.__init__ since they are required collaborators,
+    not configuration.
+
     Use PopulationEvaluatorBuilder for fluent construction.
     """
-    # Required dependencies (no defaults)
-    retriever: Optional[RetrievalBackend] = None
-    evaluator: Optional[Evaluator] = None
-    fitness_calc: Optional[FitnessCalculator] = None
 
     # Data
     queries: List[str] = field(default_factory=list)
     ground_truth: List[List[Any]] = field(default_factory=list)
 
     # Concurrency
-    concurrent_evaluations: int = 4
+    concurrent_evaluations: int = DEFAULT_CONCURRENT_EVALUATIONS
     max_workers_per_retrieval: int = 1
 
     # Decision tracking
@@ -114,20 +134,23 @@ class PopulationEvaluatorBuilder:
     def __init__(self):
         """Initialize builder with default configuration."""
         self._config = EvaluatorConfig()
+        self._retriever: Optional[RetrievalBackend] = None
+        self._evaluator: Optional[Evaluator] = None
+        self._fitness_calc: Optional[FitnessCalculator] = None
 
     def with_retriever(self, retriever: RetrievalBackend) -> "PopulationEvaluatorBuilder":
         """Set the retrieval backend."""
-        self._config.retriever = retriever
+        self._retriever = retriever
         return self
 
     def with_evaluator(self, evaluator: Evaluator) -> "PopulationEvaluatorBuilder":
         """Set the metrics evaluator."""
-        self._config.evaluator = evaluator
+        self._evaluator = evaluator
         return self
 
     def with_fitness_calc(self, fitness_calc: FitnessCalculator) -> "PopulationEvaluatorBuilder":
         """Set the fitness calculator."""
-        self._config.fitness_calc = fitness_calc
+        self._fitness_calc = fitness_calc
         return self
 
     def with_queries(
@@ -139,7 +162,8 @@ class PopulationEvaluatorBuilder:
         return self
 
     def with_concurrency(
-        self, concurrent_evaluations: int = 4, max_workers_per_retrieval: int = 1
+        self, concurrent_evaluations: int = DEFAULT_CONCURRENT_EVALUATIONS,
+        max_workers_per_retrieval: int = 1
     ) -> "PopulationEvaluatorBuilder":
         """Set concurrency parameters."""
         self._config.concurrent_evaluations = concurrent_evaluations
@@ -202,31 +226,18 @@ class PopulationEvaluatorBuilder:
         Raises:
             ValueError: If required dependencies are not set.
         """
-        if self._config.retriever is None:
+        if self._retriever is None:
             raise ValueError("retriever is required - use with_retriever()")
-        if self._config.evaluator is None:
+        if self._evaluator is None:
             raise ValueError("evaluator is required - use with_evaluator()")
-        if self._config.fitness_calc is None:
+        if self._fitness_calc is None:
             raise ValueError("fitness_calc is required - use with_fitness_calc()")
 
         return PopulationEvaluator(
-            retriever=self._config.retriever,
-            evaluator=self._config.evaluator,
-            fitness_calc=self._config.fitness_calc,
-            concurrent_evaluations=self._config.concurrent_evaluations,
-            max_workers_per_retrieval=self._config.max_workers_per_retrieval,
-            queries=self._config.queries,
-            ground_truth=self._config.ground_truth,
-            track_decisions=self._config.track_decisions,
-            decision_sample_rate=self._config.decision_sample_rate,
-            early_exit_threshold=self._config.early_exit_threshold,
-            enable_adaptive=self._config.enable_adaptive,
-            device=self._config.device,
-            enable_shared_precompute=self._config.enable_shared_precompute,
-            enable_cross_genome_metric_batch=self._config.enable_cross_genome_metric_batch,
-            heuristic_features=self._config.heuristic_features,
-            run_mode=self._config.run_mode,
-            run_batch_size=self._config.run_batch_size,
+            retriever=self._retriever,
+            evaluator=self._evaluator,
+            fitness_calc=self._fitness_calc,
+            config=self._config,
         )
 
 
@@ -248,14 +259,10 @@ class PopulationEvaluator:
         retriever: RetrievalBackend implementation
         evaluator: Metrics evaluator
         fitness_calc: Fitness calculator
-        concurrent_evaluations: Max parallel genome evaluations
-        max_workers_per_retrieval: Workers per retrieval batch
-        queries: All available queries
-        ground_truth: Ground truth for queries
-        track_decisions: Enable decision tracking for LLM context
-        decision_sample_rate: Fraction of queries to track
-        early_exit_threshold: Quality threshold at quarter point (default: 0.30)
-        enable_adaptive: Whether to use early exit (True) or full evaluation only
+        config: EvaluatorConfig with all tuning knobs (optional, defaults used)
+        **kwargs: DEPRECATED individual params for backward compatibility.
+            Supported kwargs are forwarded to EvaluatorConfig when *config*
+            is not provided.  Prefer passing an EvaluatorConfig instead.
     """
 
     def __init__(
@@ -263,58 +270,65 @@ class PopulationEvaluator:
         retriever: RetrievalBackend,
         evaluator: Evaluator,
         fitness_calc: FitnessCalculator,
-        concurrent_evaluations: int = 4,
-        max_workers_per_retrieval: int = 1,
-        queries: List[str] = None,
-        ground_truth: List[List[Any]] = None,
-        track_decisions: bool = False,
-        decision_sample_rate: float = 1.0,
-        early_exit_threshold: float = DEFAULT_EARLY_EXIT_THRESHOLD,
-        enable_adaptive: bool = True,
-        device: Any = None,  # torch.device or str
-        enable_shared_precompute: bool = True,
-        enable_cross_genome_metric_batch: bool = True,
-        heuristic_features: HeuristicFeatureConfig = None,
-        run_mode: str = "batched",  # "batched" or "sequential"
-        run_batch_size: int = 100,  # GPU batch size for multi-query traversal
+        config: EvaluatorConfig = None,
+        **kwargs,
     ):
+        # Build config from kwargs when not provided (backward compatibility)
+        if config is None:
+            _config_fields = {f for f in EvaluatorConfig.__dataclass_fields__}
+            _config_kwargs = {k: v for k, v in kwargs.items() if k in _config_fields}
+            _unknown = set(kwargs) - _config_fields
+            if _unknown:
+                logger.warning(
+                    f"PopulationEvaluator received unknown kwargs (ignored): {_unknown}"
+                )
+            config = EvaluatorConfig(**_config_kwargs)
+
+        self.config = config
+
+        # Required dependencies
         self.retriever = retriever
         self.evaluator = evaluator
         self.fitness_calc = fitness_calc
-        self.queries = queries or []
-        self.ground_truth = ground_truth or []
-        self.concurrent_evaluations = concurrent_evaluations
-        self.max_workers_per_retrieval = max_workers_per_retrieval
-        self.track_decisions = track_decisions
-        self.decision_sample_rate = decision_sample_rate
-        self.early_exit_threshold = early_exit_threshold
-        self.enable_adaptive = enable_adaptive
-        self.run_mode = run_mode
-        self.run_batch_size = run_batch_size
+
+        # Unpack config fields onto self so existing code (self.xxx) keeps working
+        self.queries = config.queries or []
+        self.ground_truth = config.ground_truth or []
+        self.concurrent_evaluations = config.concurrent_evaluations
+        self.max_workers_per_retrieval = config.max_workers_per_retrieval
+        self.track_decisions = config.track_decisions
+        self.decision_sample_rate = config.decision_sample_rate
+        self.early_exit_threshold = config.early_exit_threshold
+        self.enable_adaptive = config.enable_adaptive
+        self._early_exit_policy = EarlyExitPolicy(
+            threshold=config.early_exit_threshold,
+            enabled=config.enable_adaptive,
+        )
+        self.run_mode = config.run_mode
+        self.run_batch_size = config.run_batch_size
 
         # Compilers for both modes
         self._expression_compiler = GenomeCompiler()
         self._weighted_sum_compiler = None
-        self._heuristic_features = heuristic_features
+        self._heuristic_features = config.heuristic_features
 
         # Lazy-load weighted sum compiler when needed
-        if heuristic_features is not None:
-            self._init_weighted_sum_compiler(heuristic_features)
+        if config.heuristic_features is not None:
+            self._init_weighted_sum_compiler(config.heuristic_features)
 
         # Legacy compatibility
         self.compiler = self._expression_compiler
 
         # Optimization flags
-        self.enable_shared_precompute = enable_shared_precompute
-        self.enable_cross_genome_metric_batch = enable_cross_genome_metric_batch
+        self.enable_shared_precompute = config.enable_shared_precompute
+        self.enable_cross_genome_metric_batch = config.enable_cross_genome_metric_batch
 
         # Store device, auto-detect if not provided
-        if device is None:
-            from ...utils.device import get_device
+        if config.device is None:
             self.device = get_device()
         else:
-            # Handle torch.device objects
-            self.device = str(device) if hasattr(device, 'type') else device
+            # Handle torch.device objects by checking for .type attribute
+            self.device = str(config.device) if isinstance(config.device, torch.device) else config.device
 
         # Track evaluation statistics
         self.stats = EvaluationStats()
@@ -323,16 +337,14 @@ class PopulationEvaluator:
         # Cached shared context (reused within a generation)
         self._shared_context: Optional[SharedPrecomputeContext] = None
 
-        # Fitness cache for skipping duplicate genome evaluations
-        self._fitness_cache = FitnessCache()
+        # Cache coordinator for fitness and embedding caches
+        self._cache = CacheCoordinator()
+        # Keep backward-compatible reference
+        self._fitness_cache = self._cache.fitness_cache
 
     def _init_weighted_sum_compiler(self, heuristic_features: HeuristicFeatureConfig):
         """Initialize the weighted sum compiler with feature configuration."""
-        try:
-            from .weighted_sum import WeightedSumCompiler
-            self._weighted_sum_compiler = WeightedSumCompiler(heuristic_features)
-        except ImportError:
-            logger.warning("WeightedSumCompiler not available, weighted_sum genomes will fail")
+        self._weighted_sum_compiler = WeightedSumCompiler(heuristic_features)
 
     def _get_compiler_for_genome(self, genome: Genome):
         """Get the appropriate compiler for a genome based on its mode."""
@@ -389,7 +401,7 @@ class PopulationEvaluator:
         cache_restored = []
         still_unevaluated = []
         for genome in unevaluated:
-            cached_fitness = self._fitness_cache.get(genome)
+            cached_fitness = self._cache.lookup_fitness(genome)
             if cached_fitness is not None:
                 # Restore from cache without re-evaluation
                 genome.fitness = FitnessResult(quality_score=cached_fitness)
@@ -401,7 +413,7 @@ class PopulationEvaluator:
 
         if not unevaluated:
             # All genomes hit cache - finalize and return
-            cache_stats = self._fitness_cache.finalize_generation(generation)
+            self._cache.finalize_generation(generation)
             logger.info(f"All {len(cache_restored)} genomes restored from cache (100% hit rate)")
             return self.stats
 
@@ -412,17 +424,21 @@ class PopulationEvaluator:
         logger.info(f"  > Concurrency: {batch_size} | Adaptive: {self.enable_adaptive}")
         logger.info(f"  > Shared precompute: {self.enable_shared_precompute} | Cross-genome batch: {self.enable_cross_genome_metric_batch}")
         if self.enable_adaptive:
-            quarter = len(queries) // 4
-            logger.info(f"  > Early exit: quarter={quarter}, threshold={self.early_exit_threshold}")
+            quarter = self._early_exit_policy.compute_quarter(len(queries))
+            logger.info(f"  > Early exit: quarter={quarter}, threshold={self._early_exit_policy.threshold}")
 
         # Prepare shared context if enabled
+        # Use getattr to check for retrieve_batch_with_precomputed capability
+        # instead of hasattr, returning a callable or None.
         shared_context = None
-        if self.enable_shared_precompute and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+        _retrieve_precomputed_fn = getattr(self.retriever, 'retrieve_batch_with_precomputed', None)
+        if self.enable_shared_precompute and _retrieve_precomputed_fn is not None:
             shared_context = self._prepare_shared_context(unevaluated, queries, ground_truth)
             self._shared_context = shared_context
 
         # Initialize buffer pool if retriever supports it
-        if hasattr(self.retriever, 'init_buffer_pool'):
+        _init_buffer_pool_fn = getattr(self.retriever, 'init_buffer_pool', None)
+        if _init_buffer_pool_fn is not None:
             # Determine max sizes from genomes
             max_pool_size = max(
                 (self._get_compiler_for_genome(g).compile(g).get('initial_pool_size', 30)
@@ -434,15 +450,19 @@ class PopulationEvaluator:
                  for g in unevaluated),
                 default=50
             )
-            # Use graph's average degree * 2 as estimate for max_degree
-            max_degree = int(getattr(self.retriever, 'avg_degree', 50) * 2)
+            # Use graph's average degree * headroom multiplier as estimate for max_degree
+            max_degree = int(getattr(self.retriever, 'avg_degree', 50) * BUFFER_POOL_HEADROOM)
 
-            self.retriever.init_buffer_pool(
-                max_pool_size=max_pool_size * 2,  # 2x headroom
-                max_agents=max_agents * 2,
+            _init_buffer_pool_fn(
+                max_pool_size=max_pool_size * BUFFER_POOL_HEADROOM,
+                max_agents=max_agents * BUFFER_POOL_HEADROOM,
                 max_degree=max_degree
             )
-            logger.info(f"  > Buffer pool initialized: pool={max_pool_size*2}, agents={max_agents*2}")
+            logger.info(
+                f"  > Buffer pool initialized: "
+                f"pool={max_pool_size * BUFFER_POOL_HEADROOM}, "
+                f"agents={max_agents * BUFFER_POOL_HEADROOM}"
+            )
 
         total_queries_used = 0
 
@@ -467,8 +487,9 @@ class PopulationEvaluator:
         self._shared_context = None
 
         # Release buffer pool to free memory
-        if hasattr(self.retriever, '_buffer_pool') and self.retriever._buffer_pool is not None:
-            self.retriever._buffer_pool.release()
+        _buffer_pool = getattr(self.retriever, '_buffer_pool', None)
+        if _buffer_pool is not None:
+            _buffer_pool.release()
             self.retriever._buffer_pool = None
 
         # Compute stats
@@ -478,8 +499,8 @@ class PopulationEvaluator:
 
         # GPU memory report (reading counters is ~0 overhead)
         if torch.cuda.is_available():
-            gpu_mem_mb = torch.cuda.memory_allocated() / 1024 / 1024
-            gpu_peak_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+            gpu_mem_mb = torch.cuda.memory_allocated() / _BYTES_PER_MB
+            gpu_peak_mb = torch.cuda.max_memory_allocated() / _BYTES_PER_MB
             logger.info(f"Evaluation complete: GPU={gpu_mem_mb:.0f}MB (peak={gpu_peak_mb:.0f}MB)")
         else:
             logger.info(f"Evaluation complete:")
@@ -489,16 +510,7 @@ class PopulationEvaluator:
             logger.info(f"  > Tier exits: {self.stats.tier_exits}")
 
         # Finalize cache stats for this generation
-        cache_stats = self._fitness_cache.finalize_generation(generation)
-        logger.info(f"  > Cache: {cache_stats.hits}/{cache_stats.total} hits ({cache_stats.hit_rate:.1%})")
-
-        # Finalize embedding cache stats for this generation
-        embed_cache = EmbeddingCacheProvider.get()
-        embed_cache_stats = None
-        if embed_cache is not None:
-            embed_cache_stats = embed_cache.finalize_generation(generation)
-            logger.info(f"  > Embedding cache: {embed_cache_stats.generation_hits + embed_cache_stats.generation_misses} lookups, "
-                        f"{embed_cache_stats.compute_time_saved_sec:.1f}s saved")
+        self._cache.finalize_generation(generation)
 
         return self.stats
 
@@ -605,9 +617,10 @@ class PopulationEvaluator:
                     metrics['latency'] = retrieval_time / max(1, len(results))
                     metrics['complexity'] = float(genome.complexity())
 
-                    genome.metrics = metrics
-                    genome.fitness = self.fitness_calc.calculate(metrics, genome)
-                    genome.evaluated = True
+                    genome.set_evaluation_result(
+                        fitness=self.fitness_calc.calculate(metrics, genome),
+                        metrics=metrics,
+                    )
 
                     self.stats.tier_exits["full"] = self.stats.tier_exits.get("full", 0) + 1
 
@@ -725,14 +738,16 @@ class PopulationEvaluator:
 
         start_time = time.time()
         n_queries = len(queries)
-        quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+        quarter = self._early_exit_policy.compute_quarter(n_queries)
 
         # Get pre-computed initial pools
         initial_pools = shared_context.initial_pools.get(pool_size, [])
 
         # Phase 1: Evaluate first quarter for early exit check
-        if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
-            first_quarter_results = self.retriever.retrieve_batch_with_precomputed(
+        # Use getattr to check for precomputed retrieval capability
+        _retrieve_precomputed_fn = getattr(self.retriever, 'retrieve_batch_with_precomputed', None)
+        if initial_pools and _retrieve_precomputed_fn is not None:
+            first_quarter_results = _retrieve_precomputed_fn(
                 query_embeddings=shared_context.query_embeddings[:quarter],
                 initial_pools=initial_pools[:quarter],
                 max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
@@ -758,14 +773,15 @@ class PopulationEvaluator:
 
         quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
 
-        if quarter_fitness.quality_score < self.early_exit_threshold:
+        if self._early_exit_policy.should_exit(quarter_fitness.quality_score):
             # Early exit - this genome isn't promising
-            genome.metrics = quarter_metrics
-            genome.fitness = quarter_fitness
-            genome.evaluated = True
+            genome.set_evaluation_result(
+                fitness=quarter_fitness,
+                metrics=quarter_metrics,
+            )
 
             # Cache the fitness for future lookups
-            self._fitness_cache.put(genome, genome.fitness.quality_score)
+            self._cache.store_fitness(genome, genome.fitness.quality_score)
 
             if decision_tracker is not None:
                 genome.decision_context = decision_tracker.to_summary_dict()
@@ -777,8 +793,8 @@ class PopulationEvaluator:
             return quarter, "early_exit"
 
         # Phase 2: Evaluate remaining 3/4 for full evaluation
-        if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
-            remaining_results = self.retriever.retrieve_batch_with_precomputed(
+        if initial_pools and _retrieve_precomputed_fn is not None:
+            remaining_results = _retrieve_precomputed_fn(
                 query_embeddings=shared_context.query_embeddings[quarter:],
                 initial_pools=initial_pools[quarter:],
                 max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
@@ -802,12 +818,13 @@ class PopulationEvaluator:
         final_metrics['latency'] = total_latency / max(1, n_queries)
         final_metrics['complexity'] = float(genome.complexity())
 
-        genome.metrics = final_metrics
-        genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
-        genome.evaluated = True
+        genome.set_evaluation_result(
+            fitness=self.fitness_calc.calculate(final_metrics, genome),
+            metrics=final_metrics,
+        )
 
         # Cache the fitness for future lookups
-        self._fitness_cache.put(genome, genome.fitness.quality_score)
+        self._cache.store_fitness(genome, genome.fitness.quality_score)
 
         if decision_tracker is not None:
             genome.decision_context = decision_tracker.to_summary_dict()
@@ -834,8 +851,12 @@ class PopulationEvaluator:
 
                 initial_pools = shared_context.initial_pools.get(pool_size, [])
 
-                if initial_pools and hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
-                    results = self.retriever.retrieve_batch_with_precomputed(
+                # Use getattr to check for precomputed retrieval capability
+                _retrieve_precomputed_fn = getattr(
+                    self.retriever, 'retrieve_batch_with_precomputed', None
+                )
+                if initial_pools and _retrieve_precomputed_fn is not None:
+                    results = _retrieve_precomputed_fn(
                         query_embeddings=shared_context.query_embeddings,
                         initial_pools=initial_pools,
                         max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
@@ -858,12 +879,13 @@ class PopulationEvaluator:
                 metrics['latency'] = total_latency / max(1, len(queries))
                 metrics['complexity'] = float(genome.complexity())
 
-                genome.metrics = metrics
-                genome.fitness = self.fitness_calc.calculate(metrics, genome)
-                genome.evaluated = True
+                genome.set_evaluation_result(
+                    fitness=self.fitness_calc.calculate(metrics, genome),
+                    metrics=metrics,
+                )
 
                 # Cache the fitness for future lookups
-                self._fitness_cache.put(genome, genome.fitness.quality_score)
+                self._cache.store_fitness(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -891,10 +913,9 @@ class PopulationEvaluator:
         logger.info("  > Computing metrics across all genomes in batch...")
 
         # Prepare flattened tensor for batch computation directly on target device
-        max_k = 20  # Standard max k for metrics
         target_device = self.device
         retrieved_ids, genome_query_indices = batched_results.prepare_for_batch_metrics(
-            max_k, device=target_device
+            MAX_K_FOR_METRICS, device=target_device
         )
 
         if retrieved_ids.numel() == 0:
@@ -1013,12 +1034,13 @@ class PopulationEvaluator:
             if main_key:
                 aggregated["variance"] = aggregated[f"var_{main_key}"]
 
-            genome.metrics = aggregated
-            genome.fitness = self.fitness_calc.calculate(aggregated, genome)
-            genome.evaluated = True
+            genome.set_evaluation_result(
+                fitness=self.fitness_calc.calculate(aggregated, genome),
+                metrics=aggregated,
+            )
 
             # Cache the fitness for future lookups
-            self._fitness_cache.put(genome, genome.fitness.quality_score)
+            self._cache.store_fitness(genome, genome.fitness.quality_score)
 
             self.stats.tier_exits["full"] = self.stats.tier_exits.get("full", 0) + 1
 
@@ -1142,7 +1164,7 @@ class PopulationEvaluator:
 
                 start_time = time.time()
                 n_queries = len(queries)
-                quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+                quarter = self._early_exit_policy.compute_quarter(n_queries)
 
                 # Phase 1: Evaluate first quarter for early exit check
                 if decision_tracker is not None:
@@ -1174,14 +1196,15 @@ class PopulationEvaluator:
 
                 quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
 
-                if quarter_fitness.quality_score < self.early_exit_threshold:
+                if self._early_exit_policy.should_exit(quarter_fitness.quality_score):
                     # Early exit - this genome isn't promising
-                    genome.metrics = quarter_metrics
-                    genome.fitness = quarter_fitness
-                    genome.evaluated = True
+                    genome.set_evaluation_result(
+                        fitness=quarter_fitness,
+                        metrics=quarter_metrics,
+                    )
 
                     # Cache the fitness for future lookups
-                    self._fitness_cache.put(genome, genome.fitness.quality_score)
+                    self._cache.store_fitness(genome, genome.fitness.quality_score)
 
                     if decision_tracker is not None:
                         genome.decision_context = decision_tracker.to_summary_dict()
@@ -1208,12 +1231,13 @@ class PopulationEvaluator:
                 final_metrics['latency'] = total_latency / max(1, n_queries)
                 final_metrics['complexity'] = float(genome.complexity())
 
-                genome.metrics = final_metrics
-                genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
-                genome.evaluated = True
+                genome.set_evaluation_result(
+                    fitness=self.fitness_calc.calculate(final_metrics, genome),
+                    metrics=final_metrics,
+                )
 
                 # Cache the fitness for future lookups
-                self._fitness_cache.put(genome, genome.fitness.quality_score)
+                self._cache.store_fitness(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -1238,7 +1262,7 @@ class PopulationEvaluator:
 
                 if decision_tracker is not None:
                     # Use single-query mode for decision tracking on subset
-                    probe_size = min(20, len(queries))
+                    probe_size = min(DECISION_PROBE_SIZE, len(queries))
                     results = []
                     for q in queries[:probe_size]:
                         res = self.retriever.retrieve(
@@ -1271,12 +1295,13 @@ class PopulationEvaluator:
                 metrics['latency'] = total_latency / max(1, len(queries))
                 metrics['complexity'] = float(genome.complexity())
 
-                genome.metrics = metrics
-                genome.fitness = self.fitness_calc.calculate(metrics, genome)
-                genome.evaluated = True
+                genome.set_evaluation_result(
+                    fitness=self.fitness_calc.calculate(metrics, genome),
+                    metrics=metrics,
+                )
 
                 # Cache the fitness for future lookups
-                self._fitness_cache.put(genome, genome.fitness.quality_score)
+                self._cache.store_fitness(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -1295,9 +1320,7 @@ class PopulationEvaluator:
 
         # Use sequential for small batches (respects evaluator interface)
         # This ensures mock evaluators work correctly in tests
-        BATCH_THRESHOLD = 50  # Switch to batch mode above this
-
-        if n_queries <= BATCH_THRESHOLD:
+        if n_queries <= BATCH_METRIC_THRESHOLD:
             return self._compute_metrics_sequential(results, ground_truth)
 
         # Try batch computation for large batches (much faster)
@@ -1485,18 +1508,22 @@ class PopulationEvaluator:
 
                 start_time = time.time()
                 n_queries = len(queries)
-                quarter = max(1, n_queries // 4)  # Ensure at least 1 query for early exit
+                quarter = self._early_exit_policy.compute_quarter(n_queries)
 
                 # Get pre-computed initial pools
                 initial_pools = shared_context.initial_pools.get(pool_size, [])
-                if not initial_pools or not hasattr(self.retriever, 'retrieve_batch_with_precomputed'):
+                # Use getattr to check for precomputed retrieval capability
+                _retrieve_precomputed_fn = getattr(
+                    self.retriever, 'retrieve_batch_with_precomputed', None
+                )
+                if not initial_pools or _retrieve_precomputed_fn is None:
                     # Fallback to non-optimized path
                     return self._evaluate_single_with_shared(
                         genome, queries, ground_truth, shared_context
                     )
 
                 # Fetch all results in one batch (retrieval is the expensive part)
-                all_results = self.retriever.retrieve_batch_with_precomputed(
+                all_results = _retrieve_precomputed_fn(
                     query_embeddings=shared_context.query_embeddings,
                     initial_pools=initial_pools,
                     max_workers=1 if self.run_mode == "sequential" else self.max_workers_per_retrieval,
@@ -1506,12 +1533,11 @@ class PopulationEvaluator:
                 )
 
                 # Build retrieved IDs tensor on GPU
-                max_k = 20
                 retrieved_ids = torch.full(
-                    (n_queries, max_k), -1, dtype=torch.long, device=self.device
+                    (n_queries, MAX_K_FOR_METRICS), -1, dtype=torch.long, device=self.device
                 )
                 for i, results in enumerate(all_results):
-                    for j, item in enumerate(results[:max_k]):
+                    for j, item in enumerate(results[:MAX_K_FOR_METRICS]):
                         if isinstance(item, dict):
                             try:
                                 retrieved_ids[i, j] = int(item.get('id', -1))
@@ -1534,14 +1560,15 @@ class PopulationEvaluator:
 
                 quarter_fitness = self.fitness_calc.calculate(quarter_metrics, genome)
 
-                if quarter_fitness.quality_score < self.early_exit_threshold:
+                if self._early_exit_policy.should_exit(quarter_fitness.quality_score):
                     # Early exit - this genome isn't promising
-                    genome.metrics = quarter_metrics
-                    genome.fitness = quarter_fitness
-                    genome.evaluated = True
+                    genome.set_evaluation_result(
+                        fitness=quarter_fitness,
+                        metrics=quarter_metrics,
+                    )
 
                     # Cache the fitness for future lookups
-                    self._fitness_cache.put(genome, genome.fitness.quality_score)
+                    self._cache.store_fitness(genome, genome.fitness.quality_score)
 
                     if decision_tracker is not None:
                         genome.decision_context = decision_tracker.to_summary_dict()
@@ -1560,12 +1587,13 @@ class PopulationEvaluator:
                 final_metrics['latency'] = total_latency / max(1, n_queries)
                 final_metrics['complexity'] = float(genome.complexity())
 
-                genome.metrics = final_metrics
-                genome.fitness = self.fitness_calc.calculate(final_metrics, genome)
-                genome.evaluated = True
+                genome.set_evaluation_result(
+                    fitness=self.fitness_calc.calculate(final_metrics, genome),
+                    metrics=final_metrics,
+                )
 
                 # Cache the fitness for future lookups
-                self._fitness_cache.put(genome, genome.fitness.quality_score)
+                self._cache.store_fitness(genome, genome.fitness.quality_score)
 
                 if decision_tracker is not None:
                     genome.decision_context = decision_tracker.to_summary_dict()
@@ -1610,12 +1638,5 @@ class PopulationEvaluator:
             raise RuntimeError(f"GPU metric computation failed: {e}") from e
 
     def cleanup(self):
-        """
-        Release resources at evolution end.
-
-        Clears embedding cache to release GPU memory.
-        Should be called by EvolutionEngine or Orchestrator when evolution completes.
-        """
-        # Clear embedding cache to release GPU memory
-        EmbeddingCacheProvider.clear()
-        logger.info("PopulationEvaluator cleanup: embedding cache cleared")
+        """Release resources at evolution end."""
+        self._cache.cleanup()
