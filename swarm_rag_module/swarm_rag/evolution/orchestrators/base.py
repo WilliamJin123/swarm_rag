@@ -14,8 +14,8 @@ from ..types.genome import Genome
 from ..types.config import EvolutionConfig, EvolutionContext
 from ..storage import RunManager
 from ..execution.evaluator import PopulationEvaluator
-from ..execution.tracker import ProgressTracker
-from ..execution.fitness_strategies import FitnessStrategy
+from ..execution.monitoring.tracker import ProgressTracker
+from ..execution.fitness.strategies import FitnessStrategy
 from ...utils import TqdmLoggingHandler
 
 

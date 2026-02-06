@@ -4,7 +4,7 @@ from typing import Dict, List, Callable
 from ..types.expressions import ExpressionEvolution, ExpressionNode
 from ..types.genome import DEFAULT_PARAMS, Genome, SwarmParams
 from ..types.config import EvolutionContext, WeightTensors, MutationSigmas, GenomeMode
-from .strategies import GeneticRegistry
+from .genetics.strategies import GeneticRegistry
 
 
 class GenomeFactory:
@@ -29,7 +29,7 @@ class GenomeFactory:
             strategy_name = "weighted_sum_seeded"
             # Ensure the weighted_sum module is imported to register strategies
             try:
-                from . import weighted_sum  # noqa: F401
+                from .optimization import weighted_sum  # noqa: F401
             except ImportError:
                 pass
         else:

@@ -26,10 +26,10 @@ from .types.config import (
 from .storage import RunManager
 
 from .execution.evaluator import PopulationEvaluator
-from .execution.fitness import FitnessCalculator
-from .execution.tracker import ProgressTracker
+from .execution.fitness.calculator import FitnessCalculator
+from .execution.monitoring.tracker import ProgressTracker
 from .execution.factory import GenomeFactory
-from .execution.fitness_strategies import (
+from .execution.fitness.strategies import (
     LexicographicStrategy,
     ParetoStrategy,
 )

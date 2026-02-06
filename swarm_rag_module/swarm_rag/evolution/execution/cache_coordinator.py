@@ -8,8 +8,8 @@ import logging
 from typing import Optional
 from dataclasses import dataclass
 
-from .fitness_cache import FitnessCache, CacheStats
-from .embedding_cache import EmbeddingCacheProvider
+from .fitness.cache import FitnessCache, CacheStats
+from .optimization.embedding_cache import EmbeddingCacheProvider
 
 logger = logging.getLogger(__name__)
 

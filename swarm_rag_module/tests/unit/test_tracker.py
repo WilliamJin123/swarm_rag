@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from contextlib import redirect_stdout
 import pytest
-from swarm_rag.evolution.execution.tracker import ProgressTracker
+from swarm_rag.evolution.execution.monitoring.tracker import ProgressTracker
 
 ROOT = Path(__file__).parent
 LOG_FILE = ROOT / "test_data/test_advanced_log.jsonl"

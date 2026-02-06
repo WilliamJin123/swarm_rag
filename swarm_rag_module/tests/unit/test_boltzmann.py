@@ -2,7 +2,7 @@ import random
 import pytest
 from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfig
 from swarm_rag.evolution.types.fitness_results import FitnessResult
-from swarm_rag.evolution.execution.strategies import GeneticStrategies
+from swarm_rag.evolution.execution.genetics.strategies import GeneticStrategies
 
 class MockGenome:
     def __init__(self, quality):

@@ -145,20 +145,21 @@ def prepare_shared_context(
     # 2. Compute embeddings if not all cached
     if query_embeddings is None:
         logger.debug("  > Batch embedding queries...")
-        if hasattr(retriever, '_get_cached_query_embeddings_batch'):
-            # Use retriever's internal batched embedding method
-            query_embeddings = retriever._get_cached_query_embeddings_batch(queries)
-        elif hasattr(retriever, 'embed_fn') and hasattr(retriever.embed_fn, 'embed_query_batch'):
-            # Direct access to embedding provider
-            query_embeddings = retriever.embed_fn.embed_query_batch(queries)
+        _batch_embed_fn = getattr(retriever, '_get_cached_query_embeddings_batch', None)
+        _embed_provider = getattr(retriever, 'embed_fn', None)
+        if _batch_embed_fn is not None:
+            query_embeddings = _batch_embed_fn(queries)
+        elif _embed_provider is not None and hasattr(_embed_provider, 'embed_query_batch'):
+            query_embeddings = _embed_provider.embed_query_batch(queries)
             if not isinstance(query_embeddings, torch.Tensor):
                 query_embeddings = torch.as_tensor(query_embeddings, dtype=torch.float32)
         else:
-            # Fallback: embed one at a time (shouldn't happen with SwarmRetriever)
+            # Fallback: embed one at a time
             embeddings = []
+            _cached_vec_fn = getattr(retriever, '_get_cached_query_vector', None)
             for q in queries:
-                if hasattr(retriever, '_get_cached_query_vector'):
-                    emb = retriever._get_cached_query_vector(q)
+                if _cached_vec_fn is not None:
+                    emb = _cached_vec_fn(q)
                 else:
                     emb = retriever.embed_fn.embed_query(q)
                 if not isinstance(emb, torch.Tensor):
@@ -171,8 +172,9 @@ def prepare_shared_context(
             for i, q in enumerate(queries):
                 if q not in embedding_cache._cache:
                     emb = query_embeddings[i]
-                    if hasattr(emb, 'detach'):
-                        emb = emb.detach()
+                    _detach_fn = getattr(emb, 'detach', None)
+                    if _detach_fn is not None:
+                        emb = _detach_fn()
                     embedding_cache._cache[q] = emb
                     embedding_cache._access_order.append(q)
             logger.info(f"  > Stored {len(queries)} embeddings in global cache")
@@ -283,11 +285,13 @@ def _batch_initial_search(
         List of candidate ID lists, one per query
     """
     # Check if retriever has batch search capability
-    if hasattr(retriever, '_batch_initial_search'):
-        return retriever._batch_initial_search(query_embeddings, pool_size)
+    _batch_search_fn = getattr(retriever, '_batch_initial_search', None)
+    if _batch_search_fn is not None:
+        return _batch_search_fn(query_embeddings, pool_size)
 
     # Check if vector store supports batch search
-    if hasattr(retriever, 'vector_store') and hasattr(retriever.vector_store, 'search_batch'):
+    _vector_store = getattr(retriever, 'vector_store', None)
+    if _vector_store is not None and hasattr(_vector_store, 'search_batch'):
         try:
             ids_batch, scores_batch = retriever.vector_store.search_batch(query_embeddings, pool_size)
             # ids_batch: (n_queries, pool_size) tensor of candidate IDs

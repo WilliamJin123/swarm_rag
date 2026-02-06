@@ -2,7 +2,7 @@ import random
 from swarm_rag.evolution.types.config import EvolutionContext, EvolutionConfig
 from swarm_rag.evolution.types.genome import Genome, DEFAULT_PARAMS
 from swarm_rag.evolution.execution.factory import GenomeFactory
-from swarm_rag.evolution.execution.strategies import GeneticStrategies, GeneticRegistry
+from swarm_rag.evolution.execution.genetics.strategies import GeneticStrategies, GeneticRegistry
 from swarm_rag.evolution.types.expressions import ExpressionNode
 
 def test_shallow_initialization():

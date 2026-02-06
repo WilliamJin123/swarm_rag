@@ -21,12 +21,12 @@ from dataclasses import dataclass, field
 from swarm_rag.interfaces.protocols import RetrievalBackend
 from ...eval.metrics import Evaluator
 from ...utils.device import get_device
-from .memory_guard import MemoryGuard, MemoryThresholdExceeded
-from .fitness import FitnessCalculator
-from .weighted_sum import WeightedSumCompiler
+from .monitoring.memory_guard import MemoryGuard, MemoryThresholdExceeded
+from .fitness.calculator import FitnessCalculator
+from .optimization.weighted_sum import WeightedSumCompiler
 from ..types.genome import GenomeCompiler, Genome
 from ..types.config import HeuristicFeatureConfig, GenomeMode
-from .shared_precompute import (
+from .optimization.shared_precompute import (
     SharedPrecomputeContext,
     prepare_shared_context,
     get_unique_pool_sizes,

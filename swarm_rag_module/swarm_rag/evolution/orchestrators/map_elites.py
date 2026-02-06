@@ -22,10 +22,10 @@ from ..map_elites.archive import MapElitesArchive
 from ..map_elites.loop import MapElitesLoop
 from ..execution.factory import GenomeFactory
 from ..execution.evaluator import PopulationEvaluator
-from ..execution.tracker import ProgressTracker
-from ..execution.fitness_strategies import FitnessStrategy
-from ..execution.profiler import GenerationProfiler
-from ..execution.memory_logger import MemoryLogger
+from ..execution.monitoring.tracker import ProgressTracker
+from ..execution.fitness.strategies import FitnessStrategy
+from ..execution.monitoring.profiler import GenerationProfiler
+from ..execution.monitoring.memory_logger import MemoryLogger
 from ..llm.evolution_journal import EvolutionJournal
 from ..convergence import ConvergenceDetector, TerminationReason
 

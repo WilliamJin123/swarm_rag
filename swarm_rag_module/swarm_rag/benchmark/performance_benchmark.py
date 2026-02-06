@@ -22,8 +22,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import torch
 
 from ..utils.device import get_device, get_gpu_memory_info
-from ..evolution.execution.fitness_cache import FitnessCache
-from ..evolution.execution.embedding_cache import EmbeddingCacheProvider
+from ..evolution.execution.fitness.cache import FitnessCache
+from ..evolution.execution.optimization.embedding_cache import EmbeddingCacheProvider
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +452,7 @@ class PerformanceBenchmark:
             ResourceConfig,
             ConvergenceConfig,
         )
-        from ..evolution.execution.fitness import create_fitness_calculator
+        from ..evolution.execution.fitness.calculator import create_fitness_calculator
         from ..eval import Evaluator
         from ..core import SwarmRetriever
         from ..integrations.stark import (

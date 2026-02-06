@@ -16,7 +16,7 @@ from typing import Optional, Callable, TypeVar
 
 import torch
 
-from ...utils.memory import MEMORY_WARNING_THRESHOLD, MEMORY_HARD_STOP_THRESHOLD
+from ....utils.memory import MEMORY_WARNING_THRESHOLD, MEMORY_HARD_STOP_THRESHOLD
 
 logger = logging.getLogger(__name__)
 

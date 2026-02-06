@@ -16,8 +16,8 @@ import math
 import uuid
 import torch
 
-from ..types.genome import Genome, FIXED_PARAMS
-from ..types.config import (
+from ...types.genome import Genome, FIXED_PARAMS
+from ...types.config import (
     WeightTensors,
     MutationSigmas,
     HeuristicFeatureConfig,
@@ -25,10 +25,10 @@ from ..types.config import (
     SwarmParamRanges,
     GenomeMode,
 )
-from ..types.fitness_results import FitnessResult
-from ...core.heuristics import HeuristicContext, HeuristicRegistry
-from ...interfaces.types import AgentGroupConfig
-from ..seed_configs import (
+from ...types.fitness_results import FitnessResult
+from ....core.heuristics import HeuristicContext, HeuristicRegistry
+from ....interfaces.types import AgentGroupConfig
+from ...seed_configs import (
     SEED_CONFIGS,
     BASELINE_HYPERPARAMS,
     BASELINE_WEIGHTS,
@@ -700,7 +700,7 @@ class WeightedSumSeeder:
 
 def register_weighted_sum_strategies():
     """Register weighted sum strategies with GeneticRegistry."""
-    from .strategies import GeneticRegistry
+    from ..genetics.strategies import GeneticRegistry
 
     @GeneticRegistry.register_mutation("self_adaptive_es")
     def self_adaptive_es_mutation(genome: Genome, ctx: EvolutionContext) -> Genome:

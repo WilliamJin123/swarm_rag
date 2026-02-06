@@ -1,6 +1,6 @@
 import math
 from typing import List
-from swarm_rag.evolution.execution.fitness_strategies import (
+from swarm_rag.evolution.execution.fitness.strategies import (
     LexicographicStrategy,
     ParetoStrategy,
 )

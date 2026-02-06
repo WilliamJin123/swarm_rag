@@ -9,12 +9,13 @@ Expected Impact: 10-20% speedup if embedding model is the bottleneck.
 import logging
 import json
 import copy
+import threading
 from typing import List, Dict, Optional, Any, Callable
 import torch
 from dataclasses import dataclass, field
 import time
 
-from ...utils.device import get_device
+from ....utils.device import get_device
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,16 @@ class EmbeddingCacheStats:
         """Hit rate for current generation."""
         total = self.generation_hits + self.generation_misses
         return self.generation_hits / total if total > 0 else 0.0
+
+    @property
+    def hits(self) -> int:
+        """Total cache hits (protocol-compatible alias for cache_hits)."""
+        return self.cache_hits
+
+    @property
+    def misses(self) -> int:
+        """Total cache misses (protocol-compatible alias for cache_misses)."""
+        return self.cache_misses
 
     def reset_generation(self):
         """Reset per-generation counters while keeping cumulative stats."""
@@ -572,9 +583,14 @@ class EmbeddingCacheProvider:
     Singleton provider for the global embedding cache.
 
     Allows sharing the same cache across different parts of the evolution system.
+
+    Thread safety: Uses a class-level lock to protect singleton access,
+    preventing races when multiple threads call get_or_create() or clear()
+    concurrently.
     """
 
     _instance: Optional[QueryEmbeddingCache] = None
+    _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def get_or_create(
@@ -583,23 +599,26 @@ class EmbeddingCacheProvider:
         batch_embedding_fn: Callable = None,
         **kwargs
     ) -> QueryEmbeddingCache:
-        """Get or create the global embedding cache."""
-        if cls._instance is None:
-            cls._instance = QueryEmbeddingCache(
-                embedding_fn=embedding_fn,
-                batch_embedding_fn=batch_embedding_fn,
-                **kwargs
-            )
-        return cls._instance
+        """Get or create the global embedding cache (thread-safe)."""
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = QueryEmbeddingCache(
+                    embedding_fn=embedding_fn,
+                    batch_embedding_fn=batch_embedding_fn,
+                    **kwargs
+                )
+            return cls._instance
 
     @classmethod
     def get(cls) -> Optional[QueryEmbeddingCache]:
-        """Get the global embedding cache if it exists."""
-        return cls._instance
+        """Get the global embedding cache if it exists (thread-safe)."""
+        with cls._lock:
+            return cls._instance
 
     @classmethod
     def clear(cls):
-        """Clear and remove the global cache."""
-        if cls._instance is not None:
-            cls._instance.clear()
-        cls._instance = None
+        """Clear and remove the global cache (thread-safe)."""
+        with cls._lock:
+            if cls._instance is not None:
+                cls._instance.clear()
+            cls._instance = None

@@ -31,7 +31,7 @@ from swarm_rag.evolution.types.config import (
 )
 from swarm_rag.evolution.types.genome import Genome
 from swarm_rag.evolution.types.fitness_results import FitnessResult
-from swarm_rag.evolution.execution.weighted_sum import (
+from swarm_rag.evolution.execution.optimization.weighted_sum import (
     WeightedSumCompiler,
     WeightedSumMutator,
     WeightedSumSeeder,
@@ -39,7 +39,7 @@ from swarm_rag.evolution.execution.weighted_sum import (
     assign_scores_to_agents,
 )
 from swarm_rag.evolution.execution.factory import GenomeFactory
-from swarm_rag.evolution.execution.strategies import GeneticRegistry
+from swarm_rag.evolution.execution.genetics.strategies import GeneticRegistry
 from swarm_rag.evolution.storage.run_manager import RunManager
 
 

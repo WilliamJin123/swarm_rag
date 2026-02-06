@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from unittest.mock import MagicMock, patch
 from swarm_rag.evolution.engine import EvolutionEngine
-from swarm_rag.evolution.execution.fitness_strategies import (
+from swarm_rag.evolution.execution.fitness.strategies import (
     LexicographicStrategy,
     ParetoStrategy,
 )

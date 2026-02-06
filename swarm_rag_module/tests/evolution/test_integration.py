@@ -23,7 +23,7 @@ from swarm_rag.evolution.focused_mutation import (
     METRIC_TO_PARAM_MAPPING,
 )
 from swarm_rag.evolution.types.fitness_results import FitnessResult
-from swarm_rag.evolution.execution.strategies import GeneticRegistry, GeneticStrategies
+from swarm_rag.evolution.execution.genetics.strategies import GeneticRegistry, GeneticStrategies
 from swarm_rag.interfaces.enums import GeneticKey
 
 

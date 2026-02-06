@@ -3,44 +3,49 @@ Evolution execution module.
 
 Provides evaluation, genetic strategies, and utilities for the evolution engine.
 """
+# Core evaluation (root level)
 from .evaluator import (
     PopulationEvaluator,
     PopulationEvaluatorBuilder,
     EvaluatorConfig,
     EvaluationStats,
-    DEFAULT_EARLY_EXIT_THRESHOLD,
 )
-from .fitness import FitnessCalculator
-from .strategies import GeneticStrategies, GeneticRegistry
-from .tracker import ProgressTracker
+from .early_exit import DEFAULT_EARLY_EXIT_THRESHOLD
 from .factory import GenomeFactory
+from .cache_coordinator import CacheCoordinator
 
-# Import llm_strategies to register LLM mutation with GeneticRegistry
-from . import llm_strategies  # noqa: F401
+# Fitness
+from .fitness import (
+    FitnessCalculator,
+    FitnessCache,
+    CacheStats,
+    CacheStatsProtocol,
+    hash_genome,
+)
 
-# Efficiency-focused modules
-from .stratified_sampler import (
+# Genetics
+from .genetics import GeneticStrategies, GeneticRegistry
+
+# Import genetics.llm_strategies to register LLM operators
+from .genetics import llm_strategies  # noqa: F401
+
+# Monitoring
+from .monitoring import ProgressTracker
+
+# Optimization
+from .optimization import (
     StratifiedQuerySampler,
     StratifiedSample,
     AdaptiveSampler,
     categorize_by_difficulty,
     categorize_by_query_length,
-)
-from .embedding_cache import (
     QueryEmbeddingCache,
     EmbeddingCacheProvider,
     EmbeddingCacheStats,
-)
-from .shared_precompute import (
     SharedPrecomputeContext,
     prepare_shared_context,
     get_unique_pool_sizes,
     BatchedRetrievalResults,
-)
-from .fitness_cache import (
-    FitnessCache,
-    CacheStats,
-    hash_genome,
 )
 
 __all__ = [
@@ -53,6 +58,7 @@ __all__ = [
     "GeneticRegistry",
     "ProgressTracker",
     "GenomeFactory",
+    "CacheCoordinator",
     # Early exit evaluation
     "EvaluationStats",
     "DEFAULT_EARLY_EXIT_THRESHOLD",
@@ -74,5 +80,6 @@ __all__ = [
     # Fitness caching
     "FitnessCache",
     "CacheStats",
+    "CacheStatsProtocol",
     "hash_genome",
 ]

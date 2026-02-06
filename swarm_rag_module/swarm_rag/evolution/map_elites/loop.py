@@ -7,11 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..execution.llm_strategies import StrategicDirective
+    from ..execution.genetics.llm_strategies import StrategicDirective
 
 from ..types.genome import Genome
 from ..types.config import EvolutionContext
-from ..execution.strategies import GeneticRegistry
+from ..execution.genetics.strategies import GeneticRegistry
 from .archive import MapElitesArchive
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ class MapElitesLoop:
         Returns:
             New StrategicDirective if updated, None otherwise
         """
-        from ..execution.llm_strategies import LLMStrategies
+        from ..execution.genetics.llm_strategies import LLMStrategies
 
         # Check if we should update
         if not LLMStrategies.should_update_oracle(self.context):

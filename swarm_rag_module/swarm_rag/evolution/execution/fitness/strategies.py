@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List
 import torch
 
-from ..types.genome import Genome
+from ...types.genome import Genome
 
 class FitnessStrategy(ABC):
     """

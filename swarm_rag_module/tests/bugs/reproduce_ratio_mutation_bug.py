@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from swarm_rag.evolution.types.genome import Genome
-from swarm_rag.evolution.execution.strategies import GeneticStrategies
+from swarm_rag.evolution.execution.genetics.strategies import GeneticStrategies
 from swarm_rag.evolution.types.config import EvolutionContext
 from swarm_rag.evolution.types.expressions import ExpressionNode
 

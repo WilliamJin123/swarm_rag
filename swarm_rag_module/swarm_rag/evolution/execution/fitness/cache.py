@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..types.genome import Genome
+    from ...types.genome import Genome
 
 __all__ = ['FitnessCache', 'CacheStats', 'hash_genome']
 

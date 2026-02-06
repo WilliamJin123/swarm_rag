@@ -13,16 +13,16 @@ All LLM calls flow through LLMClient (see llm/client.py).
 import logging
 from typing import Optional
 
-from ..types.genome import Genome
-from ..types.config import EvolutionContext
-from ...interfaces.enums import GeneticKey
+from ...types.genome import Genome
+from ...types.config import EvolutionContext
+from ....interfaces.enums import GeneticKey
 
 from .strategies import GeneticRegistry
 
-from ..llm.client import LLMClient
-from ..llm.intents import StrategicDirective, MutationPrescription, MutationIntent
-from ..llm.evolution_journal import MutationRecord
-from ..llm.constrained_executor import ConstrainedExecutor, ThreeTierMutator, ParameterBounds
+from ...llm.client import LLMClient
+from ...llm.intents import StrategicDirective, MutationPrescription, MutationIntent
+from ...llm.evolution_journal import MutationRecord
+from ...llm.constrained_executor import ConstrainedExecutor, ThreeTierMutator, ParameterBounds
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,7 @@ class LLMStrategies:
 
         journal = getattr(ctx, 'evolution_journal', None)
 
-        from ..llm.strategic_oracle import build_strategic_context
+        from ...llm.strategic_oracle import build_strategic_context
 
         strategic_ctx = build_strategic_context(
             archive_stats=archive_stats,

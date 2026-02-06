@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .fitness_cache import CacheStats
-    from .embedding_cache import EmbeddingCacheStats
+    from ..fitness.cache import CacheStats
+    from ..optimization.embedding_cache import EmbeddingCacheStats
 
 logger = logging.getLogger(__name__)
 
